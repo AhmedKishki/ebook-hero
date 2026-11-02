@@ -1,0 +1,25 @@
+use std::time::Duration;
+
+pub const PASSAGE_MAX_WORDS: usize = 220;
+pub const LEXICAL_CANDIDATES: usize = 50;
+pub const SEMANTIC_CANDIDATES: usize = 50;
+pub const RRF_K: f32 = 60.0;
+pub const BM25_WEIGHT: f32 = 1.25;
+pub const VECTOR_WEIGHT: f32 = 1.0;
+pub const SEMANTIC_FLOOR: f32 = 0.72;
+pub const RERANK_CANDIDATES: usize = 30;
+pub const TOP_K_DEFAULT: usize = 5;
+pub const TOP_K_MAX: usize = 20;
+pub const FIND_PAGE: usize = 20;
+pub const READ_MAX_CHARS: usize = 8000;
+pub const READ_NEIGHBOURS_MAX: u32 = 10;
+pub const LOCK_WAIT: Duration = Duration::from_secs(900);
+pub const OPEN_BOOKS: usize = 4;
+pub const EMBED_BATCH: usize = 64;
+pub const QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
+pub const EMBEDDING_MODEL: &str = "BAAI/bge-small-en-v1.5";
+pub const RERANKER_MODEL: &str = "jinaai/jina-reranker-v1-turbo-en";
+pub const PDF_READER_VERSION: u32 = 1;
+pub const EPUB_READER_VERSION: u32 = 1;
+pub const PASSAGES_VERSION: u32 = 1;
+pub const ANALYZERS_VERSION: u32 = 1;

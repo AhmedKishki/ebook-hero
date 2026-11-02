@@ -21,13 +21,16 @@ const FURNITURE_MIN_SHARE: f32 = 0.5;
 const COLUMN_MIN_LINES: usize = 4;
 /// A gap above this many median pitches starts a paragraph.
 const GAP_FACTOR: f32 = 1.5;
-/// A left edge this many font sizes right of the column edge starts a paragraph.
+/// A left edge this many font sizes right of the column margin starts a paragraph.
 const INDENT_FACTOR: f32 = 0.8;
+/// A later note line this many font sizes right of the margin makes a note zone
+/// hanging-style: its lines hang under a first line that sits at the margin.
+const HANGING_FACTOR: f32 = 0.5;
 /// A line under this share of the column width, ending a sentence, ends a paragraph.
 const SHORT_LINE_FRACTION: f32 = 0.7;
 /// Lines at or under this share of the body font size, below the body, are notes.
 const NOTE_FONT_RATIO: f32 = 0.85;
-/// Left edges within this many points count as one edge.
+/// Left edges within this many points are the same edge.
 const LEFT_TOLERANCE: f32 = 1.0;
 /// Font sizes within this many points count as one size.
 const FONT_TOLERANCE: f32 = 0.25;
@@ -232,9 +235,9 @@ pub fn order_columns(lines: Vec<Line>, page_width: f32) -> Vec<Line> {
         .collect()
 }
 
-/// The value that most of `values` lie within `tolerance` of. On a tie it
-/// returns the larger value if `larger_on_tie`, otherwise the smaller.
-fn densest(values: &[f32], tolerance: f32, larger_on_tie: bool) -> Option<f32> {
+/// The value that most of `values` lie within `tolerance` of; on a tie, the
+/// larger value.
+fn densest(values: &[f32], tolerance: f32) -> Option<f32> {
     let mut best: Option<(usize, f32)> = None;
     for &value in values {
         let count = values
@@ -244,13 +247,7 @@ fn densest(values: &[f32], tolerance: f32, larger_on_tie: bool) -> Option<f32> {
         let better = match best {
             None => true,
             Some((best_count, best_value)) => {
-                count > best_count
-                    || (count == best_count
-                        && if larger_on_tie {
-                            value > best_value
-                        } else {
-                            value < best_value
-                        })
+                count > best_count || (count == best_count && value > best_value)
             }
         };
         if better {
@@ -277,18 +274,28 @@ fn ends_sentence(text: &str) -> bool {
     text.trim_end().ends_with(SENTENCE_END)
 }
 
+/// Whether the line starts at least `factor` font sizes right of `margin`. A
+/// line whose font size is not a positive number has no indent to measure.
+fn is_right_of(line: &Line, margin: f32, factor: f32) -> bool {
+    line.font_size.is_finite()
+        && line.font_size > 0.0
+        && line.left - margin >= factor * line.font_size
+}
+
 /// Where the text of one zone starts and how wide it is.
 #[derive(Clone, Copy)]
 struct Extent {
-    /// The most common left edge.
-    edge: f32,
+    /// The smallest left edge of the zone's lines.
+    margin: f32,
     /// From the smallest left to the largest right.
     width: f32,
+    /// The zone is notes whose lines hang under a first line at the margin.
+    hanging: bool,
 }
 
-/// Lines in reading order, measured for the break rules. The edge, the width and
-/// the pitch come from these lines alone, so each page and each zone gets its
-/// own margin.
+/// Lines in reading order, measured for the break rules. The margin, the width
+/// and the pitch come from these lines alone, so each page and each zone gets
+/// its own margin.
 struct Flow<'a> {
     lines: &'a [Line],
     centre: Option<f32>,
@@ -297,25 +304,33 @@ struct Flow<'a> {
 }
 
 impl<'a> Flow<'a> {
-    fn new(lines: &'a [Line], centre: Option<f32>) -> Self {
+    /// `notes` says the lines are footnotes, whose zones may be hanging-style.
+    fn new(lines: &'a [Line], centre: Option<f32>, notes: bool) -> Self {
         let mut extents = [None; 3];
         for zone in ZONES {
             let members: Vec<&Line> = lines
                 .iter()
                 .filter(|l| zone_of(l, centre) == zone)
                 .collect();
-            let lefts: Vec<f32> = members.iter().map(|l| l.left).collect();
-            if let Some(edge) = densest(&lefts, LEFT_TOLERANCE, false) {
-                let left = lefts.iter().copied().fold(f32::INFINITY, f32::min);
-                let right = members
+            let Some(first) = members.first() else {
+                continue;
+            };
+            let margin = members.iter().map(|l| l.left).fold(f32::INFINITY, f32::min);
+            let right = members
+                .iter()
+                .map(|l| l.right)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let hanging = notes
+                && first.left - margin <= LEFT_TOLERANCE
+                && members
                     .iter()
-                    .map(|l| l.right)
-                    .fold(f32::NEG_INFINITY, f32::max);
-                extents[zone as usize] = Some(Extent {
-                    edge,
-                    width: right - left,
-                });
-            }
+                    .skip(1)
+                    .any(|l| is_right_of(l, margin, HANGING_FACTOR));
+            extents[zone as usize] = Some(Extent {
+                margin,
+                width: right - margin,
+                hanging,
+            });
         }
         let pitches = lines
             .windows(2)
@@ -336,18 +351,31 @@ impl<'a> Flow<'a> {
 
     fn is_indented(&self, line: &Line) -> bool {
         self.extent(line)
-            .is_some_and(|e| line.left - e.edge >= INDENT_FACTOR * line.font_size)
+            .is_some_and(|e| is_right_of(line, e.margin, INDENT_FACTOR))
     }
 
+    /// A line starts a paragraph after a gap over `GAP_FACTOR` pitches. Then
+    /// the rule depends on the zone. In a hanging-style note zone, a line at
+    /// the margin starts a note and indented lines continue it. Elsewhere, an
+    /// indented line starts a paragraph when the previous line sits further
+    /// left (so a block quote's lines go on one paragraph), and so does a line
+    /// after a short line that ends a sentence.
     fn starts_paragraph(&self, previous: &Line, line: &Line) -> bool {
         let gap = self
             .pitch
             .is_some_and(|pitch| line.top - previous.top > GAP_FACTOR * pitch);
+        if gap {
+            return true;
+        }
+        if let Some(extent) = self.extent(line).filter(|e| e.hanging) {
+            return line.left - extent.margin <= LEFT_TOLERANCE;
+        }
+        let indent = self.is_indented(line) && line.left - previous.left > LEFT_TOLERANCE;
         let short_end = ends_sentence(&previous.text)
             && self
                 .extent(previous)
                 .is_some_and(|e| previous.width() < SHORT_LINE_FRACTION * e.width);
-        gap || self.is_indented(line) || short_end
+        indent || short_end
     }
 
     /// Cuts the lines into runs that make one paragraph each.
@@ -369,10 +397,12 @@ impl<'a> Flow<'a> {
 
 /// Splits ordered lines into body lines and notes. The body size is the most
 /// common font size; a line at most `NOTE_FONT_RATIO` of it that lies below
-/// every body-size line is a note.
+/// every body-size line is a note. A page whose body size is not a positive
+/// number has no notes.
 fn split_notes(lines: Vec<Line>) -> (Vec<Line>, Vec<Line>) {
     let sizes: Vec<f32> = lines.iter().map(|l| l.font_size).collect();
-    let Some(body_size) = densest(&sizes, FONT_TOLERANCE, true) else {
+    let body_size = densest(&sizes, FONT_TOLERANCE).filter(|size| size.is_finite() && *size > 0.0);
+    let Some(body_size) = body_size else {
         return (lines, Vec::new());
     };
     let small = |l: &Line| l.font_size <= NOTE_FONT_RATIO * body_size;
@@ -428,8 +458,10 @@ impl Draft {
 /// For each page, lines in `skip` (furniture) and blank lines are dropped, the
 /// rest are put in reading order, and footnotes are set apart. A new paragraph
 /// starts at a gap over 1.5 median pitches, at a line indented 0.8 font sizes
-/// past the column's usual left edge, or after a short line that ends a
-/// sentence. A hyphen at a line end is dropped when the line is joined to the
+/// past the column's left margin (the smallest left edge) when the line before
+/// it sits further left, or after a short line that ends a sentence. Footnotes
+/// that hang under a first line at the margin start a note at each return to
+/// the margin instead. A hyphen at a line end is dropped when the line is joined to the
 /// next, unless the next line starts with an uppercase letter or a digit or the
 /// same compound appears elsewhere in the book; a soft hyphen is always dropped.
 /// The last body paragraph of a page runs on to the next page when it lacks
@@ -454,7 +486,7 @@ pub fn paragraphs(pages: &[PageLines], skip: &HashSet<(u32, usize)>) -> Vec<Laid
         let centre = two_column_centre(&kept, page.width);
         let (body, notes) = split_notes(order_columns(kept, page.width));
 
-        let body_flow = Flow::new(&body, centre);
+        let body_flow = Flow::new(&body, centre, false);
         let mut last_body = None;
         for (n, run) in body_flow.paragraphs().into_iter().enumerate() {
             let continued = match carry {
@@ -483,7 +515,7 @@ pub fn paragraphs(pages: &[PageLines], skip: &HashSet<(u32, usize)>) -> Vec<Laid
         }
         carry = last_body.map(|index| (index, page.page));
 
-        let note_flow = Flow::new(&notes, centre);
+        let note_flow = Flow::new(&notes, centre, true);
         for run in note_flow.paragraphs() {
             drafts.push(Draft::new(run, page.page, true));
         }
@@ -591,6 +623,7 @@ mod tests {
     const RECTO_MARGIN: f32 = 59.9;
     const VERSO_MARGIN: f32 = 58.98;
     const INDENT: f32 = 10.0;
+    const HANG: f32 = 8.0;
     const TEXT_WIDTH: f32 = 312.0;
     const SHORT_WIDTH: f32 = 90.0;
 
@@ -628,6 +661,25 @@ mod tests {
     /// The short last line of a paragraph.
     fn short(text: &str, row: u8, margin: f32) -> Line {
         line_at(text, margin, row_top(row), SHORT_WIDTH, BODY_PT)
+    }
+
+    /// A body paragraph of `rows` lines, enough to make 10 pt the usual size of
+    /// the page when notes are added.
+    fn body_paragraph(rows: u8, margin: f32) -> Vec<Line> {
+        (0..rows)
+            .map(|row| {
+                if row + 1 == rows {
+                    short("and so on to its end.", row, margin)
+                } else {
+                    full("a body line that runs the full width", row, margin)
+                }
+            })
+            .collect()
+    }
+
+    /// A footnote line; `row` counts 8 pt lines from the top of the notes.
+    fn note_line(text: &str, left: f32, row: u8, width: f32) -> Line {
+        line_at(text, left, 480.0 + f32::from(row) * 9.6, width, NOTE_PT)
     }
 
     fn page(number: u32, lines: Vec<Line>) -> PageLines {
@@ -822,6 +874,84 @@ mod tests {
             texts(&lay(&pages)),
             ["A paragraph that fills its lines with one short line and then goes on"]
         );
+    }
+
+    #[test]
+    fn indented_majority_page_still_breaks() {
+        let m = RECTO_MARGIN;
+        let pages = vec![page(
+            1,
+            vec![
+                indented("The first paragraph opens", 0, m),
+                full("and runs on", 1, m),
+                indented("The second paragraph opens", 2, m),
+            ],
+        )];
+
+        assert_eq!(
+            texts(&lay(&pages)),
+            [
+                "The first paragraph opens and runs on",
+                "The second paragraph opens"
+            ]
+        );
+    }
+
+    #[test]
+    fn block_quote_lines_stay_one_paragraph() {
+        let m = RECTO_MARGIN;
+        let quote =
+            |text: &str, row: u8| line_at(text, m + 20.0, row_top(row), TEXT_WIDTH - 40.0, BODY_PT);
+        let pages = vec![page(
+            1,
+            vec![
+                full("A body paragraph introduces", 0, m),
+                full("the passage that is quoted", 1, m),
+                full("in the lines that follow", 2, m),
+                quote("The quoted passage is set in", 3),
+                quote("from the margin on both sides", 4),
+                quote("and keeps one indent on", 5),
+                quote("every one of its lines", 6),
+                full("The body resumes at the margin", 9, m),
+            ],
+        )];
+
+        assert_eq!(
+            texts(&lay(&pages)),
+            [
+                "A body paragraph introduces the passage that is quoted in the lines that follow",
+                "The quoted passage is set in from the margin on both sides and keeps one indent on every one of its lines",
+                "The body resumes at the margin"
+            ]
+        );
+    }
+
+    #[test]
+    fn zero_font_size_page_has_no_notes_and_no_indent_breaks() {
+        let m = RECTO_MARGIN;
+        for size in [0.0, f32::NAN] {
+            let lines = vec![
+                line_at("A line of a page", m, row_top(0), TEXT_WIDTH, size),
+                line_at("in a font of no size", m, row_top(1), TEXT_WIDTH, size),
+                line_at(
+                    "with an indented line",
+                    m + INDENT,
+                    row_top(2),
+                    TEXT_WIDTH - INDENT,
+                    size,
+                ),
+                line_at("and a last line", m, row_top(3), TEXT_WIDTH, size),
+            ];
+
+            let paras = lay(&[page(1, lines)]);
+
+            assert!(paras.iter().all(|p| !p.note), "size {size}");
+            assert_eq!(
+                texts(&paras),
+                ["A line of a page in a font of no size with an indented line and a last line"],
+                "size {size}"
+            );
+        }
     }
 
     // Hyphenation
@@ -1186,48 +1316,115 @@ mod tests {
     }
 
     #[test]
-    fn hanging_indent_footnotes_split_between_notes() {
+    fn lone_two_line_hanging_note_stays_whole() {
         let m = RECTO_MARGIN;
-        let hang = 8.0;
-        let note = |text: &str, left: f32, row: u8, width: f32| {
-            line_at(text, left, 480.0 + f32::from(row) * 9.6, width, NOTE_PT)
-        };
-        let pages = vec![page(
+        let mut lines = body_paragraph(7, m);
+        lines.push(note_line(
+            "1 A note whose first line sits at the margin and",
+            m,
+            0,
+            TEXT_WIDTH,
+        ));
+        lines.push(note_line(
+            "whose second line hangs under the number.",
+            m + HANG,
             1,
-            vec![
-                full("A body paragraph that fills its lines", 0, m),
-                full("and goes on for a good while", 1, m),
-                full("with more lines than the notes", 2, m),
-                full("have, so that its size is the", 3, m),
-                full("most common one on the page", 4, m),
-                full("until it reaches", 5, m),
-                short("its end.", 6, m),
-                note("1 The first note starts at the margin", m, 0, TEXT_WIDTH),
-                note(
-                    "then hangs under its number",
-                    m + hang,
-                    1,
-                    TEXT_WIDTH - hang,
-                ),
-                note("and ends here.", m + hang, 2, 60.0),
-                note("2 The second note starts at the margin", m, 3, TEXT_WIDTH),
-                note("and stops.", m + hang, 4, 60.0),
-            ],
-        )];
+            TEXT_WIDTH - HANG,
+        ));
 
-        let paras = lay(&pages);
+        let paras = lay(&[page(1, lines)]);
 
-        assert_eq!(paras.len(), 3);
-        assert!(!paras[0].note);
+        assert_eq!(paras.len(), 2);
+        assert!(paras[1].note);
         assert_eq!(
             paras[1].text,
-            "1 The first note starts at the margin then hangs under its number and ends here."
+            "1 A note whose first line sits at the margin and whose second line hangs under the number."
+        );
+    }
+
+    #[test]
+    fn hanging_notes_split_on_return_to_margin() {
+        let m = RECTO_MARGIN;
+        let hang = |text: &str, row: u8| note_line(text, m + HANG, row, TEXT_WIDTH - HANG);
+        let mut lines = body_paragraph(9, m);
+        lines.extend([
+            note_line(
+                "1 The first note begins at the margin and",
+                m,
+                0,
+                TEXT_WIDTH,
+            ),
+            hang("goes on in a line that hangs under its", 1),
+            hang("number without any full stop", 2),
+            note_line(
+                "2 The second note begins at the margin and",
+                m,
+                3,
+                TEXT_WIDTH,
+            ),
+            hang("goes on in one hanging line", 4),
+            note_line(
+                "3 The third note begins at the margin and",
+                m,
+                5,
+                TEXT_WIDTH,
+            ),
+            hang("goes on in a line that hangs under", 6),
+            hang("its number as well", 7),
+        ]);
+
+        let paras = lay(&[page(1, lines)]);
+
+        assert_eq!(paras.len(), 4);
+        assert!(!paras[0].note);
+        assert!(paras[1..].iter().all(|p| p.note));
+        assert_eq!(
+            paras[1].text,
+            "1 The first note begins at the margin and goes on in a line that hangs under its number without any full stop"
         );
         assert_eq!(
             paras[2].text,
-            "2 The second note starts at the margin and stops."
+            "2 The second note begins at the margin and goes on in one hanging line"
         );
-        assert!(paras[1].note && paras[2].note);
+        assert_eq!(
+            paras[3].text,
+            "3 The third note begins at the margin and goes on in a line that hangs under its number as well"
+        );
+    }
+
+    #[test]
+    fn notes_with_an_indented_first_line_use_the_body_rules() {
+        let m = RECTO_MARGIN;
+        let mut lines = body_paragraph(8, m);
+        lines.extend([
+            note_line(
+                "1 The first note opens with an indent",
+                m + HANG,
+                0,
+                TEXT_WIDTH - HANG,
+            ),
+            note_line("and goes on at the margin", m, 1, TEXT_WIDTH),
+            note_line("until it ends.", m, 2, 60.0),
+            note_line(
+                "2 The second note opens with an indent",
+                m + HANG,
+                3,
+                TEXT_WIDTH - HANG,
+            ),
+            note_line("and goes on at the margin", m, 4, TEXT_WIDTH),
+        ]);
+
+        let paras = lay(&[page(1, lines)]);
+
+        assert_eq!(paras.len(), 3);
+        assert_eq!(
+            paras[1].text,
+            "1 The first note opens with an indent and goes on at the margin until it ends."
+        );
+        assert_eq!(
+            paras[2].text,
+            "2 The second note opens with an indent and goes on at the margin"
+        );
     }
 
     // Whole-pipeline behaviour

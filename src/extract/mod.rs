@@ -1,4 +1,5 @@
 pub mod epub;
+pub mod pdf_layout;
 pub mod xhtml;
 
 use std::fs::{self, File};

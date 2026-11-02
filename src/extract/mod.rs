@@ -94,16 +94,20 @@ pub fn extract(path: &Path, sha256: &str) -> Result<Document> {
 
 /// Gives every block the path of headings above it, outermost first.
 ///
-/// A heading of level `n` replaces entry `n` and everything deeper on the
-/// stack, so a heading's own section ends with its text.
+/// A heading of level `n` replaces the entries of level `n` and deeper on the
+/// stack, so a heading's own section ends with its text. Levels that a book
+/// skips add no entries: a book whose chapters are all `h2` has one entry per
+/// section, not a growing list.
 pub(crate) fn assign_sections(blocks: &mut [Block]) {
-    let mut stack: Vec<String> = Vec::new();
+    let mut stack: Vec<(u8, &str)> = Vec::new();
     for block in blocks {
         if let BlockKind::Heading { level } = block.kind {
-            stack.truncate(usize::from(level.max(1)) - 1);
-            stack.push(block.text.clone());
+            while stack.last().is_some_and(|(open, _)| *open >= level) {
+                stack.pop();
+            }
+            stack.push((level, block.text.as_str()));
         }
-        block.section = stack.clone();
+        block.section = stack.iter().map(|(_, text)| text.to_string()).collect();
     }
 }
 
@@ -172,6 +176,56 @@ mod tests {
                 ("a2", vec!["A", "A.2"]),
                 ("B", vec!["B"]),
                 ("b1", vec!["B"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn h2_only_chapters_are_siblings() {
+        let mut blocks = vec![
+            block(BlockKind::Heading { level: 2 }, "Ch1"),
+            block(BlockKind::Paragraph, "one"),
+            block(BlockKind::Heading { level: 2 }, "Ch2"),
+            block(BlockKind::Paragraph, "two"),
+            block(BlockKind::Heading { level: 2 }, "Ch3"),
+        ];
+
+        assign_sections(&mut blocks);
+
+        assert_eq!(
+            sections(&blocks),
+            [
+                ("Ch1", vec!["Ch1"]),
+                ("one", vec!["Ch1"]),
+                ("Ch2", vec!["Ch2"]),
+                ("two", vec!["Ch2"]),
+                ("Ch3", vec!["Ch3"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn skipped_levels_replace_deeper_entries() {
+        let mut blocks = vec![
+            block(BlockKind::Heading { level: 1 }, "A"),
+            block(BlockKind::Heading { level: 3 }, "C"),
+            block(BlockKind::Heading { level: 3 }, "C2"),
+            block(BlockKind::Heading { level: 2 }, "B"),
+            block(BlockKind::Heading { level: 4 }, "D"),
+            block(BlockKind::Heading { level: 2 }, "B2"),
+        ];
+
+        assign_sections(&mut blocks);
+
+        assert_eq!(
+            sections(&blocks),
+            [
+                ("A", vec!["A"]),
+                ("C", vec!["A", "C"]),
+                ("C2", vec!["A", "C2"]),
+                ("B", vec!["A", "B"]),
+                ("D", vec!["A", "B", "D"]),
+                ("B2", vec!["A", "B2"]),
             ]
         );
     }

@@ -1,9 +1,12 @@
 //! Reads an EPUB 2 or 3 file into the [`Document`] model.
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::Path;
 
 use rbook::Epub;
+use zip::ZipArchive;
 
 use super::{assign_sections, xhtml::xhtml_blocks};
 use crate::document::{
@@ -11,6 +14,11 @@ use crate::document::{
 };
 use crate::error::{Error, Result};
 use crate::normalize::normalize;
+
+/// The most a content document may hold, in bytes, once uncompressed. A larger
+/// one is skipped with a warning, so a small archive cannot expand without
+/// bound in memory.
+const MAX_CONTENT_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Where the blocks of one content document start, and which of them carry
 /// which element id. A table-of-contents target resolves against this.
@@ -32,6 +40,12 @@ pub fn read_epub(path: &Path, source: Source) -> Result<Document> {
     };
     let epub = Epub::open(path).map_err(|e| unreadable(e.to_string()))?;
     let package_dir = epub.package().directory().decode().into_owned();
+    // Content documents are read here, not through rbook, which would copy an
+    // entry into memory whatever its size.
+    let mut archive = File::open(path)
+        .map_err(|e| e.to_string())
+        .and_then(|file| ZipArchive::new(file).map_err(|e| e.to_string()))
+        .map_err(unreadable)?;
 
     let mut blocks: Vec<Block> = Vec::new();
     let mut warnings = Vec::new();
@@ -47,13 +61,18 @@ pub fn read_epub(path: &Path, source: Source) -> Result<Document> {
         };
         let full_path = item.href().path().decode().into_owned();
         let href = relative_to(&package_dir, &full_path);
-        let content = match item.read_str() {
+        let entry_name = full_path.trim_start_matches('/');
+        let content = match read_entry(&mut archive, entry_name, MAX_CONTENT_BYTES) {
             Ok(content) => content,
             Err(error) => {
-                warnings.push(Warning::UnreadableContent {
-                    href,
-                    reason: error.to_string(),
-                });
+                let reason = match error {
+                    EntryError::TooLarge => format!(
+                        "content document exceeds {} MiB",
+                        MAX_CONTENT_BYTES / (1024 * 1024)
+                    ),
+                    EntryError::Unreadable(reason) => reason,
+                };
+                warnings.push(Warning::UnreadableContent { href, reason });
                 continue;
             }
         };
@@ -152,6 +171,58 @@ fn outline(epub: &Epub, files: &HashMap<String, FileBlocks>) -> Vec<OutlineEntry
     outline
 }
 
+#[derive(Debug)]
+enum EntryError {
+    /// The entry holds more than the cap once uncompressed.
+    TooLarge,
+    Unreadable(String),
+}
+
+/// Reads the archive entry `name` as text, refusing one that holds more than
+/// `cap` bytes. The count is of the bytes that actually arrive, because the
+/// size an archive declares for an entry can be false.
+fn read_entry<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    cap: u64,
+) -> std::result::Result<String, EntryError> {
+    let entry = archive
+        .by_name(name)
+        .map_err(|e| EntryError::Unreadable(e.to_string()))?;
+    let mut bytes = Vec::new();
+    entry
+        .take(cap + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| EntryError::Unreadable(e.to_string()))?;
+    if bytes.len() as u64 > cap {
+        return Err(EntryError::TooLarge);
+    }
+    decode_text(&bytes).map_err(EntryError::Unreadable)
+}
+
+/// UTF-8, or UTF-16 when the bytes start with a byte order mark.
+fn decode_text(bytes: &[u8]) -> std::result::Result<String, String> {
+    let (little_endian, units) = match bytes {
+        [0xFF, 0xFE, rest @ ..] => (true, rest),
+        [0xFE, 0xFF, rest @ ..] => (false, rest),
+        _ => {
+            return String::from_utf8(bytes.to_vec())
+                .map_err(|_| "content is not valid UTF-8".to_string());
+        }
+    };
+    let (pairs, rest) = units.as_chunks::<2>();
+    if !rest.is_empty() {
+        return Err("content is not valid UTF-16".to_string());
+    }
+    let units = pairs.iter().map(|&pair| match little_endian {
+        true => u16::from_le_bytes(pair),
+        false => u16::from_be_bytes(pair),
+    });
+    char::decode_utf16(units)
+        .collect::<std::result::Result<String, _>>()
+        .map_err(|_| "content is not valid UTF-16".to_string())
+}
+
 /// The path of `path` below `dir`, both absolute. A path outside `dir` keeps
 /// all its components.
 fn relative_to(dir: &str, path: &str) -> String {
@@ -163,7 +234,93 @@ fn relative_to(dir: &str, path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::relative_to;
+    use std::io::{Cursor, Write};
+
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipArchive, ZipWriter};
+
+    use super::{EntryError, read_entry, relative_to};
+
+    fn archive(entries: &[(&str, &[u8], CompressionMethod)]) -> ZipArchive<Cursor<Vec<u8>>> {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data, method) in entries {
+            zip.start_file(
+                *name,
+                SimpleFileOptions::default().compression_method(*method),
+            )
+            .unwrap();
+            zip.write_all(data).unwrap();
+        }
+        ZipArchive::new(zip.finish().unwrap()).unwrap()
+    }
+
+    fn stored(data: &[u8]) -> ZipArchive<Cursor<Vec<u8>>> {
+        archive(&[("a.xhtml", data, CompressionMethod::Stored)])
+    }
+
+    #[test]
+    fn an_entry_at_the_cap_is_read_and_one_byte_more_is_refused() {
+        assert_eq!(
+            read_entry(&mut stored(b"0123456789"), "a.xhtml", 10).ok(),
+            Some("0123456789".to_string())
+        );
+        assert!(matches!(
+            read_entry(&mut stored(b"0123456789A"), "a.xhtml", 10),
+            Err(EntryError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn an_entry_that_expands_past_the_cap_is_refused_whatever_it_declares() {
+        let bomb = vec![b' '; 4 * 1024 * 1024];
+        let mut zip = archive(&[("a.xhtml", &bomb, CompressionMethod::Deflated)]);
+
+        assert!(matches!(
+            read_entry(&mut zip, "a.xhtml", 1024),
+            Err(EntryError::TooLarge)
+        ));
+        assert_eq!(
+            read_entry(&mut zip, "a.xhtml", bomb.len() as u64)
+                .unwrap()
+                .len(),
+            bomb.len()
+        );
+    }
+
+    #[test]
+    fn utf16_with_a_byte_order_mark_is_decoded() {
+        let mut le = vec![0xFF, 0xFE];
+        let mut be = vec![0xFE, 0xFF];
+        for unit in "<p>é</p>".encode_utf16() {
+            le.extend_from_slice(&unit.to_le_bytes());
+            be.extend_from_slice(&unit.to_be_bytes());
+        }
+
+        assert_eq!(
+            read_entry(&mut stored(&le), "a.xhtml", 100).ok(),
+            Some("<p>é</p>".to_string())
+        );
+        assert_eq!(
+            read_entry(&mut stored(&be), "a.xhtml", 100).ok(),
+            Some("<p>é</p>".to_string())
+        );
+        assert!(matches!(
+            read_entry(&mut stored(&[0xFF, 0xFE, 0x41]), "a.xhtml", 100),
+            Err(EntryError::Unreadable(_))
+        ));
+    }
+
+    #[test]
+    fn a_missing_entry_and_invalid_utf8_are_unreadable() {
+        assert!(matches!(
+            read_entry(&mut stored(b"x"), "b.xhtml", 100),
+            Err(EntryError::Unreadable(_))
+        ));
+        assert!(matches!(
+            read_entry(&mut stored(b"caf\xE9"), "a.xhtml", 100),
+            Err(EntryError::Unreadable(_))
+        ));
+    }
 
     #[test]
     fn paths_are_relative_to_the_package_directory() {

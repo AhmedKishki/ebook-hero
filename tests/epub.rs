@@ -286,6 +286,64 @@ fn percent_encoded_hrefs_and_fragments_are_decoded() {
 }
 
 #[test]
+fn oversized_content_document_warns() {
+    // One byte of body past the 32 MiB cap is enough, since the wrapper adds more.
+    let big = format!("<p>{}</p>", "a".repeat(32 * 1024 * 1024));
+    let doc = read(
+        &EpubBuilder::new(EpubVersion::V3)
+            .chapter("ch1.xhtml", "<p>Before.</p>")
+            .chapter("big.xhtml", &big)
+            .chapter("ch2.xhtml", "<p>After.</p>"),
+    );
+
+    assert_eq!(
+        doc.warnings,
+        [Warning::UnreadableContent {
+            href: "big.xhtml".to_string(),
+            reason: "content document exceeds 32 MiB".to_string(),
+        }]
+    );
+    assert_eq!(doc.blocks.len(), 2);
+    assert_eq!(texts(&doc), ["Before.", "After."]);
+}
+
+#[test]
+fn corrupt_epub_is_unreadable() {
+    const CONTAINER: &[u8] = br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+    let dir = TempDir::new().unwrap();
+    let garbage_opf = dir.path().join("garbage.epub");
+    write_zip(
+        &garbage_opf,
+        &[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER),
+            ("OEBPS/content.opf", b"\x00\xFF this is <<< not a package"),
+        ],
+    );
+    let missing_opf = dir.path().join("missing-opf.epub");
+    write_zip(
+        &missing_opf,
+        &[
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER),
+        ],
+    );
+
+    for path in [garbage_opf, missing_opf] {
+        let error = extract(&path, "abc").unwrap_err();
+
+        assert!(matches!(error, Error::Unreadable { .. }), "{error:?}");
+        assert!(
+            error.to_string().starts_with(&path.display().to_string()),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn detects_formats() {
     let dir = TempDir::new().unwrap();
     let write = |name: &str, bytes: &[u8]| -> PathBuf {

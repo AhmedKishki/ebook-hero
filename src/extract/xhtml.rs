@@ -20,6 +20,15 @@ pub struct RawBlock {
     pub print_page: Option<String>,
 }
 
+/// The longest element id, in bytes, that is kept. Every block copies the last
+/// id it follows into its anchor, so a hostile file could otherwise multiply
+/// one huge id by its number of blocks.
+const MAX_ID_BYTES: usize = 256;
+
+/// The longest printed-page label, in characters, that is kept. Every block
+/// copies the page in effect, so the same reasoning applies.
+const MAX_PAGE_LABEL_CHARS: usize = 32;
+
 /// Elements whose content is kept apart from their neighbours: the loose text
 /// of one of them forms paragraphs of its own, and a nested one ends the run.
 const CONTAINERS: &[&str] = &[
@@ -150,7 +159,7 @@ fn classify(el: ElementRef) -> Class {
         || has("role", &["doc-footnote", "doc-endnote"])
     {
         Class::Leaf(BlockKind::Note {
-            label: el.value().id().map(str::to_owned),
+            label: element_id(el).map(str::to_owned),
         })
     } else if let Some(level) = heading_level(tag) {
         Class::Leaf(BlockKind::Heading { level })
@@ -314,9 +323,7 @@ impl Walker<'_> {
     }
 
     fn meet_id(&mut self, el: ElementRef) {
-        let Some(id) = el.value().id().filter(|id| !id.is_empty()) else {
-            return;
-        };
+        let Some(id) = element_id(el) else { return };
         self.last_id = Some(id.to_owned());
         match &mut self.open {
             Some(open) => open.ids.push(id.to_owned()),
@@ -325,25 +332,56 @@ impl Walker<'_> {
     }
 
     /// Reads the page label from, in order, `title`, `aria-label`, the text of
-    /// the marker, and the last run of digits in its `id`. A marker with none
-    /// of them leaves the current page alone.
+    /// the marker, and the last run of digits in its `id`. A candidate that is
+    /// empty or longer than `MAX_PAGE_LABEL_CHARS` is passed over, and a
+    /// marker with no usable candidate leaves the current page alone.
     fn page_break(&mut self, el: ElementRef) {
-        let from_attr = |name: &str| el.value().attr(name).map(normalize);
-        let label = from_attr("title")
-            .filter(|v| !v.is_empty())
-            .or_else(|| from_attr("aria-label").filter(|v| !v.is_empty()))
-            .or_else(|| Some(normalize(&el.text().collect::<String>())).filter(|v| !v.is_empty()))
-            .or_else(|| el.value().id().and_then(last_digits));
+        let label = page_label(el.value().attr("title"))
+            .or_else(|| page_label(el.value().attr("aria-label")))
+            .or_else(|| short_text(el).and_then(|text| page_label(Some(&text))))
+            .or_else(|| page_label(element_id(el).and_then(last_digits)));
         if label.is_some() {
             *self.print_page = label;
         }
     }
 }
 
-fn last_digits(id: &str) -> Option<String> {
+/// The element's id, unless it is empty or longer than `MAX_ID_BYTES`.
+fn element_id<'a>(el: ElementRef<'a>) -> Option<&'a str> {
+    el.value()
+        .id()
+        .filter(|id| !id.is_empty() && id.len() <= MAX_ID_BYTES)
+}
+
+/// The normalized candidate, unless it is empty or, once trimmed, longer than
+/// `MAX_PAGE_LABEL_CHARS`. The length is checked before anything is copied.
+fn page_label(candidate: Option<&str>) -> Option<String> {
+    let trimmed = candidate?.trim();
+    if trimmed.chars().take(MAX_PAGE_LABEL_CHARS + 1).count() > MAX_PAGE_LABEL_CHARS {
+        return None;
+    }
+    Some(normalize(trimmed)).filter(|label| !label.is_empty())
+}
+
+/// The text of the element, unless it holds more than `MAX_PAGE_LABEL_CHARS`
+/// characters that are not whitespace. A marker wrapped around a chapter stops
+/// being read as soon as it is clear that it is no label.
+fn short_text(el: ElementRef) -> Option<String> {
+    let mut text = String::new();
+    let mut visible = 0;
+    for fragment in el.text() {
+        visible += fragment.chars().filter(|c| !c.is_whitespace()).count();
+        if visible > MAX_PAGE_LABEL_CHARS {
+            return None;
+        }
+        text.push_str(fragment);
+    }
+    Some(text)
+}
+
+fn last_digits(id: &str) -> Option<&str> {
     id.split(|c: char| !c.is_ascii_digit())
         .rfind(|run| !run.is_empty())
-        .map(str::to_owned)
 }
 
 /// Rewrites every self-closed element that HTML leaves open, `<x/>`, as
@@ -689,5 +727,106 @@ mod tests {
         let depth = 4_000;
         let body = format!("{}deep{}", "<div>".repeat(depth), "</div>".repeat(depth));
         assert_eq!(pairs(&blocks(&body)), [(BlockKind::Paragraph, "deep")]);
+    }
+
+    #[test]
+    fn overlong_id_is_ignored() {
+        let long = "i".repeat(300);
+        let got = blocks(&format!(r#"<span id="{long}"></span><p>x</p>"#));
+        assert_eq!(pairs(&got), [(BlockKind::Paragraph, "x")]);
+        assert_eq!(got[0].anchor, None);
+        assert!(got[0].ids.is_empty());
+
+        let at_the_bound = "i".repeat(256);
+        let got = blocks(&format!(r#"<span id="{at_the_bound}"></span><p>x</p>"#));
+        assert_eq!(got[0].anchor, Some(at_the_bound.clone()));
+        assert_eq!(got[0].ids, [at_the_bound]);
+    }
+
+    #[test]
+    fn overlong_id_is_not_a_note_label() {
+        let long = "n".repeat(300);
+        let got = blocks(&format!(
+            r#"<aside epub:type="footnote" id="{long}">N</aside>"#
+        ));
+        assert_eq!(pairs(&got), [(BlockKind::Note { label: None }, "N")]);
+    }
+
+    #[test]
+    fn overlong_page_label_is_skipped() {
+        let page_after = |marker: &str| {
+            let mut page = Some("old".to_string());
+            xhtml_blocks(&document(&format!("{marker}<p>X</p>")), &mut page);
+            page
+        };
+        let some = |s: &str| Some(s.to_string());
+        let forty = "4".repeat(40);
+        let thirty_two = "3".repeat(32);
+
+        assert_eq!(
+            page_after(&format!(
+                r#"<span epub:type="pagebreak" title="{forty}" aria-label="12"/>"#
+            )),
+            some("12")
+        );
+        assert_eq!(
+            page_after(&format!(
+                r#"<span epub:type="pagebreak" title="  {thirty_two}  " aria-label="12"/>"#
+            )),
+            some(&thirty_two)
+        );
+        // Every candidate is too long: the page stays as it was.
+        assert_eq!(
+            page_after(&format!(
+                r#"<span epub:type="pagebreak" title="{forty}" aria-label="{forty}" id="page_{forty}">{forty}</span>"#
+            )),
+            some("old")
+        );
+        // The id digits are the last candidate and are bounded too.
+        assert_eq!(
+            page_after(&format!(r#"<span epub:type="pagebreak" id="p{forty}"/>"#)),
+            some("old")
+        );
+    }
+
+    #[test]
+    fn pagebreak_wrapping_long_text_does_not_become_label() {
+        let chapter = "word ".repeat(2_000);
+        let page_after = |marker: String| {
+            let mut page = Some("old".to_string());
+            let got = xhtml_blocks(&document(&format!("{marker}<p>X</p>")), &mut page);
+            assert_eq!(pairs(&got), [(BlockKind::Paragraph, "X")]);
+            page
+        };
+        let some = |s: &str| Some(s.to_string());
+
+        assert_eq!(
+            page_after(format!(
+                r#"<div epub:type="pagebreak"><p>{chapter}</p></div>"#
+            )),
+            some("old")
+        );
+        assert_eq!(
+            page_after(format!(
+                r#"<div epub:type="pagebreak" id="page_12"><p>{chapter}</p></div>"#
+            )),
+            some("12")
+        );
+    }
+
+    #[test]
+    fn hostile_id_and_label_are_not_copied_into_every_block() {
+        let long_id = "a".repeat(100_000);
+        let long_label = "9".repeat(100_000);
+        let body = format!(
+            r#"<span id="{long_id}"></span><span epub:type="pagebreak" title="{long_label}"/>{}"#,
+            "<p>x</p>".repeat(1_000)
+        );
+        let got = blocks(&body);
+        assert_eq!(got.len(), 1_000);
+        assert!(
+            got.iter()
+                .all(|b| b.anchor.is_none() && b.print_page.is_none())
+        );
     }
 }

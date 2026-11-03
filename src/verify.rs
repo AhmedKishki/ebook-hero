@@ -2,7 +2,8 @@
 //!
 //! A quote is `exact` when it is a case-sensitive substring of the text that
 //! starts and ends at a word boundary, and `equivalent` when only case,
-//! punctuation or spacing differ. Words are never stemmed, so `entropies` does
+//! punctuation or spacing differ. A boundary inside a number such as `3.5` or
+//! `10,000`, or inside a word such as `don't`, does not count. Words are never stemmed, so `entropies` does
 //! not match `entropy`.
 
 use std::ops::Range;
@@ -15,7 +16,12 @@ use crate::index::book::Book;
 use crate::normalize::normalize;
 use crate::passages::{Passage, PassageLocator};
 use crate::search::highlight::to_char_ranges;
+use crate::settings::PASSAGE_MAX_WORDS;
 use crate::{Error, Result};
+
+/// The most words a quote may have: two passages' worth, since a quote is
+/// checked against a passage and the one after it.
+const QUOTE_MAX_WORDS: usize = 2 * PASSAGE_MAX_WORDS;
 
 /// How a quote relates to the text of the book.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
@@ -85,7 +91,8 @@ pub fn verify_quote(book: &Book, quote: &str, passage_id: Option<u32>) -> Result
 }
 
 /// A quote ready to be compared: its normalized text, for exact matching, and
-/// its words, for equivalence. `words` is never empty.
+/// its words, for equivalence. `words` is never empty and holds at most
+/// `QUOTE_MAX_WORDS` words.
 struct Quote {
     normalized: String,
     words: Vec<String>,
@@ -107,6 +114,12 @@ impl Quote {
             return Err(Error::InvalidArgument(
                 "quote has no words; give letters or digits to check".to_string(),
             ));
+        }
+        if words.len() > QUOTE_MAX_WORDS {
+            return Err(Error::InvalidArgument(format!(
+                "quote has {} words; verify at most {QUOTE_MAX_WORDS} words at a time",
+                words.len()
+            )));
         }
         Ok(Quote { normalized, words })
     }
@@ -230,8 +243,7 @@ fn matched_in(
 
 /// Finds `quote.normalized` as a case-sensitive substring of `window` with
 /// every whitespace run read as one space, starting and ending at a word
-/// boundary: the characters next to the match, if any, are not alphanumeric.
-/// The first such occurrence is taken, overlapping ones included. A match
+/// boundary (see [`on_word_boundaries`]). The first such occurrence is taken, overlapping ones included. A match
 /// counts only if it starts before `own_len`, the length of the passage the
 /// window belongs to.
 fn find_exact(window: &str, own_len: usize, quote: &Quote) -> Option<Range<usize>> {
@@ -253,23 +265,49 @@ fn find_exact(window: &str, own_len: usize, quote: &Quote) -> Option<Range<usize
     None
 }
 
-/// Whether `text[start..end]` has no alphanumeric character right before or
-/// right after it.
+/// Whether `text[start..end]` starts and ends at a word boundary: neither end
+/// is joined to the text outside it (see [`joined`]).
 fn on_word_boundaries(text: &str, start: usize, end: usize) -> bool {
-    let before = text[..start].chars().next_back();
-    let after = text[end..].chars().next();
-    !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    let inside = &text[start..end];
+    let mut before = text[..start].chars().rev();
+    let mut after = text[end..].chars();
+    !joined(inside.chars().next(), before.next(), before.next())
+        && !joined(inside.chars().next_back(), after.next(), after.next())
+}
+
+/// Whether `edge`, the character at one end of a match, is joined to the text
+/// outside it, where `next` is the character just outside and `beyond` the one
+/// after that. It is when `next` is alphanumeric, when `next` is a `.` or `,`
+/// between two digits (`3.5`, `10,000`), and when `next` is an apostrophe
+/// between two letters (`don't`): the match would then be part of a number or
+/// a word.
+fn joined(edge: Option<char>, next: Option<char>, beyond: Option<char>) -> bool {
+    let Some(next) = next else { return false };
+    if next.is_alphanumeric() {
+        return true;
+    }
+    let (Some(edge), Some(beyond)) = (edge, beyond) else {
+        return false;
+    };
+    match next {
+        '.' | ',' => edge.is_numeric() && beyond.is_numeric(),
+        '\'' | '’' => edge.is_alphabetic() && beyond.is_alphabetic(),
+        _ => false,
+    }
 }
 
 /// Finds the words of the quote as a contiguous run of the words of `window`,
-/// from the start of the first to the end of the last. A match counts only if
-/// it starts before `own_len`.
+/// from the start of the first to the end of the last, where the run starts
+/// and ends at a word boundary. A match counts only if it starts before
+/// `own_len`.
 fn find_equivalent(window: &str, own_len: usize, quote: &Quote) -> Option<Range<usize>> {
     let found = tokens(EXACT, window);
     let run = found.windows(quote.words.len()).find(|run| {
+        let (start, end) = (run[0].start, run[run.len() - 1].end);
         run.iter()
             .zip(&quote.words)
             .all(|(token, word)| token.text == *word)
+            && on_word_boundaries(window, start, end)
     })?;
     let (start, end) = (run[0].start, run[run.len() - 1].end);
     (start < own_len).then_some(start..end)
@@ -574,6 +612,63 @@ mod tests {
         let q = Quote::new("  The “Quick”\nbrown ﬁx ").unwrap();
         assert_eq!(q.normalized, "The “Quick” brown fix");
         assert_eq!(q.words, ["the", "quick", "brown", "fix"]);
+    }
+
+    #[test]
+    fn a_quote_has_at_most_twice_a_passage_of_words() {
+        let max = 2 * PASSAGE_MAX_WORDS;
+        assert!(Quote::new(&"word ".repeat(max)).is_ok());
+
+        let Err(Error::InvalidArgument(message)) = Quote::new(&"word ".repeat(max + 1)) else {
+            panic!("an overlong quote should be invalid");
+        };
+
+        assert_eq!(
+            message,
+            format!(
+                "quote has {} words; verify at most {max} words at a time",
+                max + 1
+            )
+        );
+    }
+
+    const NUMBERS_AND_CONTRACTIONS: &str = "Unemployment rose to 3.5 percent of the \
+        workforce, and 10,000 people did not see it. They don't know it yet, \
+        and we don’t either.";
+
+    fn verdict_of(quote: &str) -> Verdict {
+        let book = passages(&[NUMBERS_AND_CONTRACTIONS]);
+        let result = verify_in(&book, quote, None).unwrap();
+        assert!(result.found_elsewhere.is_none());
+        result.verdict
+    }
+
+    #[test]
+    fn a_fragment_of_a_number_or_a_contraction_is_not_a_quote() {
+        for fragment in [
+            "rose to 3",
+            "5 percent of the workforce",
+            "000 people did not",
+            "t know it yet",
+            "They don",
+            "t either",
+        ] {
+            assert_eq!(verdict_of(fragment), Verdict::None, "{fragment:?}");
+        }
+    }
+
+    #[test]
+    fn whole_numbers_and_contractions_are_still_quotes() {
+        assert_eq!(verdict_of("rose to 3.5 percent"), Verdict::Exact);
+        assert_eq!(verdict_of("10,000 people"), Verdict::Exact);
+        assert_eq!(verdict_of("don't know"), Verdict::Exact);
+        assert_eq!(verdict_of("we don’t either"), Verdict::Exact);
+        assert_eq!(verdict_of("Rose to 3.5 percent"), Verdict::Equivalent);
+        assert_eq!(verdict_of("Don't know"), Verdict::Equivalent);
+        // A full stop or comma that ends a sentence or a clause after a
+        // number is no part of it.
+        assert_eq!(verdict_of("people did not see it"), Verdict::Exact);
+        assert_eq!(verdict_of("percent of the workforce"), Verdict::Exact);
     }
 
     #[test]

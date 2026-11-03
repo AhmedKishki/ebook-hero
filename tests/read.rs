@@ -508,7 +508,7 @@ fn book_without_outline() {
     );
     let message = invalid(fixture.read(ReadAt::Outline(0), 0, 0));
     assert!(message.contains("no outline"), "{message}");
-    assert_eq!(message, "this book has no outline; use passage_id or page");
+    assert_eq!(message, "this book has no outline; use passage_id");
     // The text is still readable by passage.
     assert!(fixture.read(ReadAt::Passage(0), 0, 0).is_ok());
 }

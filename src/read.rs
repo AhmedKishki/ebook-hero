@@ -268,9 +268,13 @@ fn entry_range(
 ) -> Result<RangeInclusive<usize>> {
     let outline = &document.outline;
     if outline.is_empty() {
-        return Err(Error::InvalidArgument(
-            "this book has no outline; use passage_id or page".to_string(),
-        ));
+        let addresses = match document.source.format {
+            Format::Pdf => "passage_id or page",
+            Format::Epub => "passage_id",
+        };
+        return Err(Error::InvalidArgument(format!(
+            "this book has no outline; use {addresses}"
+        )));
     }
     let Some(position) = outline.iter().position(|entry| entry.id == id) else {
         return Err(Error::InvalidArgument(format!(
@@ -745,12 +749,17 @@ mod tests {
     }
 
     #[test]
-    fn a_book_without_an_outline_says_so() {
+    fn a_book_without_an_outline_says_so_and_names_the_addresses_it_has() {
         let passages = vec![passage(0, "a", &[], &[0])];
-        let document = document(Format::Epub, Vec::new());
+        let epub = document(Format::Epub, Vec::new());
+        let pdf = document(Format::Pdf, Vec::new());
 
         assert_eq!(
-            invalid(resolve(&document, &passages, &params(ReadAt::Outline(0)))),
+            invalid(resolve(&epub, &passages, &params(ReadAt::Outline(0)))),
+            "this book has no outline; use passage_id"
+        );
+        assert_eq!(
+            invalid(resolve(&pdf, &passages, &params(ReadAt::Outline(0)))),
             "this book has no outline; use passage_id or page"
         );
     }

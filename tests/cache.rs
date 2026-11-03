@@ -352,7 +352,6 @@ fn keeps_at_most_four_open_books() {
     assert_eq!(session.open_book_count(), OPEN_BOOKS);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_book_whose_cache_was_cleared_is_built_again() {
     let _serial = serial();
@@ -380,6 +379,7 @@ fn a_book_whose_cache_was_cleared_is_built_again() {
     assert_eq!(build_count() - before, 1);
 }
 
+#[cfg(unix)]
 #[test]
 fn rejects_non_hex_sha() {
     // The root sits inside `outer`, so even a hash that climbs out of the

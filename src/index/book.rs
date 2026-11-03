@@ -139,23 +139,40 @@ impl Book {
                 vectors.dim()
             )));
         }
-        let file = self.dir.join(VECTORS_FILE);
-        let temp = self.dir.join(format!("{VECTORS_FILE}.tmp"));
-        let written = vectors
-            .write(&temp)
-            .and_then(|()| fs::rename(&temp, &file).map_err(Into::into));
-        if written.is_err() {
-            let _ = fs::remove_file(&temp);
-        }
-        written?;
-        let path = self.dir.join(MANIFEST_FILE);
-        let manifest = Manifest {
-            embedding: Some(EmbeddingStamp::current()),
-            ..cache::read_json(&path)?
-        };
-        cache::write_json_atomic(&path, &manifest)?;
+        store_vectors(&self.dir, &vectors)?;
         Ok(vectors)
     }
+}
+
+/// Writes `vectors` into the cache directory `dir` through a temporary file
+/// and stamps the manifest last. When the manifest no longer describes the
+/// stage 1 this build makes, another version rebuilt the index while the
+/// passages were embedded, and nothing is written; nor when `dir` is gone.
+fn store_vectors(dir: &Path, vectors: &Vectors) -> Result<()> {
+    if !dir.is_dir() {
+        return Err(removed());
+    }
+    let path = dir.join(MANIFEST_FILE);
+    let manifest: Manifest = cache::read_json(&path)?;
+    if !manifest.is_current_stage1() {
+        return Err(Error::Index(
+            "the cached index changed while embedding; call again".to_string(),
+        ));
+    }
+    let file = dir.join(VECTORS_FILE);
+    let temp = dir.join(format!("{VECTORS_FILE}.tmp"));
+    let written = vectors
+        .write(&temp)
+        .and_then(|()| fs::rename(&temp, &file).map_err(Into::into));
+    if written.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    written?;
+    let stamped = Manifest {
+        embedding: Some(EmbeddingStamp::current()),
+        ..manifest
+    };
+    cache::write_json_atomic(&path, &stamped)
 }
 
 /// The error for a book whose cached index was deleted after it was opened.
@@ -208,4 +225,63 @@ fn write_stage(staging: &Path, document: &Document, passages: &[Passage]) -> Res
     fs::create_dir(&tantivy)?;
     LexicalIndex::build(&tantivy, passages)?;
     cache::write_json_atomic(&staging.join(MANIFEST_FILE), &expected_stage1())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::PDF_READER_VERSION;
+
+    fn one_vector() -> Vectors {
+        Vectors::from_rows(vec![vec![1.0; EMBEDDING_DIM]]).unwrap()
+    }
+
+    #[test]
+    fn vectors_are_stored_and_stamped_on_the_index_they_were_made_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join(MANIFEST_FILE);
+        cache::write_json_atomic(&manifest, &expected_stage1()).unwrap();
+
+        store_vectors(dir.path(), &one_vector()).unwrap();
+
+        let stamped: Manifest = cache::read_json(&manifest).unwrap();
+        assert_eq!(stamped.embedding, Some(EmbeddingStamp::current()));
+        assert!(stamped.is_current_stage1());
+        assert!(dir.path().join(VECTORS_FILE).is_file());
+    }
+
+    #[test]
+    fn an_index_rebuilt_by_another_version_while_embedding_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join(MANIFEST_FILE);
+        let other = Manifest {
+            pdf_reader: PDF_READER_VERSION + 1,
+            ..expected_stage1()
+        };
+        cache::write_json_atomic(&manifest, &other).unwrap();
+
+        let error = store_vectors(dir.path(), &one_vector()).unwrap_err();
+
+        assert!(
+            matches!(&error, Error::Index(message)
+                if message == "the cached index changed while embedding; call again"),
+            "{error}"
+        );
+        assert_eq!(cache::read_json::<Manifest>(&manifest).unwrap(), other);
+        assert!(!dir.path().join(VECTORS_FILE).exists());
+    }
+
+    #[test]
+    fn vectors_for_a_removed_index_ask_for_another_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+
+        let error = store_vectors(&gone, &one_vector()).unwrap_err();
+
+        assert!(
+            error.to_string().contains("call again to rebuild it"),
+            "{error}"
+        );
+        assert!(!gone.exists());
+    }
 }

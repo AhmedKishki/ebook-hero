@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use crate::index::book::Book;
-use crate::index::cache::{default_cache_root, file_error, sha256_file};
+use crate::index::cache::{default_cache_root, ensure_private_dir, file_error, sha256_file};
 use crate::settings::OPEN_BOOKS;
 use crate::{Error, Result};
 
@@ -29,8 +29,9 @@ impl Session {
     }
 
     pub fn with_cache_root(root: PathBuf) -> Session {
-        // A failure shows up with its cause when the first book is built.
-        let _ = fs::create_dir_all(&root);
+        // A root that cannot be used shows up, with its cause, when the first
+        // book is opened.
+        let _ = ensure_private_dir(&root);
         Session {
             cache_root: root,
             books: Mutex::new(VecDeque::new()),

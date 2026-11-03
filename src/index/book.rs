@@ -26,12 +26,18 @@ pub struct Book {
 impl Book {
     /// Opens the book at `path`, whose content hashes to `sha256`.
     ///
+    /// `sha256` must be a SHA-256 hex digest and `cache_root` a private
+    /// directory (see [`cache::ensure_private_dir`]): the cached index is
+    /// loaded without being checked, so only this user may be able to write it.
+    ///
     /// A cached stage-1 index whose manifest is current is loaded as it is.
     /// Otherwise the build lock for this book is taken, the cache is checked
     /// again (another process may have built it while this one waited), and
     /// only then is the index built. A cache that does not load is rebuilt
     /// like a stale one.
     pub fn open(cache_root: &Path, path: &Path, sha256: &str) -> Result<Book> {
+        cache::require_sha256(sha256)?;
+        cache::ensure_private_dir(cache_root)?;
         let dir = cache::stage_dir(cache_root, sha256);
         if let Some(book) = load_current(&dir, path, sha256) {
             return Ok(book);

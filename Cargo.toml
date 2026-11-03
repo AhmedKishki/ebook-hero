@@ -9,6 +9,7 @@ description = "Search and read one PDF or EPUB: lexical, semantic and hybrid sea
 [dependencies]
 dirs = "7"
 fs4 = "1.1"
+libc = "0.2"
 pdf_oxide = "=0.3.78"
 rbook = "0.7.12"
 schemars = "1.2"

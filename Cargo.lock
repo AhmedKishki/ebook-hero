@@ -631,6 +631,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "fs4 1.1.0",
+ "libc",
  "pdf_oxide",
  "rbook",
  "schemars",

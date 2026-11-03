@@ -23,6 +23,35 @@ fn serial() -> MutexGuard<'static, ()> {
     BUILDS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Creates `path` (whose parent exists) readable by its owner only.
+#[cfg(unix)]
+fn private_dir(path: &Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(unix)]
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// A temporary directory that only this user can write. The cache refuses a
+/// root that others can write, and `TempDir::new` honours the umask, which is
+/// 002 on many systems.
+fn private_tempdir() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    #[cfg(unix)]
+    set_mode(dir.path(), 0o700);
+    dir
+}
+
 /// Writes an EPUB whose title, and so whose hash, is `title`.
 fn write_book(path: &Path, title: &str) {
     EpubBuilder::new(EpubVersion::V3)
@@ -43,7 +72,7 @@ struct Setup {
 impl Setup {
     fn new() -> Setup {
         Setup {
-            root: TempDir::new().unwrap(),
+            root: private_tempdir(),
             books: TempDir::new().unwrap(),
         }
     }
@@ -197,7 +226,7 @@ fn concurrent_opens_build_once() {
 
 #[test]
 fn lock_timeout_names_the_holder() {
-    let root = TempDir::new().unwrap();
+    let root = private_tempdir();
     let sha = "b".repeat(64);
     let held = File::options()
         .write(true)
@@ -327,4 +356,149 @@ fn keeps_at_most_four_open_books() {
     assert!(!std::sync::Arc::ptr_eq(&evicted, &opened[0]));
     assert_eq!(evicted.sha256, opened[0].sha256);
     assert_eq!(session.open_book_count(), OPEN_BOOKS);
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_non_hex_sha() {
+    // The root sits inside `outer`, so even a hash that climbs out of the
+    // root can only reach files this test planted.
+    let outer = TempDir::new().unwrap();
+    let root = outer.path().join("cache");
+    private_dir(&root);
+    let in_root = root.join("keep.txt");
+    let in_outer = outer.path().join("keep.txt");
+    fs::write(&in_root, b"keep").unwrap();
+    fs::write(&in_outer, b"keep").unwrap();
+    let books = TempDir::new().unwrap();
+    let path = books.path().join("book.epub");
+    write_book(&path, "Rejects Non Hex");
+
+    let upper = "A".repeat(64);
+    for sha in ["", "..", "abc", "../escape", upper.as_str()] {
+        assert!(
+            matches!(
+                Book::open(&root, &path, sha),
+                Err(Error::InvalidArgument(_))
+            ),
+            "Book::open accepted {sha:?}"
+        );
+        assert!(
+            matches!(
+                with_lock(&root, sha, Duration::from_millis(50), || Ok(())),
+                Err(Error::InvalidArgument(_))
+            ),
+            "with_lock accepted {sha:?}"
+        );
+        assert!(
+            in_root.is_file() && in_outer.is_file(),
+            "{sha:?} deleted a file"
+        );
+    }
+    let echoed = match with_lock(&root, &"x".repeat(500), Duration::ZERO, || Ok(())) {
+        Err(Error::InvalidArgument(message)) => message,
+        other => panic!("expected InvalidArgument, got {:?}", other.err()),
+    };
+    assert!(
+        echoed.starts_with("not a SHA-256 hex digest: x"),
+        "{echoed}"
+    );
+    assert!(
+        echoed.len() < 150,
+        "the echoed value is not truncated: {echoed}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn group_writable_root_is_rejected() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (path, sha) = setup.book("Group Writable");
+    Book::open(setup.root(), &path, &sha).unwrap();
+
+    set_mode(setup.root(), 0o777);
+    for result in [
+        Book::open(setup.root(), &path, &sha).map(|_| ()),
+        with_lock(setup.root(), &sha, Duration::from_millis(50), || Ok(())),
+        setup.session().book(str_of(&path)).map(|_| ()),
+    ] {
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("not private"), "{message}");
+        assert!(message.contains("TMPDIR"), "{message}");
+    }
+    set_mode(setup.root(), 0o770);
+    assert!(Book::open(setup.root(), &path, &sha).is_err());
+    set_mode(setup.root(), 0o707);
+    assert!(Book::open(setup.root(), &path, &sha).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_root_others_can_only_read_is_accepted() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (path, sha) = setup.book("Readable");
+    for mode in [0o755, 0o750, 0o700] {
+        set_mode(setup.root(), mode);
+        Book::open(setup.root(), &path, &sha).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_root_is_rejected() {
+    let _serial = serial();
+    let tmp = TempDir::new().unwrap();
+    let real = tmp.path().join("real");
+    let link = tmp.path().join("link");
+    private_dir(&real);
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let books = TempDir::new().unwrap();
+    let path = books.path().join("book.epub");
+    write_book(&path, "Symlinked Root");
+    let sha = sha256_file(&path).unwrap();
+
+    let message = Book::open(&link, &path, &sha).err().unwrap().to_string();
+    assert!(message.contains("not private"), "{message}");
+    assert!(with_lock(&link, &sha, Duration::from_millis(50), || Ok(())).is_err());
+    assert!(fs::read_dir(&real).unwrap().next().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_symlink_is_not_followed() {
+    let root = private_tempdir();
+    let elsewhere = TempDir::new().unwrap();
+    let target = elsewhere.path().join("precious.txt");
+    fs::write(&target, b"keep").unwrap();
+    let sha = "c".repeat(64);
+    std::os::unix::fs::symlink(&target, root.path().join(format!("{sha}.lock"))).unwrap();
+
+    let result = with_lock(root.path(), &sha, Duration::from_millis(50), || Ok(()));
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("symbolic link"), "{message}");
+    assert_eq!(fs::read(&target).unwrap(), b"keep");
+}
+
+#[cfg(unix)]
+#[test]
+fn fresh_root_is_created_private() {
+    let tmp = TempDir::new().unwrap();
+    let fresh = tmp.path().join("cache");
+    let _session = Session::with_cache_root(fresh.clone());
+    assert_eq!(mode_of(&fresh), 0o700);
+
+    let by_lock = tmp.path().join("by-lock");
+    with_lock(&by_lock, &"d".repeat(64), Duration::from_millis(50), || {
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(mode_of(&by_lock), 0o700);
+
+    // Only the root itself is created: its parent must already exist.
+    let orphan = tmp.path().join("missing").join("cache");
+    let _session = Session::with_cache_root(orphan.clone());
+    assert!(!tmp.path().join("missing").exists());
+    assert!(with_lock(&orphan, &"d".repeat(64), Duration::ZERO, || Ok(())).is_err());
 }

@@ -6,6 +6,11 @@
 //! <root>/<sha>.lock                held while building; holds the builder's pid
 //! <root>/<sha>.staging-<pid>-<ns>/ a build in progress, renamed to <sha>/ when done
 //! ```
+//!
+//! The root is trusted: its indexes are loaded without checking them. On Unix
+//! [`ensure_private_dir`] therefore insists it is a real directory that only
+//! this user can write, and every `sha` that names a path inside it must be a
+//! SHA-256 hex digest, so nothing outside the root is ever created or deleted.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -25,6 +30,10 @@ use crate::settings::{
 };
 use crate::{Error, Result};
 
+const SHA256_HEX_LEN: usize = 64;
+/// How much of a rejected hash an error message repeats.
+const ECHO_CHARS: usize = 80;
+
 pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 pub(crate) const DOCUMENT_FILE: &str = "document.json";
 pub(crate) const PASSAGES_FILE: &str = "passages.json";
@@ -36,6 +45,80 @@ static BUILDS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn default_cache_root() -> PathBuf {
     std::env::temp_dir().join("ebook-hero")
+}
+
+/// True for exactly 64 lowercase hex digits, the form [`sha256_file`] returns.
+pub(crate) fn is_sha256_hex(s: &str) -> bool {
+    s.len() == SHA256_HEX_LEN && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Refuses a `sha` that could name anything but a book: the cache builds paths
+/// from it and deletes some of them.
+pub(crate) fn require_sha256(sha: &str) -> Result<()> {
+    if is_sha256_hex(sha) {
+        return Ok(());
+    }
+    let shown: String = sha.chars().take(ECHO_CHARS).collect();
+    Err(Error::InvalidArgument(format!(
+        "not a SHA-256 hex digest: {shown}"
+    )))
+}
+
+/// Makes sure `root` is a directory that only this user can write to.
+///
+/// A missing root is created with mode 0700; its parent must exist. On Unix an
+/// existing root must be a directory and not a symlink, owned by the current
+/// user, and not writable by group or others, because anyone who can write it
+/// can plant an index that this process would load.
+pub fn ensure_private_dir(root: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        create_private(root)?;
+        check_private(root)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(root)?;
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn create_private(root: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    match fs::DirBuilder::new().mode(0o700).create(root) {
+        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(unix)]
+fn check_private(root: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::symlink_metadata(root)?;
+    // SAFETY: `geteuid` takes no arguments, cannot fail, and touches no memory.
+    let user = unsafe { libc::geteuid() };
+    let reason = if !metadata.file_type().is_dir() {
+        "it is not a directory; a symbolic link is not followed".to_string()
+    } else if metadata.uid() != user {
+        format!(
+            "it is owned by user {}, not by you (user {user})",
+            metadata.uid()
+        )
+    } else if metadata.mode() & 0o022 != 0 {
+        format!(
+            "its mode {:o} lets group or others write to it",
+            metadata.mode() & 0o777
+        )
+    } else {
+        return Ok(());
+    };
+    Err(Error::Index(format!(
+        "cache directory {} is not private ({reason}); set TMPDIR to a private directory",
+        root.display()
+    )))
 }
 
 /// The SHA-256 of the file's bytes as lowercase hex, read in chunks.
@@ -110,13 +193,10 @@ pub fn with_lock<T>(
     wait: Duration,
     f: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    fs::create_dir_all(root)?;
+    require_sha256(sha)?;
+    ensure_private_dir(root)?;
     let path = lock_path(root, sha);
-    let mut lock = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)?;
+    let mut lock = open_lock(&path)?;
     let started = Instant::now();
     loop {
         match FileExt::try_lock(&lock) {
@@ -142,6 +222,28 @@ pub fn with_lock<T>(
     // process that has already let go.
     let _ = lock.set_len(0);
     result
+}
+
+/// Opens the lock file, creating it. It is written to, so a symlink there is
+/// an error: following it would let whoever planted it truncate its target.
+fn open_lock(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path).map_err(|e| {
+        if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            Error::Index(format!(
+                "lock file {} is a symbolic link and is not followed; delete it",
+                path.display()
+            ))
+        } else {
+            e.into()
+        }
+    })
 }
 
 /// How many stage-1 builds this process has finished.
@@ -181,6 +283,7 @@ pub(crate) fn staging_dir(root: &Path, sha: &str) -> PathBuf {
 /// Deletes the stage directory of `sha` and every staging directory left by a
 /// build that died. Call it only while holding the lock for `sha`.
 pub(crate) fn remove_stale(root: &Path, sha: &str) -> Result<()> {
+    debug_assert!(is_sha256_hex(sha), "{sha:?} is not a SHA-256 hex digest");
     let prefix = staging_prefix(sha);
     for entry in fs::read_dir(root)? {
         let entry = entry?;
@@ -250,6 +353,25 @@ mod tests {
             sha256_file(&dir.path().join("missing")),
             Err(Error::NotFound { .. })
         ));
+    }
+
+    #[test]
+    fn only_sixty_four_lowercase_hex_digits_are_a_sha256() {
+        assert!(is_sha256_hex(&"0123456789abcdef".repeat(4)));
+        let bad = [
+            String::new(),
+            "..".to_string(),
+            "abc".to_string(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "A".repeat(64),
+            "g".repeat(64),
+            format!("{}/", "a".repeat(63)),
+            format!("../{}", "a".repeat(61)),
+        ];
+        assert!(bad.iter().all(|s| !is_sha256_hex(s)));
+        let known = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(is_sha256_hex(known));
     }
 
     #[test]

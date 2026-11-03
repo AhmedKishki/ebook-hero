@@ -14,6 +14,7 @@ pub const FIND_PAGE: usize = 20;
 pub const READ_MAX_CHARS: usize = 8000;
 pub const READ_NEIGHBOURS_MAX: u32 = 10;
 pub const LOCK_WAIT: Duration = Duration::from_secs(900);
+pub const LOCK_POLL: Duration = Duration::from_millis(200);
 pub const OPEN_BOOKS: usize = 4;
 pub const EMBED_BATCH: usize = 64;
 pub const QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";

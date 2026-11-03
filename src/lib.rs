@@ -1,8 +1,11 @@
+pub mod analysis;
 pub mod document;
 pub mod error;
 pub mod extract;
+pub mod index;
 pub mod normalize;
 pub mod passages;
+pub mod search;
 pub mod settings;
 
 pub use error::{Error, Result};

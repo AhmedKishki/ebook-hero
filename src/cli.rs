@@ -17,7 +17,7 @@ use crate::extract::extract;
 use crate::index::cache::{
     CachedIndex, ClearReport, clear, default_cache_root, list_indexes, sha256_file,
 };
-use crate::passages::Passage;
+use crate::passages::{Passage, PassageLocator};
 use crate::read::{BookInfo, OutlineResult, ReadAt, ReadParams, ReadResult, locator_text};
 use crate::search::find::FindResult;
 use crate::search::{Mode, SearchParams, SearchResult};
@@ -469,17 +469,14 @@ fn search_text(result: &SearchResult) -> String {
         if i > 0 {
             out.push('\n');
         }
-        let _ = write!(
+        let _ = writeln!(
             out,
-            "{}. passage {}{SEPARATOR}{}",
+            "{}. passage {}{SEPARATOR}{}  (score {:.3})",
             i + 1,
             hit.passage_id,
-            locator_text(&hit.locator)
+            hit_place(&hit.section, &hit.locator),
+            hit.score
         );
-        if !hit.section.is_empty() {
-            let _ = write!(out, "{SEPARATOR}{}", hit.section.join(" › "));
-        }
-        let _ = writeln!(out, "  (score {:.3})", hit.score);
         for line in highlighted(&hit.text, &hit.matches).lines() {
             if line.is_empty() {
                 out.push('\n');
@@ -489,6 +486,33 @@ fn search_text(result: &SearchResult) -> String {
         }
     }
     out
+}
+
+/// Where a search hit is: its locator, then its section path. An EPUB locator
+/// that already names the nearest heading takes the rest of the path in front
+/// of it instead, so the heading is printed once.
+fn hit_place(section: &[String], locator: &PassageLocator) -> String {
+    let place = locator_text(locator);
+    if let (
+        PassageLocator::Epub {
+            under_heading: Some(heading),
+            ..
+        },
+        Some((last, parents)),
+    ) = (locator, section.split_last())
+        && *last == heading.text
+    {
+        return parents
+            .iter()
+            .map(|parent| format!("{parent} › "))
+            .chain([place])
+            .collect();
+    }
+    if section.is_empty() {
+        place
+    } else {
+        format!("{place}{SEPARATOR}{}", section.join(" › "))
+    }
 }
 
 /// `text` with the code-point ranges `matches` wrapped in `«` and `»`.
@@ -638,4 +662,52 @@ fn clear_text(report: &ClearReport) -> String {
     }
     out.push('\n');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::passages::HeadingPlace;
+
+    fn section(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn epub(under_heading: Option<&str>) -> PassageLocator {
+        PassageLocator::Epub {
+            href: "ch8.xhtml".to_string(),
+            para_start: 11,
+            para_end: 12,
+            print_page: None,
+            under_heading: under_heading.map(|text| HeadingPlace {
+                text: text.to_string(),
+                para_start: 10,
+                para_end: 11,
+            }),
+        }
+    }
+
+    #[test]
+    fn an_epub_hit_names_its_heading_once() {
+        let place = hit_place(
+            &section(&["Alice", "CHAPTER VIII"]),
+            &epub(Some("CHAPTER VIII")),
+        );
+        assert_eq!(place, "Alice › CHAPTER VIII ¶10–11");
+    }
+
+    #[test]
+    fn a_hit_without_a_heading_place_adds_its_section_path() {
+        let pdf = PassageLocator::Pdf {
+            page_start: 12,
+            page_end: 12,
+            label_start: Some("xii".to_string()),
+            label_end: None,
+        };
+        assert_eq!(
+            hit_place(&section(&["Part 1", "Rules"]), &pdf),
+            "p. 12 (xii) · Part 1 › Rules"
+        );
+        assert_eq!(hit_place(&[], &epub(None)), "ch8.xhtml ¶11–12");
+    }
 }

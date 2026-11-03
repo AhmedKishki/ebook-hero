@@ -23,5 +23,5 @@ pub const EMBEDDING_DIM: usize = 384;
 pub const RERANKER_MODEL: &str = "jinaai/jina-reranker-v1-turbo-en";
 pub const PDF_READER_VERSION: u32 = 2;
 pub const EPUB_READER_VERSION: u32 = 2;
-pub const PASSAGES_VERSION: u32 = 1;
+pub const PASSAGES_VERSION: u32 = 2;
 pub const ANALYZERS_VERSION: u32 = 2;

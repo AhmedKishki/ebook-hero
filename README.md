@@ -23,14 +23,14 @@ These commands run on `tests/fixtures/alice.epub`, the copy of *Alice's Adventur
 
 ```console
 $ ebook-hero search tests/fixtures/alice.epub "why does the Queen want to cut off heads"
-1. passage 93 · 4040227324556390537_11-h-8.htm.html ¶11 · Alice’s Adventures in Wonderland › CHAPTER VIII. The Queen’s Croquet-Ground  (score 0.907)
+1. passage 93 · Alice’s Adventures in Wonderland › CHAPTER VIII. The Queen’s Croquet-Ground ¶10  (score 0.907)
     Five and Seven said nothing, but looked at Two. Two began in a low voice, “Why the fact is, you see, Miss, this here ought to have been a red rose-tree, and we put a white one in by mistake; and if the «Queen» was to find it out, we should all have our «heads» «cut» «off», you know. …
 
-2. passage 104 · 4040227324556390537_11-h-8.htm.html ¶65–70 · Alice’s Adventures in Wonderland › CHAPTER VIII. The Queen’s Croquet-Ground  (score 0.610)
+2. passage 104 · Alice’s Adventures in Wonderland › CHAPTER VIII. The Queen’s Croquet-Ground ¶64–69  (score 0.610)
     When she got back to the Cheshire Cat, she was surprised to find quite a large crowd collected round it: there was a dispute going on between the executioner, the King, and the «Queen», …
 ```
 
-Each hit gives its passage id, its place in the book (here the EPUB file and paragraphs, in a PDF the page), its chapter and its score. The words that matched the query are marked «like this».
+Each hit gives its passage id, its place in the book and its score. In an EPUB the place is the chapter and the paragraphs counted from its heading; in a PDF it is the page, followed by the chapter. The words that matched the query are marked «like this».
 
 `read` prints a hit in full, as Markdown, from its passage id. To see the text around it, add `--before` or `--after`:
 
@@ -38,7 +38,7 @@ Each hit gives its passage id, its place in the book (here the EPUB file and par
 $ ebook-hero read tests/fixtures/alice.epub 104
 ## Alice’s Adventures in Wonderland › CHAPTER VIII. The Queen’s Croquet-Ground
 
-<!-- passage 104 · 4040227324556390537_11-h-8.htm.html ¶65–70 -->
+<!-- passage 104 · CHAPTER VIII. The Queen’s Croquet-Ground ¶64–69 -->
 
 When she got back to the Cheshire Cat, she was surprised to find quite a large crowd collected round it: …
 ```
@@ -48,8 +48,8 @@ When she got back to the Cheshire Cat, she was surprised to find quite a large c
 ```console
 $ ebook-hero find tests/fixtures/alice.epub "off with her head"
 4 occurrences in 4 passages
-passage 95 · 4040227324556390537_11-h-8.htm.html ¶14–20: …r a moment like a wild beast, screamed “«Off with her head»! Off—” “Nonsense!” said Alice, very lo…
-passage 99 · 4040227324556390537_11-h-8.htm.html ¶43–44: …, and shouting “Off with his head!” or “«Off with her head»!” about once in a minute.…
+passage 95 · CHAPTER VIII. The Queen’s Croquet-Ground ¶13–19: …r a moment like a wild beast, screamed “«Off with her head»! Off—” “Nonsense!” said Alice, very lo…
+passage 99 · CHAPTER VIII. The Queen’s Croquet-Ground ¶42–43: …, and shouting “Off with his head!” or “«Off with her head»!” about once in a minute.…
 …
 ```
 
@@ -57,11 +57,11 @@ passage 99 · 4040227324556390537_11-h-8.htm.html ¶43–44: …, and shouting �
 
 ```console
 $ ebook-hero verify tests/fixtures/alice.epub "Off with her head!"
-exact: passage 95 · 4040227324556390537_11-h-8.htm.html ¶14–20
+exact: passage 95 · CHAPTER VIII. The Queen’s Croquet-Ground ¶13–19
 $ ebook-hero verify tests/fixtures/alice.epub "off with their heads"
-equivalent: passage 96 · 4040227324556390537_11-h-8.htm.html ¶21–29
+equivalent: passage 96 · CHAPTER VIII. The Queen’s Croquet-Ground ¶20–28
 $ ebook-hero verify tests/fixtures/alice.epub "the Queen was very kind to everyone"
-none; closest passage 93 · 4040227324556390537_11-h-8.htm.html ¶11 (3 of 7 words; differs at "very")
+none; closest passage 93 · CHAPTER VIII. The Queen’s Croquet-Ground ¶10 (3 of 7 words; differs at "very")
 ```
 
 ## How search works

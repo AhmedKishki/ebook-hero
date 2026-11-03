@@ -284,6 +284,7 @@ mod tests {
                 para_start: 0,
                 para_end: 0,
                 print_page: None,
+                under_heading: None,
             },
             matches: Vec::new(),
             score,

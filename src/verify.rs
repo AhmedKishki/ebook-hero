@@ -400,6 +400,7 @@ mod tests {
                     para_start: i as u32,
                     para_end: i as u32,
                     print_page: None,
+                    under_heading: None,
                 },
             })
             .collect()

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use common::{EpubBuilder, EpubVersion, private_tempdir};
 use ebook_hero::Error;
 use ebook_hero::document::Format;
-use ebook_hero::passages::PassageLocator;
+use ebook_hero::passages::{HeadingPlace, PassageLocator};
 use ebook_hero::read::{ReadAt, ReadParams, ReadResult};
 use ebook_hero::session::Session;
 use ebook_hero::settings::{READ_MAX_CHARS, READ_NEIGHBOURS_MAX};
@@ -134,13 +134,18 @@ fn reads_a_passage_with_neighbours() {
             para_start: 2,
             para_end: 2,
             print_page: None,
+            under_heading: Some(HeadingPlace {
+                text: "Part 2".to_string(),
+                para_start: 1,
+                para_end: 1,
+            }),
         }
     );
     assert_eq!(
         result.markdown,
-        "## Part 1\n\n<!-- passage 1 · ch1.xhtml ¶2 -->\n\nOne.\n\n\
-         ## Part 2\n\n<!-- passage 2 · ch2.xhtml ¶2 -->\n\nTwo.\n\n\
-         ## Part 3\n\n<!-- passage 3 · ch3.xhtml ¶2 -->\n\nThree.\n"
+        "## Part 1\n\n<!-- passage 1 · Part 1 ¶1 -->\n\nOne.\n\n\
+         ## Part 2\n\n<!-- passage 2 · Part 2 ¶1 -->\n\nTwo.\n\n\
+         ## Part 3\n\n<!-- passage 3 · Part 3 ¶1 -->\n\nThree.\n"
     );
 }
 
@@ -449,6 +454,11 @@ fn outline_and_info() {
             para_start: 2,
             para_end: 2,
             print_page: None,
+            under_heading: Some(HeadingPlace {
+                text: "Two".to_string(),
+                para_start: 1,
+                para_end: 1,
+            }),
         })
     );
 

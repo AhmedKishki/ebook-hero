@@ -43,7 +43,19 @@ pub enum PassageLocator {
         para_start: u32,
         para_end: u32,
         print_page: Option<String>,
+        /// `None` for text before the book's first heading.
+        under_heading: Option<HeadingPlace>,
     },
+}
+
+/// A passage's paragraphs counted from the nearest heading above it. The count
+/// runs on across files, so the place stays unique when a chapter is split over
+/// several files of an EPUB.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HeadingPlace {
+    pub text: String,
+    pub para_start: u32,
+    pub para_end: u32,
 }
 
 /// The text of one block, or a piece of it, that goes into a passage whole.
@@ -52,6 +64,8 @@ struct Piece<'a> {
     offset: usize,
     text: &'a str,
     words: usize,
+    /// The block's number among the blocks under its heading, from 1.
+    section_para: u32,
 }
 
 /// Packs the paragraphs, list items and notes of `blocks`, in order, into
@@ -64,12 +78,20 @@ pub fn build_passages(blocks: &[Block]) -> Vec<Passage> {
     let mut passages = Vec::new();
     let mut current: Vec<Piece> = Vec::new();
     let mut words = 0;
+    let mut section_para = 0;
+    let mut previous_section: Option<&[String]> = None;
     for block in blocks {
         if matches!(block.kind, BlockKind::Heading { .. }) {
             close(&mut passages, &mut current, &mut words);
+            section_para = 0;
             continue;
         }
-        for piece in pieces(block) {
+        if previous_section != Some(block.section.as_slice()) {
+            section_para = 0;
+        }
+        previous_section = Some(&block.section);
+        section_para += 1;
+        for piece in pieces(block, section_para) {
             let fits = current.first().is_some_and(|first| {
                 same_part(first.block, block) && words + piece.words <= PASSAGE_MAX_WORDS
             });
@@ -107,7 +129,7 @@ fn same_part(a: &Block, b: &Block) -> bool {
         }
 }
 
-fn pieces(block: &Block) -> Vec<Piece<'_>> {
+fn pieces(block: &Block, section_para: u32) -> Vec<Piece<'_>> {
     let words = word_count(&block.text);
     if words <= PASSAGE_MAX_WORDS {
         return vec![Piece {
@@ -115,6 +137,7 @@ fn pieces(block: &Block) -> Vec<Piece<'_>> {
             offset: 0,
             text: &block.text,
             words,
+            section_para,
         }];
     }
     split_ranges(&block.text)
@@ -126,6 +149,7 @@ fn pieces(block: &Block) -> Vec<Piece<'_>> {
                 offset: range.start,
                 text,
                 words: word_count(text),
+                section_para,
             }
         })
         .collect()
@@ -277,6 +301,11 @@ fn locator(pieces: &[Piece]) -> PassageLocator {
                 })
                 .unwrap_or(*para),
             print_page: print_page.clone(),
+            under_heading: pieces[0].block.section.last().map(|text| HeadingPlace {
+                text: text.clone(),
+                para_start: pieces[0].section_para,
+                para_end: pieces[pieces.len() - 1].section_para,
+            }),
         },
     }
 }
@@ -685,8 +714,93 @@ mod tests {
                 para_start: 4,
                 para_end: 6,
                 print_page: Some("12".to_string()),
+                under_heading: Some(HeadingPlace {
+                    text: "A".to_string(),
+                    para_start: 1,
+                    para_end: 3,
+                }),
             }
         );
+    }
+
+    fn heading_place(passage: &Passage) -> Option<(String, u32, u32)> {
+        match &passage.locator {
+            PassageLocator::Epub {
+                under_heading: Some(place),
+                ..
+            } => Some((place.text.clone(), place.para_start, place.para_end)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn epub_paragraphs_are_counted_from_their_heading_across_files() {
+        let blocks = [
+            heading(0, "Book", &["Book"]),
+            heading(1, "One", &["Book", "One"]),
+            epub_block(2, &words(150), &["Book", "One"], "a.xhtml", 3),
+            epub_block(3, &words(150), &["Book", "One"], "a.xhtml", 4),
+            epub_block(4, &words(10), &["Book", "One"], "b.xhtml", 1),
+            heading(5, "Two", &["Book", "Two"]),
+            epub_block(6, &words(10), &["Book", "Two"], "b.xhtml", 3),
+        ];
+        let passages = build_passages(&blocks);
+        let places: Vec<_> = passages.iter().map(heading_place).collect();
+        assert_eq!(
+            places,
+            [
+                Some(("One".to_string(), 1, 1)),
+                Some(("One".to_string(), 2, 2)),
+                Some(("One".to_string(), 3, 3)),
+                Some(("Two".to_string(), 1, 1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repeated_heading_starts_the_count_again() {
+        let blocks = [
+            heading(0, "Notes", &["Notes"]),
+            epub_block(1, &words(10), &["Notes"], "a.xhtml", 2),
+            epub_block(2, &words(10), &["Notes"], "a.xhtml", 3),
+            heading(3, "Notes", &["Notes"]),
+            epub_block(4, &words(10), &["Notes"], "a.xhtml", 5),
+        ];
+        let places: Vec<_> = build_passages(&blocks).iter().map(heading_place).collect();
+        assert_eq!(
+            places,
+            [
+                Some(("Notes".to_string(), 1, 2)),
+                Some(("Notes".to_string(), 1, 1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn epub_text_before_the_first_heading_has_no_heading_place() {
+        let blocks = [
+            epub_block(0, &words(10), &[], "cover.xhtml", 1),
+            heading(1, "One", &["One"]),
+            epub_block(2, &words(10), &["One"], "a.xhtml", 2),
+        ];
+        let places: Vec<_> = build_passages(&blocks).iter().map(heading_place).collect();
+        assert_eq!(places, [None, Some(("One".to_string(), 1, 1))]);
+    }
+
+    #[test]
+    fn pieces_of_a_split_epub_block_share_its_paragraph_number() {
+        let text = (0..50).map(sentence).collect::<Vec<_>>().join(" ");
+        let blocks = [
+            heading(0, "One", &["One"]),
+            epub_block(1, &words(10), &["One"], "a.xhtml", 2),
+            epub_block(2, &text, &["One"], "a.xhtml", 3),
+        ];
+        let places: Vec<_> = build_passages(&blocks).iter().map(heading_place).collect();
+        assert!(places.len() >= 3, "{places:?}");
+        assert_eq!(places[0].as_ref().map(|place| place.1), Some(1));
+        for place in &places[1..] {
+            assert_eq!(place, &Some(("One".to_string(), 2, 2)));
+        }
     }
 
     #[test]

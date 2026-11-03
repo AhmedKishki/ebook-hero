@@ -332,7 +332,9 @@ fn outline_of(document: &Document, passages: &[Passage]) -> OutlineResult {
 }
 
 /// Where a passage is, as a person would cite it: `p. 12–13 (xii–xiii)` for a
-/// PDF and `ch1.xhtml ¶3–5, print p. 45` for an EPUB.
+/// PDF and `CHAPTER I ¶3–5, print p. 45` for an EPUB, whose paragraphs are
+/// counted from the nearest heading. EPUB text before the first heading is
+/// placed by its file instead: `cover.xhtml ¶1`.
 pub fn locator_text(locator: &PassageLocator) -> String {
     match locator {
         PassageLocator::Pdf {
@@ -359,8 +361,16 @@ pub fn locator_text(locator: &PassageLocator) -> String {
             para_start,
             para_end,
             print_page,
+            under_heading,
         } => {
-            let mut text = format!("{href} {}", range_text("¶", *para_start, *para_end));
+            let mut text = match under_heading {
+                Some(place) => format!(
+                    "{} {}",
+                    place.text,
+                    range_text("¶", place.para_start, place.para_end)
+                ),
+                None => format!("{href} {}", range_text("¶", *para_start, *para_end)),
+            };
             if let Some(page) = print_page {
                 text.push_str(&format!(", print p. {page}"));
             }
@@ -384,6 +394,7 @@ mod tests {
     use crate::Error;
     use crate::document::{Metadata, Source};
     use crate::passages::BlockRange;
+    use crate::passages::HeadingPlace;
     use crate::settings::{READ_MAX_CHARS, READ_NEIGHBOURS_MAX};
 
     fn pdf(
@@ -405,6 +416,42 @@ mod tests {
             para_start: paras.0,
             para_end: paras.1,
             print_page: print_page.map(str::to_string),
+            under_heading: None,
+        }
+    }
+
+    fn epub_under(heading_paras: (u32, u32), print_page: Option<&str>) -> PassageLocator {
+        PassageLocator::Epub {
+            href: "ch1.xhtml".to_string(),
+            para_start: 7,
+            para_end: 9,
+            print_page: print_page.map(str::to_string),
+            under_heading: Some(HeadingPlace {
+                text: "CHAPTER I. Down the Rabbit-Hole".to_string(),
+                para_start: heading_paras.0,
+                para_end: heading_paras.1,
+            }),
+        }
+    }
+
+    #[test]
+    fn an_epub_locator_names_the_heading_and_paragraphs_under_it() {
+        let cases = [
+            (
+                epub_under((1, 1), None),
+                "CHAPTER I. Down the Rabbit-Hole ¶1",
+            ),
+            (
+                epub_under((1, 3), None),
+                "CHAPTER I. Down the Rabbit-Hole ¶1–3",
+            ),
+            (
+                epub_under((1, 3), Some("45")),
+                "CHAPTER I. Down the Rabbit-Hole ¶1–3, print p. 45",
+            ),
+        ];
+        for (locator, text) in cases {
+            assert_eq!(locator_text(&locator), text, "{locator:?}");
         }
     }
 
@@ -430,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn an_epub_locator_names_the_file_paragraphs_and_print_page() {
+    fn an_epub_locator_before_any_heading_names_the_file_paragraphs_and_print_page() {
         let cases = [
             (epub((3, 3), None), "ch1.xhtml ¶3"),
             (epub((3, 5), None), "ch1.xhtml ¶3–5"),

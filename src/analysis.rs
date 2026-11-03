@@ -3,16 +3,25 @@
 
 use tantivy::Index;
 use tantivy::tokenizer::{
-    Language, LowerCaser, RemoveLongFilter, SimpleTokenizer, Stemmer, TextAnalyzer,
+    Language, LowerCaser, RemoveLongFilter, SimpleTokenizer, Stemmer, StopWordFilter, TextAnalyzer,
 };
 
 /// Tokens of this many bytes or more are dropped, as URLs and encoded blobs
 /// are noise in both fields.
 const TOKEN_MAX_BYTES: usize = 40;
 
-/// Lowercased, English-stemmed tokens. Indexed in `text` and `section`.
+/// Question words, dropped from `STEMMED` along with tantivy's English
+/// stopwords, which lack them: a query phrased as a question would otherwise
+/// match every passage that asks one.
+const QUESTION_WORDS: [&str; 9] = [
+    "how", "what", "when", "where", "which", "who", "whom", "whose", "why",
+];
+
+/// Lowercased, English-stemmed tokens without English stopwords. Indexed in
+/// `text` and `section`, and used to highlight words.
 pub const STEMMED: &str = "ebook_hero_en_stem";
-/// Lowercased tokens, unstemmed. Indexed in `text_exact`, used for phrases.
+/// Lowercased tokens, unstemmed, stopwords kept. Indexed in `text_exact`,
+/// used for phrases, `find` and quote verification.
 pub const EXACT: &str = "ebook_hero_en_exact";
 
 /// A token as the analyzer emits it: `text[start..end]` is the source word,
@@ -60,6 +69,10 @@ fn build_analyzer(name: &str) -> TextAnalyzer {
     match name {
         EXACT => exact.build(),
         STEMMED => exact
+            .filter_dynamic(
+                StopWordFilter::new(Language::English).expect("tantivy lists English stopwords"),
+            )
+            .filter_dynamic(StopWordFilter::remove(QUESTION_WORDS.map(String::from)))
             .filter_dynamic(Stemmer::new(Language::English))
             .build(),
         other => panic!("unknown analyzer {other:?}"),
@@ -79,6 +92,29 @@ mod tests {
         assert_eq!(tokens(EXACT, "Entropies")[0].text, "entropies");
         let t = tokens(EXACT, "a  Bc");
         assert_eq!((t[1].start, t[1].end), (3, 5));
+    }
+
+    #[test]
+    fn stemmed_drops_stopwords_and_question_words_and_exact_keeps_them() {
+        let words = |analyzer| -> Vec<String> {
+            tokens(analyzer, "How the Queen ran to a tree, and why")
+                .into_iter()
+                .map(|t| t.text)
+                .collect()
+        };
+        assert_eq!(words(STEMMED), ["queen", "ran", "tree"]);
+        assert_eq!(
+            words(EXACT),
+            [
+                "how", "the", "queen", "ran", "to", "a", "tree", "and", "why"
+            ]
+        );
+        // Dropped words leave their positions empty.
+        let positions: Vec<usize> = tokens(STEMMED, "the queen of the tree")
+            .iter()
+            .map(|t| t.position)
+            .collect();
+        assert_eq!(positions, [1, 4]);
     }
 
     #[test]

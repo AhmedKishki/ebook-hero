@@ -61,6 +61,77 @@ fn highlighted(hit: &Hit, range: [usize; 2]) -> String {
         .collect()
 }
 
+const STOPWORD_BOOK: [&str; 3] = [
+    "How the river runs to the sea is a story of its own.",
+    "Configure the server before you start it.",
+    "A note on how it was done, and why, and by whom.",
+];
+
+#[test]
+fn a_query_of_stopwords_only_finds_nothing() {
+    let fixture = Fixture::new(&STOPWORD_BOOK);
+    let book = fixture.book();
+
+    let hits = lexical_hits(&book, &parse_query("the of and to a it is"), 10).unwrap();
+
+    assert!(
+        hits.is_empty(),
+        "{:?}",
+        hits.iter().map(|h| h.passage_id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_question_matches_only_on_its_content_words() {
+    let fixture = Fixture::new(&STOPWORD_BOOK);
+    let book = fixture.book();
+
+    let hits = lexical_hits(&book, &parse_query("how to configure"), 10).unwrap();
+
+    assert_eq!(hits.iter().map(|h| h.passage_id).collect::<Vec<_>>(), [1]);
+    let words: Vec<String> = hits[0]
+        .matches
+        .iter()
+        .map(|range| highlighted(&hits[0], *range))
+        .collect();
+    assert_eq!(words, ["Configure"]);
+}
+
+#[test]
+fn stopwords_are_not_highlighted() {
+    let fixture = Fixture::new(&STOPWORD_BOOK);
+    let book = fixture.book();
+
+    let hits = lexical_hits(&book, &parse_query("the river and the sea"), 10).unwrap();
+
+    assert_eq!(hits.iter().map(|h| h.passage_id).collect::<Vec<_>>(), [0]);
+    let words: Vec<String> = hits[0]
+        .matches
+        .iter()
+        .map(|range| highlighted(&hits[0], *range))
+        .collect();
+    assert_eq!(words, ["river", "sea"]);
+}
+
+#[test]
+fn a_quoted_phrase_keeps_its_stopwords() {
+    let fixture = Fixture::new(&STOPWORD_BOOK);
+    let book = fixture.book();
+
+    let hits = lexical_hits(&book, &parse_query(r#""runs to the sea""#), 10).unwrap();
+    assert_eq!(hits.iter().map(|h| h.passage_id).collect::<Vec<_>>(), [0]);
+    assert_eq!(highlighted(&hits[0], hits[0].matches[0]), "runs to the sea");
+
+    let none = lexical_hits(&book, &parse_query(r#""runs the sea""#), 10).unwrap();
+    assert!(none.is_empty());
+
+    let found = fixture
+        .session
+        .find(&fixture.path, "how it was", None)
+        .unwrap();
+    assert_eq!(ids(&found.occurrences), [2]);
+}
+
 #[test]
 fn lexical_hits_are_ranked_and_located() {
     let fixture = Fixture::new(&[

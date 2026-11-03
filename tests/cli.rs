@@ -638,6 +638,24 @@ fn read_help_says_which_page_it_reads() {
 }
 
 #[test]
+fn help_names_the_mcp_tool_each_json_output_matches() {
+    let env = Env::new();
+
+    let out = env.stdout(&["--help"]);
+
+    let json = out
+        .lines()
+        .skip_while(|l| !l.contains("--json"))
+        .take_while(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for name in ["info", "verify", "book_info", "verify_quote"] {
+        assert!(json.contains(name), "{name}: {json}");
+    }
+    assert!(!json.contains("same name"), "{json}");
+}
+
+#[test]
 fn help_lists_every_subcommand() {
     let env = Env::new();
 

@@ -38,7 +38,7 @@ const SEPARATOR: &str = " · ";
     about = "Search and read one PDF or EPUB"
 )]
 struct Cli {
-    /// Print the result as JSON, exactly as the MCP tool of the same name returns it
+    /// Print the result as JSON. For info, outline, search, find, read and verify, it is what the MCP tools book_info, outline, search, find, read and verify_quote return
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]

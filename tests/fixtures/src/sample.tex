@@ -1,0 +1,126 @@
+\documentclass[10pt]{article}
+\usepackage{cmap}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{multicol}
+\usepackage{fancyhdr}
+\usepackage[bookmarks=true]{hyperref}
+\hypersetup{pdftitle={Sample Book}, pdfauthor={Ada Example}}
+\setcounter{secnumdepth}{0}
+\setlength{\columnsep}{30pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[C]{SAMPLE BOOK}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+\begin{document}
+\pagenumbering{roman}
+\thispagestyle{empty}
+\vspace*{6\baselineskip}
+\begin{center}
+{\huge\bfseries Sample Book\par}
+\vspace{2\baselineskip}
+{\large\bfseries Ada Example\par}
+\end{center}
+\vspace{4\baselineskip}
+
+This small book is a test fixture. It has a title page numbered in roman
+numerals, four body pages numbered from one, a running header, and a page
+where the text is set in two columns. Nothing in it is meant to be read for
+its own sake, but every sentence is complete so that paragraphs end where a
+reader expects them to end.
+
+\clearpage
+\pagenumbering{arabic}
+
+\section{Entropy}
+Entropy measures how much surprise a source of messages carries. A fair coin
+has one bit of entropy, because each toss is equally likely to land either
+way, while a coin that always lands heads has none, because nothing it says
+can surprise anyone.
+
+Every message that a source can send carries some amount of infor-\linebreak
+mation, and the content of one message is the logarithm of the inverse of its
+probability. Rare messages carry more of it, and the average over all messages
+is the entropy of the source. This is what makes entropy the natural measure
+of how far a message can be compressed.
+
+A claim that is self-evident carries no surprise to those who already hold
+it, and so it adds no information for them. The same message can be news to
+one reader and noise to another, which is why entropy is always stated
+relative to what the receiver knows. In 1948 the idea was set out in full,
+and the figure 1996 below is the number of a later survey, not a year.
+
+\subsection{Joint entropy}
+Joint entropy is the entropy of two variables taken together. If the two are
+independent, it is the sum of their separate entropies. If one tells you
+something about the other, the joint entropy is smaller than that sum, and
+the difference is the mutual information between them.
+
+Consider two coins tossed by the same hand. When the first lands heads the
+second is a little more likely to do so as well, since the hand repeats its
+own motion. The pair of results then carries less than two full bits, and a
+code for the pair can use fewer than two bits on average.
+
+\newpage
+
+Conditional entropy is the entropy that remains in one variable once the
+other is known. It never exceeds the entropy of the variable on its own, and
+it equals that entropy only when the two variables are independent. A weather
+report that always agrees with the weather leaves no conditional entropy at
+all, while a report written at random leaves all of it.
+
+The chain rule ties these quantities together. The joint entropy of two
+variables is the entropy of the first plus the conditional entropy of the
+second given the first. Applied again and again, the rule splits the entropy
+of a long message into the cost of each symbol given the symbols before it.
+
+Students are told early in the course that a thing which is self-\linebreak
+evident to a theorist may still need a proof, and the proof of the chain rule
+is short enough to give in full. It follows from the definition of conditional
+probability and the additivity of the logarithm, and it needs nothing else.
+
+Mutual information is the difference between an entropy and a conditional
+entropy. It is symmetric, it is never negative, and it is zero exactly when
+the two variables are independent. Every later result in this book about
+what a channel can carry is a statement about this one quantity.
+
+\newpage
+
+\begin{multicols}{2}
+Alpha column opens the page with the first half of the text. Take a source
+that sends the letter A with probability one half and the letters B and C
+with probability one quarter each. Its entropy is one and a half bits, which
+is less than the logarithm of three that a source with three equally likely
+letters would have. A code that spends one bit on A and two bits on each of B
+and C reaches that figure exactly, and no code can do better on average.
+\columnbreak
+
+Omega column holds the second half of the text. Now let two such sources run
+side by side without influencing one another. Their joint entropy is three
+bits, the sum of the two. Link them, so that the second repeats the first one
+time in four, and the joint entropy falls below three bits by exactly the
+information that each now carries about the other. The saving is real, and a
+joint code can collect it.
+\end{multicols}
+
+\newpage
+
+\section{Channels}
+A channel takes the symbols a sender puts in and returns the symbols a
+receiver gets out. Noise makes the two differ. The capacity of a channel is
+the highest rate, in bits per symbol, at which messages can be sent so that
+the receiver recovers them with an error as small as one likes.
+
+The noisy channel coding theorem says that every rate below the capacity can
+be reached and that no rate above it can. The proof is not constructive, and
+for decades it was not known how to build codes that come close to the limit.
+Modern codes do come close, and the gap between theory and practice is now
+small enough to measure in fractions of a decibel.
+
+The theorem ends this short book. Entropy told us how much a source says,
+mutual information told us how much a channel passes on, and the capacity
+told us the most that any code could ever ask of it. Everything else is the
+engineering of getting there.
+\end{document}

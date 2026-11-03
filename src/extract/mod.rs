@@ -1,4 +1,5 @@
 pub mod epub;
+pub mod pdf;
 pub mod pdf_layout;
 pub mod xhtml;
 
@@ -87,9 +88,7 @@ pub fn extract(path: &Path, sha256: &str) -> Result<Document> {
     };
     match source.format {
         Format::Epub => epub::read_epub(path, source),
-        Format::Pdf => Err(Error::Unsupported {
-            path: path.to_path_buf(),
-        }),
+        Format::Pdf => pdf::read_pdf(path, source),
     }
 }
 

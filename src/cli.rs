@@ -4,9 +4,7 @@
 
 use std::cell::Cell;
 use std::fmt::Write as _;
-use std::fs;
 use std::io::{self, IsTerminal};
-use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
@@ -17,7 +15,7 @@ use crate::document::markdown::document_to_markdown;
 use crate::document::{Format, Warning};
 use crate::extract::extract;
 use crate::index::cache::{
-    DOCUMENT_FILE, default_cache_root, ensure_private_dir, is_sha256_hex, sha256_file,
+    CachedIndex, ClearReport, clear, default_cache_root, list_indexes, sha256_file,
 };
 use crate::passages::Passage;
 use crate::read::{BookInfo, OutlineResult, ReadAt, ReadParams, ReadResult, locator_text};
@@ -186,9 +184,21 @@ pub fn main() -> ExitCode {
     }
 }
 
+/// The environment variable that sets which log lines are shown.
+const LOG_VARIABLE: &str = "EBOOK_HERO_LOG";
+/// Errors from anywhere, warnings from this program: a dependency's warning is
+/// not something the person running it can act on.
+const DEFAULT_LOG_FILTER: &str = "error,ebook_hero=warn";
+
 fn init_logging() {
-    let filter =
-        EnvFilter::try_from_env("EBOOK_HERO_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
+    let filter = EnvFilter::try_from_env(LOG_VARIABLE).unwrap_or_else(|error| {
+        // A variable that is not set is the normal case; one that is set and
+        // does not parse is a mistake the person should hear about.
+        if std::env::var_os(LOG_VARIABLE).is_some() {
+            eprintln!("warning: {LOG_VARIABLE} ignored: {error}");
+        }
+        EnvFilter::new(DEFAULT_LOG_FILTER)
+    });
     // A second subscriber cannot be installed; the first one stays.
     let _ = tracing_subscriber::fmt()
         .with_writer(io::stderr)
@@ -583,99 +593,33 @@ fn verify_text(result: &VerifyResult) -> String {
 
 fn cache(action: &CacheCommand) -> Result<String> {
     let root = default_cache_root();
-    ensure_private_dir(&root)?;
     match action {
-        CacheCommand::List => cache_list(&root),
-        CacheCommand::Clear => cache_clear(&root),
+        CacheCommand::List => Ok(indexes_text(&list_indexes(&root)?)),
+        CacheCommand::Clear => Ok(clear_text(&clear(&root)?)),
     }
 }
 
-/// The part of a cache entry's name that tells what it is.
-enum CacheEntry {
-    /// `<sha>`, a directory.
-    Index,
-    /// `<sha>.lock`, or `<sha>.staging-<pid>-<ns>`, a build in progress.
-    Leftover,
-}
-
-/// What the cache root's entry called `name` is, or `None` for a file that
-/// this program did not put there.
-fn classify(name: &str, is_dir: bool) -> Option<CacheEntry> {
-    if is_sha256_hex(name) {
-        return is_dir.then_some(CacheEntry::Index);
-    }
-    let (sha, rest) = name.split_once('.')?;
-    (is_sha256_hex(sha) && (rest == "lock" || rest.starts_with("staging-")))
-        .then_some(CacheEntry::Leftover)
-}
-
-fn cache_list(root: &Path) -> Result<String> {
-    let mut books = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some(sha) = name.to_str() else { continue };
-        if let Some(CacheEntry::Index) = classify(sha, entry.file_type()?.is_dir()) {
-            books.push((sha.to_string(), entry.path()));
-        }
-    }
-    books.sort();
+fn indexes_text(indexes: &[CachedIndex]) -> String {
     let mut out = String::new();
-    for (sha, dir) in books {
-        let megabytes = tree_size(&dir)? as f64 / 1_000_000.0;
-        let _ = writeln!(out, "{sha} {megabytes:.1} MB {}", cached_title(&dir));
+    for index in indexes {
+        // A title is one line, whatever whitespace the book put in it.
+        let title = index
+            .title
+            .as_deref()
+            .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| "(untitled)".to_string());
+        let megabytes = index.size_bytes as f64 / 1_000_000.0;
+        let _ = writeln!(out, "{} {megabytes:.1} MB {title}", index.sha256);
     }
-    Ok(out)
+    out
 }
 
-/// The bytes in all the files under `dir`.
-fn tree_size(dir: &Path) -> Result<u64> {
-    let mut bytes = 0;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let metadata = entry.metadata()?;
-        bytes += if metadata.is_dir() {
-            tree_size(&entry.path())?
-        } else {
-            metadata.len()
-        };
+fn clear_text(report: &ClearReport) -> String {
+    let mut out = format!("removed {} indexes", report.removed);
+    if report.skipped_busy > 0 {
+        let _ = write!(out, " ({} skipped: in use)", report.skipped_busy);
     }
-    Ok(bytes)
-}
-
-/// The title the cached document says, on one line, or `(untitled)`.
-fn cached_title(dir: &Path) -> String {
-    let title = fs::read(dir.join(DOCUMENT_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|document| document["metadata"]["title"].as_str().map(str::to_string))
-        .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|title| !title.is_empty());
-    title.unwrap_or_else(|| "(untitled)".to_string())
-}
-
-fn cache_clear(root: &Path) -> Result<String> {
-    let mut removed = 0;
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let is_dir = entry.file_type()?.is_dir();
-        let Some(kind) = name.to_str().and_then(|name| classify(name, is_dir)) else {
-            continue;
-        };
-        tracing::debug!(path = %entry.path().display(), "removing cache entry");
-        let gone = if is_dir {
-            fs::remove_dir_all(entry.path())
-        } else {
-            fs::remove_file(entry.path())
-        };
-        match gone {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
-            _ => {}
-        }
-        if matches!(kind, CacheEntry::Index) {
-            removed += 1;
-        }
-    }
-    Ok(format!("removed {removed} indexes\n"))
+    out.push('\n');
+    out
 }

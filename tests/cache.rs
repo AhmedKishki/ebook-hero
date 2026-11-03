@@ -10,7 +10,10 @@ use std::time::{Duration, SystemTime};
 use common::{EpubBuilder, EpubVersion, private_tempdir};
 use ebook_hero::Error;
 use ebook_hero::index::book::Book;
-use ebook_hero::index::cache::{Manifest, build_count, expected_stage1, sha256_file, with_lock};
+use ebook_hero::index::cache::{
+    CachedIndex, ClearReport, Manifest, build_count, clear, expected_stage1, list_indexes,
+    sha256_file, with_lock,
+};
 use ebook_hero::session::{Session, resolve_path, resolve_path_in};
 use ebook_hero::settings::OPEN_BOOKS;
 use tempfile::TempDir;
@@ -491,4 +494,234 @@ fn fresh_root_is_created_private() {
     let _session = Session::with_cache_root(orphan.clone());
     assert!(!tmp.path().join("missing").exists());
     assert!(with_lock(&orphan, &"d".repeat(64), Duration::ZERO, || Ok(())).is_err());
+}
+
+/// The bytes in the files under `dir`.
+fn tree_bytes(dir: &Path) -> u64 {
+    fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let metadata = entry.metadata().unwrap();
+            if metadata.is_dir() {
+                tree_bytes(&entry.path())
+            } else {
+                metadata.len()
+            }
+        })
+        .sum()
+}
+
+/// The names in `root`, sorted.
+fn names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+fn shas(indexes: &[CachedIndex]) -> Vec<&str> {
+    indexes.iter().map(|index| index.sha256.as_str()).collect()
+}
+
+impl Setup {
+    /// Writes `<title>.epub` and caches its index; returns its hash.
+    fn cached(&self, title: &str) -> String {
+        let (path, sha) = self.book(title);
+        Book::open(self.root(), &path, &sha).unwrap();
+        sha
+    }
+}
+
+#[test]
+fn list_indexes_reports_each_cached_book_sorted_by_hash() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let mut books = [
+        ("Alpha Book", setup.cached("Alpha Book")),
+        ("Beta Book", setup.cached("Beta Book")),
+    ];
+    books.sort_by(|a, b| a.1.cmp(&b.1));
+    // None of these is an index.
+    fs::write(setup.root().join("notes.txt"), "x").unwrap();
+    fs::create_dir(setup.root().join("not-a-hash")).unwrap();
+    fs::create_dir(setup.root().join("E".repeat(64))).unwrap();
+    fs::write(setup.root().join("f".repeat(64)), "a file").unwrap();
+    fs::create_dir(setup.root().join(format!("{}.staging-1-2", books[0].1))).unwrap();
+
+    let listed = list_indexes(setup.root()).unwrap();
+
+    assert_eq!(shas(&listed), [books[0].1.as_str(), books[1].1.as_str()]);
+    for (index, (title, sha)) in listed.iter().zip(&books) {
+        assert_eq!(index.title.as_deref(), Some(*title));
+        assert_eq!(index.size_bytes, tree_bytes(&setup.root().join(sha)));
+        assert!(index.size_bytes > 0);
+    }
+}
+
+#[test]
+fn an_index_without_a_readable_title_is_listed_untitled() {
+    let root = private_tempdir();
+    let [broken, empty, untitled, missing] = ["1", "2", "3", "4"].map(|n| n.repeat(64));
+    for (sha, document) in [
+        (&broken, Some("{not json")),
+        (&empty, Some("")),
+        (
+            &untitled,
+            Some(r#"{"metadata":{"title":null},"blocks":[1,2,3]}"#),
+        ),
+        (&missing, None),
+    ] {
+        let dir = root.path().join(sha);
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("other.bin"), [0u8; 10]).unwrap();
+        if let Some(document) = document {
+            fs::write(dir.join("document.json"), document).unwrap();
+        }
+    }
+
+    let listed = list_indexes(root.path()).unwrap();
+
+    assert_eq!(listed.len(), 4);
+    assert!(
+        listed.iter().all(|index| index.title.is_none()),
+        "{listed:?}"
+    );
+    assert!(listed.iter().all(|index| index.size_bytes >= 10));
+}
+
+#[test]
+fn a_missing_root_holds_nothing_and_is_not_created() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("cache");
+
+    assert!(list_indexes(&root).unwrap().is_empty());
+    assert_eq!(clear(&root).unwrap(), ClearReport::default());
+    assert!(!root.exists());
+}
+
+#[test]
+fn clear_removes_indexes_locks_and_staging_and_keeps_other_files() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (a, b) = (setup.cached("Clear A"), setup.cached("Clear B"));
+    let orphan = "9".repeat(64);
+    // Leftovers of a dead build, and a lock file with no index.
+    for dir in [format!("{a}.staging-1-2"), format!("{orphan}.staging-3-4")] {
+        fs::create_dir(setup.root().join(&dir)).unwrap();
+        fs::write(setup.root().join(&dir).join("half.json"), "{").unwrap();
+    }
+    fs::write(setup.root().join(format!("{orphan}.lock")), "").unwrap();
+    // Not ours: names that only look like cache entries.
+    let foreign = [
+        "notes.txt".to_string(),
+        "keep-me".to_string(),
+        "E".repeat(64),
+        format!("{a}.other"),
+        format!("{a}.locked"),
+    ];
+    fs::write(setup.root().join(&foreign[0]), "x").unwrap();
+    for name in &foreign[1..] {
+        fs::create_dir(setup.root().join(name)).unwrap();
+    }
+    assert!(names(setup.root()).contains(&format!("{b}.lock")));
+
+    let report = clear(setup.root()).unwrap();
+
+    assert_eq!(
+        report,
+        ClearReport {
+            removed: 2,
+            skipped_busy: 0
+        }
+    );
+    let mut expected = foreign.to_vec();
+    expected.sort();
+    assert_eq!(names(setup.root()), expected);
+    assert!(list_indexes(setup.root()).unwrap().is_empty());
+    assert_eq!(clear(setup.root()).unwrap(), ClearReport::default());
+}
+
+#[test]
+fn clear_skips_a_book_whose_lock_is_held() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (busy, idle) = (setup.cached("Busy Book"), setup.cached("Idle Book"));
+    let building = setup.root().join(format!("{busy}.staging-1-2"));
+    fs::create_dir(&building).unwrap();
+    fs::write(building.join("half.json"), "{").unwrap();
+
+    let report = with_lock(setup.root(), &busy, Duration::from_secs(5), || {
+        Ok(clear(setup.root()))
+    })
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(
+        report,
+        ClearReport {
+            removed: 1,
+            skipped_busy: 1
+        }
+    );
+    // The busy book is whole, with the build that is under way.
+    assert_eq!(shas(&list_indexes(setup.root()).unwrap()), [busy.as_str()]);
+    assert!(setup.root().join(&busy).join("manifest.json").is_file());
+    assert!(building.join("half.json").is_file());
+    assert!(!setup.root().join(&idle).exists());
+    assert!(!setup.root().join(format!("{idle}.lock")).exists());
+
+    // Once the lock is let go, the book is cleared with everything of it.
+    let report = clear(setup.root()).unwrap();
+    assert_eq!(
+        report,
+        ClearReport {
+            removed: 1,
+            skipped_busy: 0
+        }
+    );
+    assert!(names(setup.root()).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn clear_does_not_follow_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let root = private_tempdir();
+    let outside = TempDir::new().unwrap();
+    let [linked_index, linked_staging, linked_lock] = ["a", "b", "c"].map(|n| n.repeat(64));
+    let precious = |name: &str| {
+        let dir = outside.path().join(name);
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("keep.txt"), b"keep").unwrap();
+        dir
+    };
+    let index_target = precious("index");
+    let staging_target = precious("staging");
+    let lock_target = outside.path().join("lock.txt");
+    fs::write(&lock_target, b"keep").unwrap();
+    symlink(&index_target, root.path().join(&linked_index)).unwrap();
+    symlink(
+        &staging_target,
+        root.path().join(format!("{linked_staging}.staging-1-2")),
+    )
+    .unwrap();
+    symlink(
+        &lock_target,
+        root.path().join(format!("{linked_lock}.lock")),
+    )
+    .unwrap();
+
+    // A link is not an index.
+    assert!(list_indexes(root.path()).unwrap().is_empty());
+    let report = clear(root.path()).unwrap();
+
+    assert_eq!(report, ClearReport::default());
+    assert!(names(root.path()).is_empty(), "{:?}", names(root.path()));
+    assert_eq!(fs::read(index_target.join("keep.txt")).unwrap(), b"keep");
+    assert_eq!(fs::read(staging_target.join("keep.txt")).unwrap(), b"keep");
+    assert_eq!(fs::read(&lock_target).unwrap(), b"keep");
 }

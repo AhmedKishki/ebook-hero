@@ -8,13 +8,16 @@
 //! <root>/<sha>.staging-<pid>-<ns>/ a build in progress, renamed to <sha>/ when done
 //! ```
 //!
+//! [`list_indexes`] and [`clear`] are what `cache list` and `cache clear` do.
+//!
 //! The root is trusted: its indexes are loaded without checking them. On Unix
 //! [`ensure_private_dir`] therefore insists it is a real directory that only
 //! this user can write, and every `sha` that names a path inside it must be a
 //! SHA-256 hex digest, so nothing outside the root is ever created or deleted.
 
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -273,8 +276,12 @@ pub(crate) fn stage_dir(root: &Path, sha: &str) -> PathBuf {
     root.join(sha)
 }
 
+fn lock_name(sha: &str) -> String {
+    format!("{sha}.lock")
+}
+
 fn lock_path(root: &Path, sha: &str) -> PathBuf {
-    root.join(format!("{sha}.lock"))
+    root.join(lock_name(sha))
 }
 
 fn staging_prefix(sha: &str) -> String {
@@ -307,11 +314,163 @@ pub(crate) fn remove_stale(root: &Path, sha: &str) -> Result<()> {
     remove_all(&stage_dir(root, sha))
 }
 
+/// Deletes `path`, whatever it is. A symbolic link is unlinked and never
+/// followed, so nothing outside the cache root is touched. A missing path is
+/// not an error.
 fn remove_all(path: &Path) -> Result<()> {
-    match fs::remove_dir_all(path) {
+    let removed = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(e) => Err(e),
+    };
+    match removed {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         other => other.map_err(Error::from),
     }
+}
+
+/// A book whose index is cached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedIndex {
+    pub sha256: String,
+    /// The bytes in all the files of the index.
+    pub size_bytes: u64,
+    /// The title in the cached document, if it has one.
+    pub title: Option<String>,
+}
+
+/// What [`clear`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClearReport {
+    /// The cached index directories that were deleted.
+    pub removed: usize,
+    /// The books left alone because another process holds their build lock.
+    pub skipped_busy: usize,
+}
+
+/// The cached indexes under `root`, sorted by hash. A root that does not exist
+/// holds none, and is not created.
+pub fn list_indexes(root: &Path) -> Result<Vec<CachedIndex>> {
+    if !root_exists(root)? {
+        return Ok(Vec::new());
+    }
+    ensure_private_dir(root)?;
+    let mut indexes = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let Some(sha256) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        // `file_type` does not follow a symbolic link, so a link is not an index.
+        if !is_sha256_hex(&sha256) || !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let dir = stage_dir(root, &sha256);
+        indexes.push(CachedIndex {
+            size_bytes: tree_size(&dir)?,
+            title: cached_title(&dir),
+            sha256,
+        });
+    }
+    indexes.sort_by(|a, b| a.sha256.cmp(&b.sha256));
+    Ok(indexes)
+}
+
+/// Deletes every cached index under `root`, with its lock file and any staging
+/// directories a dead build left. Other files in the root stay.
+///
+/// A book is cleared under its build lock, taken without waiting. If another
+/// process holds the lock, that book is skipped, because deleting the staging
+/// directory of a build in progress would break it. Symbolic links are
+/// unlinked, never followed. A root that does not exist holds nothing.
+pub fn clear(root: &Path) -> Result<ClearReport> {
+    let mut report = ClearReport::default();
+    if !root_exists(root)? {
+        return Ok(report);
+    }
+    ensure_private_dir(root)?;
+    let mut books = BTreeSet::new();
+    for entry in fs::read_dir(root)? {
+        if let Some(sha) = entry?.file_name().to_str().and_then(book_of) {
+            books.insert(sha.to_owned());
+        }
+    }
+    for sha in books {
+        let lock = lock_path(root, &sha);
+        // `with_lock` refuses a lock file that is a symbolic link.
+        if fs::symlink_metadata(&lock).is_ok_and(|m| m.file_type().is_symlink()) {
+            remove_all(&lock)?;
+        }
+        let cleared = with_lock(root, &sha, Duration::ZERO, || {
+            let had_index = fs::symlink_metadata(stage_dir(root, &sha)).is_ok_and(|m| m.is_dir());
+            tracing::debug!(sha256 = %sha, "clearing cached index");
+            remove_stale(root, &sha)?;
+            Ok(had_index)
+        });
+        match cleared {
+            Ok(had_index) => {
+                report.removed += usize::from(had_index);
+                // After the lock is released: a held lock file must not vanish.
+                remove_all(&lock)?;
+            }
+            Err(Error::LockTimeout { .. }) => report.skipped_busy += 1,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(report)
+}
+
+fn root_exists(root: &Path) -> Result<bool> {
+    match fs::symlink_metadata(root) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// The book a name in the cache root belongs to: its stage directory (named
+/// for the hash alone, see [`stage_dir`]), its lock file, or one of its staging
+/// directories. Any other name is not ours.
+fn book_of(name: &str) -> Option<&str> {
+    let sha = name
+        .get(..SHA256_HEX_LEN)
+        .filter(|sha| is_sha256_hex(sha))?;
+    let ours = name == sha || name == lock_name(sha) || name.starts_with(&staging_prefix(sha));
+    ours.then_some(sha)
+}
+
+/// The bytes in the files under `dir`; a symbolic link counts as itself.
+fn tree_size(dir: &Path) -> Result<u64> {
+    let mut bytes = 0;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        bytes += if metadata.is_dir() {
+            tree_size(&entry.path())?
+        } else {
+            metadata.len()
+        };
+    }
+    Ok(bytes)
+}
+
+/// Just the title of a cached document; the rest of the file is skipped.
+#[derive(Deserialize)]
+struct TitledDocument {
+    metadata: TitledMetadata,
+}
+
+#[derive(Deserialize)]
+struct TitledMetadata {
+    title: Option<String>,
+}
+
+/// The title of the cached document in `dir`, or `None` when it has none or
+/// the file cannot be read.
+fn cached_title(dir: &Path) -> Option<String> {
+    let file = File::open(dir.join(DOCUMENT_FILE)).ok()?;
+    let document: TitledDocument = serde_json::from_reader(BufReader::new(file)).ok()?;
+    document.metadata.title
 }
 
 /// Writes `value` as JSON through a temporary file and a rename, so a reader
@@ -385,6 +544,32 @@ mod tests {
         assert!(bad.iter().all(|s| !is_sha256_hex(s)));
         let known = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert!(is_sha256_hex(known));
+    }
+
+    #[test]
+    fn book_of_names_the_book_an_entry_belongs_to() {
+        let sha = "0123456789abcdef".repeat(4);
+        for ours in [
+            sha.clone(),
+            format!("{sha}.lock"),
+            format!("{sha}.staging-1-2"),
+            format!("{sha}.staging-"),
+        ] {
+            assert_eq!(book_of(&ours), Some(sha.as_str()), "{ours}");
+        }
+        for foreign in [
+            String::new(),
+            "notes.txt".to_string(),
+            sha[..63].to_string(),
+            sha.to_uppercase(),
+            format!("{sha}.locked"),
+            format!("{sha}.lock.bak"),
+            format!("{sha}.staging"),
+            format!("{sha}x"),
+            format!("{}é", &sha[..62]),
+        ] {
+            assert_eq!(book_of(&foreign), None, "{foreign}");
+        }
     }
 
     #[test]

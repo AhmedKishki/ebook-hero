@@ -2,11 +2,13 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use assert_cmd::Command;
 use assert_cmd::assert::Assert;
 use common::{EpubBuilder, EpubVersion, private_tempdir};
 use ebook_hero::document::Document;
+use ebook_hero::index::cache::{list_indexes, with_lock};
 use ebook_hero::search::{Mode, SearchParams};
 use ebook_hero::session::Session;
 use ebook_hero::settings::TOP_K_DEFAULT;
@@ -415,43 +417,138 @@ fn extract_markdown_and_json() {
     assert_eq!(text, env.stdout(&["--json", "extract", &book]));
 }
 
+/// The hashes of the indexes in the CLI's cache, sorted.
+fn cached_shas(env: &Env) -> Vec<String> {
+    list_indexes(&env.cache_root())
+        .unwrap()
+        .into_iter()
+        .map(|index| index.sha256)
+        .collect()
+}
+
 #[test]
-fn cache_list_and_clear() {
+fn cache_list_prints_a_line_per_index() {
     let env = Env::new();
     assert_eq!(env.stdout(&["cache", "list"]), "");
-    assert_eq!(env.stdout(&["cache", "clear"]), "removed 0 indexes\n");
+    assert!(
+        !env.cache_root().exists(),
+        "listing must not create the cache"
+    );
 
     env.stdout(&["info", SAMPLE_PDF]);
-    let sha = {
-        let mut names: Vec<String> = fs::read_dir(env.cache_root())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .filter(|name| name.len() == 64)
-            .collect();
-        assert_eq!(names.len(), 1, "{names:?}");
-        names.remove(0)
-    };
+    let real = cached_shas(&env).remove(0);
+    // Indexes whose titles are missing, or span lines.
+    let (untitled, spread) = ("1".repeat(64), "2".repeat(64));
+    for (sha, document) in [
+        (&untitled, r#"{"metadata":{"title":null}}"#),
+        (&spread, r#"{"metadata":{"title":"Two\nLines   Here"}}"#),
+    ] {
+        let dir = env.cache_root().join(sha);
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("document.json"), document).unwrap();
+    }
 
     let listing = env.stdout(&["cache", "list"]);
-    let line = listing.trim_end();
-    assert_eq!(listing.lines().count(), 1, "{listing}");
-    let rest = line.strip_prefix(&format!("{sha} ")).unwrap();
-    let (size, title) = rest.split_once(" MB ").unwrap();
+
+    let lines: Vec<&str> = listing.lines().collect();
+    assert_eq!(lines.len(), 3, "{listing}");
+    let mut sorted = lines.clone();
+    sorted.sort();
+    assert_eq!(lines, sorted, "sorted by hash");
+    assert!(lines.contains(&format!("{untitled} 0.0 MB (untitled)").as_str()));
+    assert!(lines.contains(&format!("{spread} 0.0 MB Two Lines Here").as_str()));
+    let line = lines.iter().find(|l| l.starts_with(&real)).unwrap();
+    let (size, title) = line[real.len() + 1..].split_once(" MB ").unwrap();
     assert!(size.parse::<f64>().is_ok(), "{line}");
     assert_eq!(title, "Sample Book");
+}
 
-    // Leftovers of a build are removed with the index; foreign files are not.
-    fs::write(env.cache_root().join(format!("{sha}.lock")), "123").unwrap();
-    fs::create_dir(env.cache_root().join(format!("{sha}.staging-1-2"))).unwrap();
-    fs::write(env.cache_root().join("notes.txt"), "keep").unwrap();
+#[test]
+fn cache_clear_prints_how_many_indexes_it_removed() {
+    let env = Env::new();
+    assert_eq!(env.stdout(&["cache", "clear"]), "removed 0 indexes\n");
+    assert!(
+        !env.cache_root().exists(),
+        "clearing must not create the cache"
+    );
+
+    env.stdout(&["info", SAMPLE_PDF]);
+    assert_eq!(cached_shas(&env).len(), 1);
 
     assert_eq!(env.stdout(&["cache", "clear"]), "removed 1 indexes\n");
-    let left: Vec<String> = fs::read_dir(env.cache_root())
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
-        .collect();
-    assert_eq!(left, ["notes.txt"]);
     assert_eq!(env.stdout(&["cache", "list"]), "");
+}
+
+#[test]
+fn cache_clear_reports_a_book_that_is_in_use() {
+    let env = Env::new();
+    env.stdout(&["info", SAMPLE_PDF]);
+    let sha = cached_shas(&env).remove(0);
+
+    // This process holds the build lock while the CLI, another process, clears.
+    let output = with_lock(&env.cache_root(), &sha, Duration::ZERO, || {
+        Ok(env.stdout(&["cache", "clear"]))
+    })
+    .unwrap();
+
+    assert_eq!(output, "removed 0 indexes (1 skipped: in use)\n");
+    assert_eq!(cached_shas(&env), [sha]);
+    assert_eq!(env.stdout(&["cache", "clear"]), "removed 1 indexes\n");
+}
+
+#[test]
+fn dependency_warnings_are_not_shown_by_default() {
+    let env = Env::new();
+
+    // Building the index of this PDF makes pdf_oxide log two warnings.
+    let output = env
+        .run(&["info", SAMPLE_PDF])
+        .success()
+        .get_output()
+        .clone();
+
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn ebook_hero_log_selects_the_log_lines() {
+    let env = Env::new();
+    env.stdout(&["info", SAMPLE_PDF]);
+
+    let assert = env
+        .command()
+        .env("EBOOK_HERO_LOG", "ebook_hero=debug")
+        .args(["cache", "clear"])
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(stderr.contains("clearing cached index"), "{stderr}");
+}
+
+#[test]
+fn a_log_filter_that_does_not_parse_is_reported_and_ignored() {
+    let env = Env::new();
+
+    let assert = env
+        .command()
+        .env("EBOOK_HERO_LOG", "ebook_hero=loud")
+        .args(["info", SAMPLE_PDF])
+        .assert()
+        .success();
+
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(
+        stderr.starts_with("warning: EBOOK_HERO_LOG ignored: "),
+        "{stderr}"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("Title: Sample Book"));
 }
 
 #[test]

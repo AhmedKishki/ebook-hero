@@ -138,6 +138,8 @@ enum Command {
         #[command(subcommand)]
         action: CacheCommand,
     },
+    /// Serve the tools to an MCP client over standard input and output
+    Mcp,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -227,6 +229,7 @@ fn run(cli: Cli, progress: &Progress) -> Result<Output> {
     let json = cli.json;
     let session = match cli.command {
         Command::Cache { action } => return cache(&action).map(Output::from),
+        Command::Mcp => return serve_mcp().map(Output::from),
         Command::Extract { path, format } => {
             let json = json || format == ExtractFormat::Json;
             return extract_book(&path, json).map(Output::from);
@@ -310,8 +313,21 @@ fn run(cli: Cli, progress: &Progress) -> Result<Output> {
             let info = session.index(&path, &report)?;
             printed(json, &info, info_text)
         }
-        Command::Cache { .. } | Command::Extract { .. } => unreachable!("handled above"),
+        Command::Cache { .. } | Command::Extract { .. } | Command::Mcp => {
+            unreachable!("handled above")
+        }
     }
+}
+
+/// Runs the MCP server until the client disconnects. It prints nothing: its
+/// standard output belongs to the protocol.
+fn serve_mcp() -> Result<String> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(crate::mcp::serve())
+        .map_err(io::Error::other)?;
+    Ok(String::new())
 }
 
 /// `value` as JSON, or as the text `human` makes of it.

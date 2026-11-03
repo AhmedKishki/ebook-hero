@@ -5,6 +5,7 @@ pub mod embed;
 pub mod error;
 pub mod extract;
 pub mod index;
+pub mod mcp;
 pub mod normalize;
 pub mod passages;
 pub mod read;

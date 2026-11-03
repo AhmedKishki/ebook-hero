@@ -24,16 +24,21 @@ use crate::settings::{
 };
 use crate::{Error, Result};
 
-/// How `search` finds passages.
+/// How `search` finds passages: `hybrid` fuses the lexical and semantic
+/// results, `lexical` matches stemmed words and exact phrases only, and
+/// `semantic` ranks by embedding similarity only.
+//
+// The variants carry no doc comments: schemars would turn them into a `oneOf`
+// of constants, and an MCP client expects a plain string enum. The schema is
+// inlined so that an optional `mode` argument is that enum and not a
+// reference to a definition.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[schemars(inline)]
 pub enum Mode {
-    /// Lexical and semantic results fused.
     #[default]
     Hybrid,
-    /// Stemmed word and exact phrase matching only.
     Lexical,
-    /// Embedding similarity only.
     Semantic,
 }
 

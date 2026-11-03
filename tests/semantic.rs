@@ -358,3 +358,19 @@ fn nothing_below_the_floor_is_returned() {
     .unwrap();
     assert!(hits.is_empty(), "{hits:?}");
 }
+
+#[test]
+fn a_limit_of_zero_embeds_nothing_and_needs_no_model() {
+    let (_file, unusable) = unusable_models();
+    let fixture = Fixture::new(&THREE, unusable);
+    let book = fixture.book();
+    let embedded = RefCell::new(0);
+    let progress = |_: usize, _: usize| *embedded.borrow_mut() += 1;
+    let hits = semantic_hits(&book, fixture.session.models(), "harbour", 0, &progress).unwrap();
+    assert!(hits.is_empty());
+    assert_eq!(*embedded.borrow(), 0);
+    assert!(
+        !book.dir.join("vectors.f32").exists(),
+        "the book was not embedded"
+    );
+}

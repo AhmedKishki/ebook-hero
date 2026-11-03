@@ -12,6 +12,7 @@ use crate::embed::Models;
 use crate::index::book::Book;
 use crate::index::cache::{default_cache_root, ensure_private_dir, file_error, sha256_file};
 use crate::search::find::{self, FindResult};
+use crate::search::{self, SearchParams, SearchResult};
 use crate::settings::OPEN_BOOKS;
 use crate::{Error, Result};
 
@@ -85,6 +86,19 @@ impl Session {
     pub fn find(&self, path: &str, phrase: &str, cursor: Option<usize>) -> Result<FindResult> {
         let book = self.book(path)?;
         find::find(&book, phrase, cursor)
+    }
+
+    /// Searches the book at `path`; see [`search::search`]. The arguments are
+    /// checked before the book is opened.
+    pub fn search(
+        &self,
+        path: &str,
+        params: SearchParams,
+        progress: &dyn Fn(usize, usize),
+    ) -> Result<SearchResult> {
+        search::validate(&params)?;
+        let book = self.book(path)?;
+        search::search(&book, &self.models, &params, progress)
     }
 
     fn hash(&self, path: &Path) -> Result<String> {

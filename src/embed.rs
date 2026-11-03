@@ -57,11 +57,13 @@ impl Models {
     }
 
     /// Embeds a search query, behind the prefix the model was trained to
-    /// expect on queries.
+    /// expect on queries. The row is unit length, like the passage rows it is
+    /// compared with.
     pub fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
         let prefixed = format!("{QUERY_PREFIX}{query}");
         let mut rows = self.embed(&[prefixed.as_str()])?;
         rows.pop()
+            .map(unit_length)
             .ok_or_else(|| self.failed(EMBEDDING_MODEL, "it returned no embedding"))
     }
 
@@ -159,6 +161,17 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// `row` scaled to unit length; a row of zeros stays zeros.
+fn unit_length(mut row: Vec<f32>) -> Vec<f32> {
+    let norm = row.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in &mut row {
+            *x /= norm;
+        }
+    }
+    row
+}
+
 fn models_dir(from_env: Option<OsString>, user_cache: Option<PathBuf>) -> PathBuf {
     match from_env.filter(|dir| !dir.is_empty()) {
         Some(dir) => PathBuf::from(dir),
@@ -214,6 +227,23 @@ mod tests {
         let models = Models::new(file.path().to_path_buf());
         assert!(models.embed_passages(&[], &|_, _| {}).unwrap().is_empty());
         assert!(models.rerank("q", &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unit_length_scales_to_norm_one_and_keeps_zeros() {
+        let row = unit_length(vec![3.0, 4.0]);
+        assert!(
+            (row[0] - 0.6).abs() < 1e-6 && (row[1] - 0.8).abs() < 1e-6,
+            "{row:?}"
+        );
+        let norm = unit_length(vec![1.0, 2.0, 2.0, 4.0, 0.5])
+            .iter()
+            .map(|x| x * x)
+            .sum::<f32>()
+            .sqrt();
+        assert!((norm - 1.0).abs() < 1e-6, "{norm}");
+        assert_eq!(unit_length(vec![0.0, 0.0]), [0.0, 0.0]);
+        assert!(unit_length(Vec::new()).is_empty());
     }
 
     #[test]

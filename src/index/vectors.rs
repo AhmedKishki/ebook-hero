@@ -7,6 +7,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::index::cache::io_error;
 use crate::{Error, Result};
 
 pub struct Vectors {
@@ -51,13 +52,12 @@ impl Vectors {
 
     pub fn write(&self, path: &Path) -> Result<()> {
         let bytes: Vec<u8> = self.data.iter().flat_map(|x| x.to_le_bytes()).collect();
-        fs::write(path, bytes)?;
-        Ok(())
+        fs::write(path, bytes).map_err(|e| io_error(path, e))
     }
 
     /// Reads `rows` rows of `dim` values. A file of any other size is an error.
     pub fn read(path: &Path, dim: usize, rows: usize) -> Result<Vectors> {
-        let bytes = fs::read(path)?;
+        let bytes = fs::read(path).map_err(|e| io_error(path, e))?;
         let expected = rows
             .checked_mul(dim)
             .and_then(|n| n.checked_mul(size_of::<f32>()));
@@ -235,8 +235,29 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_vector_file_is_an_error() {
+    fn a_missing_vector_file_is_an_error_that_names_it() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(Vectors::read(&dir.path().join("none.f32"), 2, 1).is_err());
+        let missing = dir.path().join("none.f32");
+
+        let error = Vectors::read(&missing, 2, 1).err().unwrap();
+
+        assert!(
+            matches!(&error, Error::Index(message) if message.contains(&*missing.to_string_lossy())),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_vector_file_that_cannot_be_written_is_an_error_that_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let unwritable = dir.path().join("gone").join("vectors.f32");
+        let vectors = Vectors::from_rows(vec![vec![1.0, 0.0]]).unwrap();
+
+        let error = vectors.write(&unwritable).unwrap_err();
+
+        assert!(
+            matches!(&error, Error::Index(message) if message.contains(&*unwritable.to_string_lossy())),
+            "{error}"
+        );
     }
 }

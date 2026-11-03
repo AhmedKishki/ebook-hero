@@ -84,8 +84,7 @@ pub fn ensure_private_dir(root: &Path) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        fs::create_dir_all(root)?;
-        Ok(())
+        fs::create_dir_all(root).map_err(|e| io_error(root, e))
     }
 }
 
@@ -94,7 +93,7 @@ fn create_private(root: &Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt;
 
     match fs::DirBuilder::new().mode(0o700).create(root) {
-        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => Err(e.into()),
+        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => Err(io_error(root, e)),
         _ => Ok(()),
     }
 }
@@ -103,7 +102,7 @@ fn create_private(root: &Path) -> Result<()> {
 fn check_private(root: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
-    let metadata = fs::symlink_metadata(root)?;
+    let metadata = fs::symlink_metadata(root).map_err(|e| io_error(root, e))?;
     // SAFETY: `geteuid` takes no arguments, cannot fail, and touches no memory.
     let user = unsafe { libc::geteuid() };
     let reason = if !metadata.file_type().is_dir() {
@@ -228,11 +227,12 @@ pub fn with_lock<T>(
                 }
                 thread::sleep(LOCK_POLL.min(wait - waited));
             }
-            Err(TryLockError::Error(e)) => return Err(e.into()),
+            Err(TryLockError::Error(e)) => return Err(io_error(&path, e)),
         }
     }
-    lock.set_len(0)?;
-    lock.write_all(std::process::id().to_string().as_bytes())?;
+    lock.set_len(0)
+        .and_then(|()| lock.write_all(std::process::id().to_string().as_bytes()))
+        .map_err(|e| io_error(&path, e))?;
     let result = f();
     // Clear the pid while the lock is still held, so a waiter never names a
     // process that has already let go.
@@ -257,7 +257,7 @@ fn open_lock(path: &Path) -> Result<File> {
                 path.display()
             ))
         } else {
-            e.into()
+            io_error(path, e)
         }
     })
 }
@@ -305,8 +305,8 @@ pub(crate) fn staging_dir(root: &Path, sha: &str) -> PathBuf {
 pub(crate) fn remove_stale(root: &Path, sha: &str) -> Result<()> {
     debug_assert!(is_sha256_hex(sha), "{sha:?} is not a SHA-256 hex digest");
     let prefix = staging_prefix(sha);
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
+    for entry in fs::read_dir(root).map_err(|e| io_error(root, e))? {
+        let entry = entry.map_err(|e| io_error(root, e))?;
         if entry.file_name().to_string_lossy().starts_with(&prefix) {
             remove_all(&entry.path())?;
         }
@@ -325,7 +325,7 @@ fn remove_all(path: &Path) -> Result<()> {
     };
     match removed {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        other => other.map_err(Error::from),
+        other => other.map_err(|e| io_error(path, e)),
     }
 }
 
@@ -356,13 +356,14 @@ pub fn list_indexes(root: &Path) -> Result<Vec<CachedIndex>> {
     }
     ensure_private_dir(root)?;
     let mut indexes = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
+    for entry in fs::read_dir(root).map_err(|e| io_error(root, e))? {
+        let entry = entry.map_err(|e| io_error(root, e))?;
         let Some(sha256) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
         // `file_type` does not follow a symbolic link, so a link is not an index.
-        if !is_sha256_hex(&sha256) || !entry.file_type()?.is_dir() {
+        let file_type = entry.file_type().map_err(|e| io_error(&entry.path(), e))?;
+        if !is_sha256_hex(&sha256) || !file_type.is_dir() {
             continue;
         }
         let dir = stage_dir(root, &sha256);
@@ -398,8 +399,9 @@ pub fn clear(root: &Path) -> Result<ClearReport> {
     }
     ensure_private_dir(root)?;
     let mut books = BTreeSet::new();
-    for entry in fs::read_dir(root)? {
-        if let Some(sha) = entry?.file_name().to_str().and_then(book_of) {
+    for entry in fs::read_dir(root).map_err(|e| io_error(root, e))? {
+        let entry = entry.map_err(|e| io_error(root, e))?;
+        if let Some(sha) = entry.file_name().to_str().and_then(book_of) {
             books.insert(sha.to_owned());
         }
     }
@@ -428,7 +430,7 @@ fn root_exists(root: &Path) -> Result<bool> {
     match fs::symlink_metadata(root) {
         Ok(_) => Ok(true),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(io_error(root, e)),
     }
 }
 
@@ -447,9 +449,9 @@ fn book_of(name: &str) -> Option<&str> {
 /// The bytes in the files under `dir`; a symbolic link counts as itself.
 fn tree_size(dir: &Path) -> Result<u64> {
     let mut bytes = 0;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let metadata = entry.metadata()?;
+    for entry in fs::read_dir(dir).map_err(|e| io_error(dir, e))? {
+        let entry = entry.map_err(|e| io_error(dir, e))?;
+        let metadata = entry.metadata().map_err(|e| io_error(&entry.path(), e))?;
         bytes += if metadata.is_dir() {
             tree_size(&entry.path())?
         } else {
@@ -484,15 +486,20 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
     let bytes = serde_json::to_vec(value)
         .map_err(|e| Error::Index(format!("write {}: {e}", path.display())))?;
     let temp = path.with_extension("json.tmp");
-    fs::write(&temp, bytes)?;
-    fs::rename(&temp, path)?;
-    Ok(())
+    fs::write(&temp, bytes).map_err(|e| io_error(&temp, e))?;
+    fs::rename(&temp, path).map_err(|e| io_error(path, e))
 }
 
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
-    let bytes = fs::read(path)?;
+    let bytes = fs::read(path).map_err(|e| io_error(path, e))?;
     serde_json::from_slice(&bytes)
         .map_err(|e| Error::Index(format!("read {}: {e}", path.display())))
+}
+
+/// An I/O error in the cache, as an index error that names the file or
+/// directory it happened to.
+pub(crate) fn io_error(path: &Path, error: io::Error) -> Error {
+    Error::Index(format!("{}: {error}", path.display()))
 }
 
 /// Names the file in the error: a missing path is `NotFound`, anything else
@@ -617,6 +624,50 @@ mod tests {
             },
         ];
         assert!(stale.iter().all(|m| !m.is_current_stage1()));
+    }
+
+    /// Whether `error` is an index error whose message names `path`.
+    fn names(error: &Error, path: &Path) -> bool {
+        matches!(error, Error::Index(message) if message.contains(&*path.to_string_lossy()))
+    }
+
+    #[test]
+    fn json_files_that_cannot_be_read_or_written_are_named_in_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let manifest = gone.join(MANIFEST_FILE);
+
+        let read = read_json::<Manifest>(&manifest).unwrap_err();
+        let written = write_json_atomic(&manifest, &expected_stage1()).unwrap_err();
+
+        assert!(names(&read, &manifest), "{read}");
+        assert!(names(&written, &gone), "{written}");
+    }
+
+    #[test]
+    fn a_listing_of_a_cache_that_cannot_be_read_names_the_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let sha = "0123456789abcdef".repeat(4);
+        let index = root.path().join(&sha);
+        fs::create_dir(&index).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            fs::set_permissions(&index, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+
+        let listed = list_indexes(root.path());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&index, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        // Root may read any directory; the check only means something otherwise.
+        if let Err(error) = listed {
+            assert!(names(&error, &index), "{error}");
+        }
     }
 
     #[test]

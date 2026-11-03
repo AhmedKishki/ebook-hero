@@ -147,7 +147,7 @@ impl Session {
             });
         }
         let size = metadata.len();
-        let modified = metadata.modified()?;
+        let modified = metadata.modified().map_err(|e| file_error(path, e))?;
         if let Some((s, m, sha256)) = locked(&self.hashes).get(path)
             && (*s, *m) == (size, modified)
         {

@@ -10,7 +10,7 @@ use crate::embed::Models;
 use crate::extract::extract;
 use crate::index::cache::{
     self, DOCUMENT_FILE, EmbeddingStamp, MANIFEST_FILE, Manifest, PASSAGES_FILE, TANTIVY_DIR,
-    VECTORS_FILE, expected_stage1,
+    VECTORS_FILE, expected_stage1, io_error,
 };
 use crate::index::lexical::LexicalIndex;
 use crate::index::vectors::Vectors;
@@ -163,7 +163,7 @@ fn store_vectors(dir: &Path, vectors: &Vectors) -> Result<()> {
     let temp = dir.join(format!("{VECTORS_FILE}.tmp"));
     let written = vectors
         .write(&temp)
-        .and_then(|()| fs::rename(&temp, &file).map_err(Into::into));
+        .and_then(|()| fs::rename(&temp, &file).map_err(|e| io_error(&file, e)));
     if written.is_err() {
         let _ = fs::remove_file(&temp);
     }
@@ -207,9 +207,9 @@ fn build(cache_root: &Path, dir: &Path, path: &Path, sha256: &str) -> Result<()>
     let document = extract(path, sha256)?;
     let passages = build_passages(&document.blocks);
     let staging = cache::staging_dir(cache_root, sha256);
-    fs::create_dir(&staging)?;
+    fs::create_dir(&staging).map_err(|e| io_error(&staging, e))?;
     let built = write_stage(&staging, &document, &passages)
-        .and_then(|()| fs::rename(&staging, dir).map_err(Into::into));
+        .and_then(|()| fs::rename(&staging, dir).map_err(|e| io_error(dir, e)));
     if built.is_err() {
         let _ = fs::remove_dir_all(&staging);
     }
@@ -222,7 +222,7 @@ fn write_stage(staging: &Path, document: &Document, passages: &[Passage]) -> Res
     cache::write_json_atomic(&staging.join(DOCUMENT_FILE), document)?;
     cache::write_json_atomic(&staging.join(PASSAGES_FILE), &passages)?;
     let tantivy = staging.join(TANTIVY_DIR);
-    fs::create_dir(&tantivy)?;
+    fs::create_dir(&tantivy).map_err(|e| io_error(&tantivy, e))?;
     LexicalIndex::build(&tantivy, passages)?;
     cache::write_json_atomic(&staging.join(MANIFEST_FILE), &expected_stage1())
 }

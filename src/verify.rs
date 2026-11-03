@@ -1,8 +1,9 @@
 //! Quote verification: does a quote occur in the book, and where.
 //!
-//! A quote is `exact` when it is a case-sensitive substring of the text, and
-//! `equivalent` when only case, punctuation or spacing differ. Words are never
-//! stemmed, so `entropies` does not match `entropy`.
+//! A quote is `exact` when it is a case-sensitive substring of the text that
+//! starts and ends at a word boundary, and `equivalent` when only case,
+//! punctuation or spacing differ. Words are never stemmed, so `entropies` does
+//! not match `entropy`.
 
 use std::ops::Range;
 
@@ -20,7 +21,8 @@ use crate::{Error, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Verdict {
-    /// The quote is a case-sensitive substring of the text.
+    /// The quote is a case-sensitive substring of the text, from a word start
+    /// to a word end.
     Exact,
     /// Only case, punctuation or spacing differ.
     Equivalent,
@@ -227,14 +229,36 @@ fn matched_in(
 }
 
 /// Finds `quote.normalized` as a case-sensitive substring of `window` with
-/// every whitespace run read as one space. A match counts only if it starts
-/// before `own_len`, the length of the passage the window belongs to.
+/// every whitespace run read as one space, starting and ending at a word
+/// boundary: the characters next to the match, if any, are not alphanumeric.
+/// The first such occurrence is taken, overlapping ones included. A match
+/// counts only if it starts before `own_len`, the length of the passage the
+/// window belongs to.
 fn find_exact(window: &str, own_len: usize, quote: &Quote) -> Option<Range<usize>> {
     let (collapsed, origin) = collapse_whitespace(window);
-    let start = collapsed.find(&quote.normalized)?;
-    let end = start + quote.normalized.len();
-    let (start, end) = (origin[start], origin[end]);
-    (start < own_len).then_some(start..end)
+    let wanted = quote.normalized.as_str();
+    let mut from = 0;
+    while let Some(offset) = collapsed[from..].find(wanted) {
+        let start = from + offset;
+        let end = start + wanted.len();
+        if origin[start] >= own_len {
+            // Every later occurrence starts later still.
+            return None;
+        }
+        if on_word_boundaries(&collapsed, start, end) {
+            return Some(origin[start]..origin[end]);
+        }
+        from = start + collapsed[start..].chars().next().map_or(1, char::len_utf8);
+    }
+    None
+}
+
+/// Whether `text[start..end]` has no alphanumeric character right before or
+/// right after it.
+fn on_word_boundaries(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start].chars().next_back();
+    let after = text[end..].chars().next();
+    !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
 }
 
 /// Finds the words of the quote as a contiguous run of the words of `window`,
@@ -382,9 +406,64 @@ mod tests {
     }
 
     #[test]
-    fn an_exact_match_is_case_sensitive_and_may_cut_a_word() {
+    fn an_exact_match_is_case_sensitive() {
         assert_eq!(find_exact("Alpha beta", 99, &quote("alpha")), None);
-        assert_eq!(find_exact("Alpha beta", 99, &quote("lpha b")), Some(1..7));
+        assert_eq!(find_exact("Alpha beta", 99, &quote("Alpha")), Some(0..5));
+    }
+
+    #[test]
+    fn an_exact_match_starts_and_ends_on_word_boundaries() {
+        assert_eq!(find_exact("Alpha beta", 99, &quote("lpha b")), None);
+        assert_eq!(
+            find_exact("entropy measures", 99, &quote("entropy measure")),
+            None
+        );
+        assert_eq!(
+            find_exact("entropy measures", 99, &quote("ntropy measures")),
+            None
+        );
+        assert_eq!(
+            find_exact("entropy measures", 99, &quote("measures")),
+            Some(8..16)
+        );
+        // Digits are word characters too.
+        assert_eq!(find_exact("x2 y", 99, &quote("x")), None);
+        assert_eq!(find_exact("2x y", 99, &quote("x")), None);
+    }
+
+    #[test]
+    fn an_exact_match_may_touch_punctuation_and_the_window_edges() {
+        let found = |window: &str, q: &str| find_exact(window, 99, &quote(q));
+        assert_eq!(
+            found("In short, entropy measures.", "entropy measures"),
+            Some(10..26)
+        );
+        assert_eq!(found("(entropy)", "entropy"), Some(1..8));
+        assert_eq!(found("“entropy”", "entropy"), Some(3..10));
+        assert_eq!(found("entropy", "entropy"), Some(0..7));
+        assert_eq!(found("ends with it; entropy", "entropy"), Some(14..21));
+        // A quote that itself ends in punctuation is followed by a space or the edge.
+        assert_eq!(found("Yes. No.", "Yes."), Some(0..4));
+    }
+
+    #[test]
+    fn an_exact_match_tries_every_occurrence() {
+        let found = |window: &str, q: &str| find_exact(window, 99, &quote(q));
+        assert_eq!(found("xentropy entropy", "entropy"), Some(9..16));
+        assert_eq!(found("entropyx entropy", "entropy"), Some(9..16));
+        assert_eq!(found("xentropy entropyx", "entropy"), None);
+        // The second occurrence overlaps the first, which is rejected.
+        assert_eq!(found("xa a a", "a a"), Some(3..6));
+    }
+
+    #[test]
+    fn a_later_occurrence_must_still_start_inside_the_passage() {
+        // The passage is "xentropy" (8 bytes); the second occurrence is in the successor.
+        assert_eq!(find_exact("xentropy entropy", 8, &quote("entropy")), None);
+        assert_eq!(
+            find_exact("xentropy entropy", 10, &quote("entropy")),
+            Some(9..16)
+        );
     }
 
     #[test]
@@ -393,7 +472,7 @@ mod tests {
         let window = "alpha beta gamma";
         assert_eq!(find_exact(window, 5, &quote("alpha beta")), Some(0..10));
         assert_eq!(find_exact(window, 5, &quote("beta gamma")), None);
-        assert_eq!(find_exact(window, 5, &quote("a b")), Some(4..7));
+        assert_eq!(find_exact(window, 7, &quote("beta gamma")), Some(6..16));
         // The first match decides: a later one cannot start earlier.
         assert_eq!(find_exact("ab ab", 3, &quote("ab")), Some(0..2));
         assert_eq!(find_exact("xx ab", 2, &quote("ab")), None);
@@ -401,11 +480,14 @@ mod tests {
 
     #[test]
     fn exact_offsets_stay_on_character_boundaries() {
-        let window = "日本語\n\n日本 語";
-        let found = find_exact(window, 9, &quote("語 日本")).unwrap();
-        assert_eq!(&window[found], "語\n\n日本");
-        let found = find_exact(window, 99, &quote("本 語")).unwrap();
-        assert!(window.is_char_boundary(found.start) && window.is_char_boundary(found.end));
+        let window = "é\n\nü x";
+        let found = find_exact(window, 99, &quote("é ü")).unwrap();
+        assert_eq!(&window[found], "é\n\nü");
+        let window = "日本語\n\n日本 語 x";
+        let found = find_exact(window, 99, &quote("日本 語")).unwrap();
+        assert_eq!(&window[found], "日本 語");
+        // Inside a run of CJK characters there is no word boundary.
+        assert_eq!(find_exact(window, 99, &quote("語 日本")), None);
     }
 
     #[test]

@@ -128,6 +128,55 @@ fn an_exact_quote_may_run_across_paragraphs_of_one_passage() {
 }
 
 #[test]
+fn exact_requires_word_boundaries() {
+    let fixture = Fixture::chapters(&["entropy measures the rest."]);
+
+    for passage_id in [None, Some(0)] {
+        let result = fixture.verify("entropy measure", passage_id);
+
+        assert_eq!(result.verdict, Verdict::None);
+        assert_eq!(result.matched, None);
+        assert_eq!(result.found_elsewhere, None);
+        let closest = result.closest.unwrap();
+        assert_eq!(closest.passage_id, 0);
+        assert_eq!((closest.matched_words, closest.quote_words), (1, 2));
+        assert_eq!(closest.first_difference.as_deref(), Some("measure"));
+    }
+    // A quote that starts inside a word is rejected the same way.
+    let result = fixture.verify("ntropy measures", None);
+    assert_eq!(result.verdict, Verdict::None);
+}
+
+#[test]
+fn exact_allows_punctuation_at_the_edges() {
+    let fixture = Fixture::chapters(&[
+        "In short, entropy measures.",
+        "He said “entropy measures”, twice.",
+    ]);
+
+    let result = fixture.verify("entropy measures", None);
+    assert_eq!(result.verdict, Verdict::Exact);
+    assert_eq!(result.passage_id, Some(0));
+    assert_eq!(result.matched, Some([10, 26]));
+
+    let result = fixture.verify("entropy measures", Some(1));
+    assert_eq!(result.verdict, Verdict::Exact);
+    assert_eq!(result.passage_id, Some(1));
+    assert_eq!(result.matched, Some([9, 25]));
+}
+
+#[test]
+fn exact_tries_later_occurrences() {
+    let fixture = Fixture::chapters(&["xentropy and entropy."]);
+
+    let result = fixture.verify("entropy", None);
+
+    assert_eq!(result.verdict, Verdict::Exact);
+    assert_eq!(result.passage_id, Some(0));
+    assert_eq!(result.matched, Some([13, 20]));
+}
+
+#[test]
 fn case_and_punctuation_are_equivalent() {
     let fixture = Fixture::chapters(&["Before.", "entropy — it is said to measure disorder."]);
 

@@ -3,7 +3,7 @@ mod common;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Barrier, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -14,6 +14,7 @@ use ebook_hero::index::cache::{
     CachedIndex, ClearReport, Manifest, build_count, clear, expected_stage1, list_indexes,
     sha256_file, with_lock,
 };
+use ebook_hero::search::{Mode, SearchParams};
 use ebook_hero::session::{Session, resolve_path, resolve_path_in};
 use ebook_hero::settings::OPEN_BOOKS;
 use tempfile::TempDir;
@@ -352,6 +353,33 @@ fn keeps_at_most_four_open_books() {
 }
 
 #[cfg(unix)]
+#[test]
+fn a_book_whose_cache_was_cleared_is_built_again() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (path, sha) = setup.book("Cleared Book");
+    let session = setup.session();
+    let first = session.book(str_of(&path)).unwrap();
+    assert_eq!(clear(setup.root()).unwrap().removed, 1);
+    let before = build_count();
+
+    let again = session.book(str_of(&path)).unwrap();
+
+    assert_eq!(build_count() - before, 1);
+    assert!(!Arc::ptr_eq(&first, &again));
+    assert!(setup.root().join(&sha).join("manifest.json").is_file());
+    assert_eq!(session.open_book_count(), 1);
+    let params = SearchParams {
+        query: "nothing else".to_string(),
+        mode: Mode::Lexical,
+        top_k: 5,
+        rerank: false,
+    };
+    let result = session.search(str_of(&path), params, &|_, _| {}).unwrap();
+    assert_eq!(result.hits.len(), 1);
+    assert_eq!(build_count() - before, 1);
+}
+
 #[test]
 fn rejects_non_hex_sha() {
     // The root sits inside `outer`, so even a hash that climbs out of the

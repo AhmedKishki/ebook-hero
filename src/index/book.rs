@@ -58,6 +58,13 @@ impl Book {
         })
     }
 
+    /// Whether the book's cached index is still on disk, judged by one look at
+    /// its manifest. `cache clear` may have removed it since the book was
+    /// opened.
+    pub fn is_cached(&self) -> bool {
+        self.dir.join(MANIFEST_FILE).is_file()
+    }
+
     /// The passage embeddings, stage 2 of the index: loaded from the cache if
     /// they are there, else made with `models` and cached.
     ///
@@ -65,7 +72,9 @@ impl Book {
     /// them and the file holds exactly one row per passage. Otherwise, under
     /// the same lock as stage 1, every passage is embedded, `progress` is told
     /// how many are done, and the file is written through a temporary one.
-    /// The manifest is stamped last, so an interrupted build is redone.
+    /// The manifest is stamped last, so an interrupted build is redone. A
+    /// cache directory that was removed since the book was opened is an error
+    /// that asks for another call, which opens the book again.
     pub fn vectors(&self, models: &Models, progress: &dyn Fn(usize, usize)) -> Result<&Vectors> {
         if let Some(vectors) = self.vectors.get() {
             return Ok(vectors);
@@ -75,6 +84,9 @@ impl Book {
             .parent()
             .ok_or_else(|| Error::Index(format!("{} is not inside a cache", self.dir.display())))?;
         let vectors = cache::with_lock(root, &self.sha256, LOCK_WAIT, || {
+            if !self.dir.is_dir() {
+                return Err(removed());
+            }
             match self.stored_vectors() {
                 Some(vectors) => Ok(vectors),
                 None => self.embed(models, progress),
@@ -144,6 +156,11 @@ impl Book {
         cache::write_json_atomic(&path, &manifest)?;
         Ok(vectors)
     }
+}
+
+/// The error for a book whose cached index was deleted after it was opened.
+fn removed() -> Error {
+    Error::Index("the cached index for this book was removed; call again to rebuild it".to_string())
 }
 
 fn load_current(dir: &Path, path: &Path, sha256: &str) -> Option<Book> {

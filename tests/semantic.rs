@@ -173,6 +173,26 @@ fn a_file_of_the_wrong_size_is_embedded_again_and_left_alone_if_that_fails() {
 }
 
 #[test]
+fn embedding_a_book_whose_cache_was_removed_names_the_remedy() {
+    let (_file, unusable) = unusable_models();
+    let fixture = Fixture::new(&THREE, unusable);
+    let book = fixture.book();
+    fs::remove_dir_all(&book.dir).unwrap();
+
+    let error = book
+        .vectors(fixture.session.models(), &|_, _| {})
+        .err()
+        .unwrap();
+
+    assert!(
+        matches!(&error, Error::Index(message)
+            if message == "the cached index for this book was removed; call again to rebuild it"),
+        "{error}"
+    );
+    assert!(!book.dir.exists());
+}
+
+#[test]
 fn semantic_search_without_a_model_names_the_remedy() {
     let (_file, unusable) = unusable_models();
     let fixture = Fixture::new(&THREE, unusable);

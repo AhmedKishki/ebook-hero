@@ -63,7 +63,8 @@ impl Session {
     /// The book is found by the hash of the file's content, so a file that was
     /// replaced is indexed again and a copy under another name reuses the
     /// index. The hash is memoized per path while the file's size and
-    /// modification time stay the same.
+    /// modification time stay the same. An open book whose cached index was
+    /// removed, by `cache clear` for one, is opened and indexed again.
     pub fn book(&self, path: &str) -> Result<Arc<Book>> {
         let path = resolve_path(path)?;
         let sha256 = self.hash(&path)?;
@@ -169,10 +170,15 @@ impl Default for Session {
     }
 }
 
-/// Finds the book with this hash and marks it as the most recently used.
+/// Finds the book with this hash and marks it as the most recently used. A
+/// book whose cached index is gone is dropped instead, so that it is opened
+/// again.
 fn touch(books: &mut VecDeque<Arc<Book>>, sha256: &str) -> Option<Arc<Book>> {
     let position = books.iter().position(|book| book.sha256 == sha256)?;
     let book = books.remove(position)?;
+    if !book.is_cached() {
+        return None;
+    }
     books.push_back(Arc::clone(&book));
     Some(book)
 }

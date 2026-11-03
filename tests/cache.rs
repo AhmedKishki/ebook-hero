@@ -603,17 +603,18 @@ fn a_missing_root_holds_nothing_and_is_not_created() {
 }
 
 #[test]
-fn clear_removes_indexes_locks_and_staging_and_keeps_other_files() {
+fn clear_removes_indexes_and_staging_and_keeps_lock_files_and_other_files() {
     let _serial = serial();
     let setup = Setup::new();
     let (a, b) = (setup.cached("Clear A"), setup.cached("Clear B"));
-    let orphan = "9".repeat(64);
-    // Leftovers of a dead build, and a lock file with no index.
+    let (orphan, lone) = ("9".repeat(64), "8".repeat(64));
+    // Leftovers of a dead build whose index was never finished.
     for dir in [format!("{a}.staging-1-2"), format!("{orphan}.staging-3-4")] {
         fs::create_dir(setup.root().join(&dir)).unwrap();
         fs::write(setup.root().join(&dir).join("half.json"), "{").unwrap();
     }
-    fs::write(setup.root().join(format!("{orphan}.lock")), "").unwrap();
+    // A lock file with nothing else of its book.
+    fs::write(setup.root().join(format!("{lone}.lock")), "123").unwrap();
     // Not ours: names that only look like cache entries.
     let foreign = [
         "notes.txt".to_string(),
@@ -626,7 +627,6 @@ fn clear_removes_indexes_locks_and_staging_and_keeps_other_files() {
     for name in &foreign[1..] {
         fs::create_dir(setup.root().join(name)).unwrap();
     }
-    assert!(names(setup.root()).contains(&format!("{b}.lock")));
 
     let report = clear(setup.root()).unwrap();
 
@@ -637,11 +637,16 @@ fn clear_removes_indexes_locks_and_staging_and_keeps_other_files() {
             skipped_busy: 0
         }
     );
-    let mut expected = foreign.to_vec();
+    // Every lock file is still there: unlinking one lets two processes lock
+    // "the same" book through different files.
+    let locks = [&a, &b, &orphan, &lone].map(|sha| format!("{sha}.lock"));
+    let mut expected: Vec<String> = foreign.iter().cloned().chain(locks.clone()).collect();
     expected.sort();
     assert_eq!(names(setup.root()), expected);
+    assert_eq!(fs::read(setup.root().join(&locks[3])).unwrap(), b"123");
     assert!(list_indexes(setup.root()).unwrap().is_empty());
     assert_eq!(clear(setup.root()).unwrap(), ClearReport::default());
+    assert_eq!(names(setup.root()), expected);
 }
 
 #[test]
@@ -671,9 +676,8 @@ fn clear_skips_a_book_whose_lock_is_held() {
     assert!(setup.root().join(&busy).join("manifest.json").is_file());
     assert!(building.join("half.json").is_file());
     assert!(!setup.root().join(&idle).exists());
-    assert!(!setup.root().join(format!("{idle}.lock")).exists());
 
-    // Once the lock is let go, the book is cleared with everything of it.
+    // Once the lock is let go, the book is cleared with its staging directory.
     let report = clear(setup.root()).unwrap();
     assert_eq!(
         report,
@@ -682,7 +686,10 @@ fn clear_skips_a_book_whose_lock_is_held() {
             skipped_busy: 0
         }
     );
-    assert!(names(setup.root()).is_empty());
+    // Only the lock files are left, the busy book's among them.
+    let mut locks = [format!("{busy}.lock"), format!("{idle}.lock")];
+    locks.sort();
+    assert_eq!(names(setup.root()), locks);
 }
 
 #[cfg(unix)]
@@ -709,6 +716,8 @@ fn clear_does_not_follow_symlinks() {
         root.path().join(format!("{linked_staging}.staging-1-2")),
     )
     .unwrap();
+    // A book whose lock file is a link, which no process can lock through.
+    fs::create_dir(root.path().join(&linked_lock)).unwrap();
     symlink(
         &lock_target,
         root.path().join(format!("{linked_lock}.lock")),
@@ -716,11 +725,25 @@ fn clear_does_not_follow_symlinks() {
     .unwrap();
 
     // A link is not an index.
-    assert!(list_indexes(root.path()).unwrap().is_empty());
+    assert!(list_indexes(root.path()).unwrap().len() == 1);
     let report = clear(root.path()).unwrap();
 
-    assert_eq!(report, ClearReport::default());
-    assert!(names(root.path()).is_empty(), "{:?}", names(root.path()));
+    // Only the real index directory counts.
+    assert_eq!(
+        report,
+        ClearReport {
+            removed: 1,
+            skipped_busy: 0
+        }
+    );
+    // The links are gone. Each book has a lock file now, a real one and kept,
+    // the last book's in place of the link. Every target is as it was.
+    let locks = [&linked_index, &linked_staging, &linked_lock].map(|sha| format!("{sha}.lock"));
+    assert_eq!(names(root.path()), locks);
+    for lock in &locks {
+        let metadata = fs::symlink_metadata(root.path().join(lock)).unwrap();
+        assert!(metadata.is_file(), "{lock}");
+    }
     assert_eq!(fs::read(index_target.join("keep.txt")).unwrap(), b"keep");
     assert_eq!(fs::read(staging_target.join("keep.txt")).unwrap(), b"keep");
     assert_eq!(fs::read(&lock_target).unwrap(), b"keep");

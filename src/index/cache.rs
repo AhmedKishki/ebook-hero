@@ -4,7 +4,7 @@
 //! ```text
 //! <root>/<sha>/                    manifest.json, document.json, passages.json, tantivy/,
 //!                                  and, once embedded, vectors.f32
-//! <root>/<sha>.lock                held while building; holds the builder's pid
+//! <root>/<sha>.lock                held while building; holds the builder's pid; never deleted
 //! <root>/<sha>.staging-<pid>-<ns>/ a build in progress, renamed to <sha>/ when done
 //! ```
 //!
@@ -376,13 +376,21 @@ pub fn list_indexes(root: &Path) -> Result<Vec<CachedIndex>> {
     Ok(indexes)
 }
 
-/// Deletes every cached index under `root`, with its lock file and any staging
-/// directories a dead build left. Other files in the root stay.
+/// Deletes every cached index under `root`, and the staging directories a dead
+/// build left. Other files in the root stay.
 ///
 /// A book is cleared under its build lock, taken without waiting. If another
 /// process holds the lock, that book is skipped, because deleting the staging
 /// directory of a build in progress would break it. Symbolic links are
 /// unlinked, never followed. A root that does not exist holds nothing.
+///
+/// Lock files are never deleted, whether the book is cleared or not. A process
+/// that opened `<sha>.lock` before it was unlinked would lock a file that no
+/// path leads to, and a second process that created a new `<sha>.lock` could
+/// lock that too, so two builds of one book could run at once. The files are
+/// empty, so keeping them costs nothing. The one exception is a lock file that
+/// is a symbolic link: nobody can hold a lock through it (`open_lock` refuses
+/// to follow it), and it blocks the book, so it is unlinked.
 pub fn clear(root: &Path) -> Result<ClearReport> {
     let mut report = ClearReport::default();
     if !root_exists(root)? {
@@ -396,8 +404,8 @@ pub fn clear(root: &Path) -> Result<ClearReport> {
         }
     }
     for sha in books {
-        let lock = lock_path(root, &sha);
         // `with_lock` refuses a lock file that is a symbolic link.
+        let lock = lock_path(root, &sha);
         if fs::symlink_metadata(&lock).is_ok_and(|m| m.file_type().is_symlink()) {
             remove_all(&lock)?;
         }
@@ -408,11 +416,7 @@ pub fn clear(root: &Path) -> Result<ClearReport> {
             Ok(had_index)
         });
         match cleared {
-            Ok(had_index) => {
-                report.removed += usize::from(had_index);
-                // After the lock is released: a held lock file must not vanish.
-                remove_all(&lock)?;
-            }
+            Ok(had_index) => report.removed += usize::from(had_index),
             Err(Error::LockTimeout { .. }) => report.skipped_busy += 1,
             Err(e) => return Err(e),
         }
@@ -428,14 +432,15 @@ fn root_exists(root: &Path) -> Result<bool> {
     }
 }
 
-/// The book a name in the cache root belongs to: its stage directory (named
-/// for the hash alone, see [`stage_dir`]), its lock file, or one of its staging
-/// directories. Any other name is not ours.
+/// The book a name in the cache root belongs to, for the names `clear`
+/// deletes: its stage directory (named for the hash alone, see [`stage_dir`])
+/// or one of its staging directories. A lock file is not one of them, and
+/// neither is any other name.
 fn book_of(name: &str) -> Option<&str> {
     let sha = name
         .get(..SHA256_HEX_LEN)
         .filter(|sha| is_sha256_hex(sha))?;
-    let ours = name == sha || name == lock_name(sha) || name.starts_with(&staging_prefix(sha));
+    let ours = name == sha || name.starts_with(&staging_prefix(sha));
     ours.then_some(sha)
 }
 
@@ -547,11 +552,10 @@ mod tests {
     }
 
     #[test]
-    fn book_of_names_the_book_an_entry_belongs_to() {
+    fn book_of_names_the_stage_and_staging_entries_of_a_book_but_not_its_lock() {
         let sha = "0123456789abcdef".repeat(4);
         for ours in [
             sha.clone(),
-            format!("{sha}.lock"),
             format!("{sha}.staging-1-2"),
             format!("{sha}.staging-"),
         ] {
@@ -562,6 +566,7 @@ mod tests {
             "notes.txt".to_string(),
             sha[..63].to_string(),
             sha.to_uppercase(),
+            format!("{sha}.lock"),
             format!("{sha}.locked"),
             format!("{sha}.lock.bak"),
             format!("{sha}.staging"),

@@ -6,6 +6,7 @@ pub mod extract;
 pub mod index;
 pub mod normalize;
 pub mod passages;
+pub mod read;
 pub mod search;
 pub mod session;
 pub mod settings;

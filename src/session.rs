@@ -11,6 +11,7 @@ use std::time::SystemTime;
 use crate::embed::Models;
 use crate::index::book::Book;
 use crate::index::cache::{default_cache_root, ensure_private_dir, file_error, sha256_file};
+use crate::read::{self, BookInfo, OutlineResult, ReadParams, ReadResult};
 use crate::search::find::{self, FindResult};
 use crate::search::{self, SearchParams, SearchResult};
 use crate::settings::OPEN_BOOKS;
@@ -99,6 +100,35 @@ impl Session {
         search::validate(&params)?;
         let book = self.book(path)?;
         search::search(&book, &self.models, &params, progress)
+    }
+
+    /// Reads passages of the book at `path`; see [`read::read`]. The arguments
+    /// are checked before the book is opened.
+    pub fn read(&self, path: &str, p: ReadParams) -> Result<ReadResult> {
+        read::validate(&p)?;
+        let book = self.book(path)?;
+        read::read(&book, &p)
+    }
+
+    /// The outline of the book at `path`; see [`read::outline`].
+    pub fn outline(&self, path: &str) -> Result<OutlineResult> {
+        let book = self.book(path)?;
+        Ok(read::outline(&book))
+    }
+
+    /// A summary of the book at `path`; see [`read::info`].
+    pub fn info(&self, path: &str) -> Result<BookInfo> {
+        let book = self.book(path)?;
+        Ok(read::info(&book))
+    }
+
+    /// Builds both stages of the index of the book at `path` and summarizes
+    /// the book. Stage 2 embeds every passage the first time, which can take
+    /// minutes; `progress(done, total)` reports it.
+    pub fn index(&self, path: &str, progress: &dyn Fn(usize, usize)) -> Result<BookInfo> {
+        let book = self.book(path)?;
+        book.vectors(&self.models, progress)?;
+        Ok(read::info(&book))
     }
 
     fn hash(&self, path: &Path) -> Result<String> {

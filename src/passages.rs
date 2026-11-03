@@ -57,33 +57,40 @@ struct Piece<'a> {
 /// Packs the paragraphs, list items and notes of `blocks`, in order, into
 /// passages of at most `PASSAGE_MAX_WORDS` words, joined with a blank line.
 /// A passage stays inside one section and, in an EPUB, one file. A block with
-/// more words than the limit is split into pieces first. Headings are left
-/// out: they reach a passage only through its `section`.
+/// more words than the limit is split into pieces first. A heading starts a
+/// new section even when its path repeats the previous one, so it closes the
+/// passage being built; it reaches a passage only through its `section`.
 pub fn build_passages(blocks: &[Block]) -> Vec<Passage> {
     let mut passages = Vec::new();
     let mut current: Vec<Piece> = Vec::new();
     let mut words = 0;
-    let packed = blocks
-        .iter()
-        .filter(|block| !matches!(block.kind, BlockKind::Heading { .. }));
-    for block in packed {
+    for block in blocks {
+        if matches!(block.kind, BlockKind::Heading { .. }) {
+            close(&mut passages, &mut current, &mut words);
+            continue;
+        }
         for piece in pieces(block) {
             let fits = current.first().is_some_and(|first| {
                 same_part(first.block, block) && words + piece.words <= PASSAGE_MAX_WORDS
             });
-            if !fits && !current.is_empty() {
-                passages.push(passage(passages.len() as u32, &current));
-                current.clear();
-                words = 0;
+            if !fits {
+                close(&mut passages, &mut current, &mut words);
             }
             words += piece.words;
             current.push(piece);
         }
     }
-    if !current.is_empty() {
-        passages.push(passage(passages.len() as u32, &current));
-    }
+    close(&mut passages, &mut current, &mut words);
     passages
+}
+
+/// Turns the pieces collected so far, if any, into the next passage.
+fn close<'a>(passages: &mut Vec<Passage>, current: &mut Vec<Piece<'a>>, words: &mut usize) {
+    if !current.is_empty() {
+        passages.push(passage(passages.len() as u32, current));
+        current.clear();
+    }
+    *words = 0;
 }
 
 fn word_count(text: &str) -> usize {
@@ -421,6 +428,19 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2]
         );
+    }
+
+    #[test]
+    fn heading_breaks_passage_even_with_identical_section_path() {
+        let blocks = [
+            pdf_block(0, "The first chapter.", &["Introduction"], 1),
+            heading(1, "Introduction", &["Introduction"]),
+            pdf_block(2, "The second chapter.", &["Introduction"], 2),
+        ];
+        let passages = build_passages(&blocks);
+        assert_eq!(block_counts(&passages), [1, 1]);
+        assert_eq!(passages[0].text, "The first chapter.");
+        assert_eq!(passages[1].text, "The second chapter.");
     }
 
     #[test]

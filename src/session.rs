@@ -10,6 +10,7 @@ use std::time::SystemTime;
 
 use crate::index::book::Book;
 use crate::index::cache::{default_cache_root, ensure_private_dir, file_error, sha256_file};
+use crate::search::find::{self, FindResult};
 use crate::settings::OPEN_BOOKS;
 use crate::{Error, Result};
 
@@ -62,6 +63,13 @@ impl Session {
             books.pop_front();
         }
         Ok(book)
+    }
+
+    /// Every passage of the book at `path` that contains `phrase` exactly; see
+    /// [`find::find`].
+    pub fn find(&self, path: &str, phrase: &str, cursor: Option<usize>) -> Result<FindResult> {
+        let book = self.book(path)?;
+        find::find(&book, phrase, cursor)
     }
 
     fn hash(&self, path: &Path) -> Result<String> {

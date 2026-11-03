@@ -10,6 +10,19 @@ use zip::CompressionMethod;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
+/// A temporary directory that only this user can write. The cache refuses a
+/// root that others can write, and `TempDir::new` honours the umask, which is
+/// 002 on many systems.
+pub fn private_tempdir() -> tempfile::TempDir {
+    let dir = tempfile::TempDir::new().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    dir
+}
+
 const IDENTIFIER: &str = "urn:uuid:5f3c8a1e-7b2d-4c6e-9a10-3d2f4b5c6d7e";
 const FONT_PATH: &str = "fonts/book.otf";
 const FONT_LEN: usize = 2048;

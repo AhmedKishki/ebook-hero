@@ -7,7 +7,7 @@ use std::sync::{Barrier, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use common::{EpubBuilder, EpubVersion};
+use common::{EpubBuilder, EpubVersion, private_tempdir};
 use ebook_hero::Error;
 use ebook_hero::index::book::Book;
 use ebook_hero::index::cache::{Manifest, build_count, expected_stage1, sha256_file, with_lock};
@@ -40,16 +40,6 @@ fn set_mode(path: &Path, mode: u32) {
 fn mode_of(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(path).unwrap().permissions().mode() & 0o777
-}
-
-/// A temporary directory that only this user can write. The cache refuses a
-/// root that others can write, and `TempDir::new` honours the umask, which is
-/// 002 on many systems.
-fn private_tempdir() -> TempDir {
-    let dir = TempDir::new().unwrap();
-    #[cfg(unix)]
-    set_mode(dir.path(), 0o700);
-    dir
 }
 
 /// Writes an EPUB whose title, and so whose hash, is `title`.

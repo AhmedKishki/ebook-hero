@@ -28,7 +28,7 @@ ebook-hero verify book.pdf "a quote you want to check"
 ebook-hero extract book.pdf --format markdown > book.md
 ```
 
-`--page` is the physical page of the PDF, counted from 1, as is `page` in the MCP `read` tool; the printed page label is shown in the locator. `outline`, `read` (by passage id or outline entry), `index` and `cache` are also commands. Every command takes `--json`, which prints exactly what the MCP tool of the same name returns. `ebook-hero <command> --help` lists the flags.
+`--page` is the physical page of the PDF, counted from 1, as is `page` in the MCP `read` tool; the printed page label is shown in the locator. `outline`, `read` (by passage id or outline entry), `index` and `cache` are also commands. For `info`, `outline`, `search`, `find`, `read` and `verify`, `--json` prints what the MCP tools `book_info`, `outline`, `search`, `find`, `read` and `verify_quote` return. `ebook-hero <command> --help` lists the flags.
 
 ## MCP server
 
@@ -56,7 +56,7 @@ For any other client, add this server entry:
 ## Storage
 
 - Indexes are cached in `$TMPDIR/ebook-hero`, a private directory (mode 0700). `ebook-hero cache list` shows them and `ebook-hero cache clear` deletes them.
-- The two models live in `~/.cache/ebook-hero/models`, or in `$EBOOK_HERO_MODELS` if it is set. The first hybrid or semantic search downloads about 270 MB, then embeds the whole book, which can take minutes. `ebook-hero index book.pdf` does the embedding ahead of time. Lexical search needs neither.
+- The two models live in the user cache directory (`~/.cache/ebook-hero/models` on Linux, `~/Library/Caches/ebook-hero/models` on macOS) or in `$EBOOK_HERO_MODELS` if it is set. The first hybrid or semantic search downloads about 270 MB, then embeds the whole book, which can take minutes. `ebook-hero index book.pdf` does the embedding ahead of time. Lexical search needs neither.
 - Logs go to stderr. `EBOOK_HERO_LOG=debug` turns them up (the default is `warn`).
 
 ## Limits

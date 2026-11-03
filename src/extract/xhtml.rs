@@ -188,6 +188,8 @@ fn heading_level(tag: &str) -> Option<u8> {
 struct Open {
     kind: BlockKind,
     text: String,
+    /// Whether `text` holds anything but whitespace.
+    started: bool,
     anchor: Option<String>,
     ids: Vec<String>,
     print_page: Option<String>,
@@ -196,7 +198,8 @@ struct Open {
 struct Walker<'a> {
     blocks: Vec<RawBlock>,
     print_page: &'a mut Option<String>,
-    /// Ids met since the last emitted block while no block was open.
+    /// Ids met since the last emitted block while no block was open. Empty
+    /// while a block is open, which takes them.
     pending_ids: Vec<String>,
     /// The last id met, inside a block or outside.
     last_id: Option<String>,
@@ -288,7 +291,8 @@ impl Walker<'_> {
 
     fn push_text(&mut self, text: &str) {
         let Some(open) = &mut self.open else { return };
-        if open.text.trim_start().is_empty() && !text.trim().is_empty() {
+        if !open.started && !text.trim().is_empty() {
+            open.started = true;
             open.print_page = self.print_page.clone();
         }
         open.text.push_str(text);
@@ -298,6 +302,7 @@ impl Walker<'_> {
         self.open = Some(Open {
             kind,
             text: String::new(),
+            started: false,
             anchor: self.last_id.clone(),
             ids: std::mem::take(&mut self.pending_ids),
             print_page: None,
@@ -305,12 +310,14 @@ impl Walker<'_> {
     }
 
     /// Emits the open block. A block without text is dropped, and its ids wait
-    /// for the next block.
+    /// for the next block: they are all the ids met since the last emitted
+    /// block, since the open block took the pending ones.
     fn flush(&mut self) {
         let Some(open) = self.open.take() else { return };
         let text = normalize(&open.text);
         if text.is_empty() {
-            self.pending_ids.extend(open.ids);
+            debug_assert!(self.pending_ids.is_empty());
+            self.pending_ids = open.ids;
             return;
         }
         self.blocks.push(RawBlock {
@@ -828,5 +835,48 @@ mod tests {
             got.iter()
                 .all(|b| b.anchor.is_none() && b.print_page.is_none())
         );
+    }
+
+    /// Linear code reads these documents in a few seconds at most in a debug
+    /// build; quadratic code takes from twenty seconds to minutes.
+    const HOSTILE_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    #[test]
+    fn many_empty_blocks_with_ids_take_linear_time() {
+        let body: String = (0..150_000)
+            .map(|i| format!(r#"<p id="p{i}"></p>"#))
+            .collect();
+        let started = std::time::Instant::now();
+
+        let got = blocks(&format!("{body}<p>end</p>"));
+
+        assert!(started.elapsed() < HOSTILE_LIMIT, "{:?}", started.elapsed());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].ids.len(), 150_000);
+        assert_eq!(got[0].ids[0], "p0");
+    }
+
+    #[test]
+    fn a_block_of_many_blank_runs_takes_linear_time() {
+        let body = format!("<p>{}end</p>", "<b> </b>".repeat(80_000));
+        let started = std::time::Instant::now();
+
+        let got = blocks(&body);
+
+        assert!(started.elapsed() < HOSTILE_LIMIT, "{:?}", started.elapsed());
+        assert_eq!(pairs(&got), [(BlockKind::Paragraph, "end")]);
+    }
+
+    #[test]
+    fn the_printed_page_is_the_one_where_the_text_starts() {
+        let mut page = Some("1".to_string());
+        let html = document(
+            r#"<p> <b> </b><span epub:type="pagebreak" title="2"/> text <span epub:type="pagebreak" title="3"/>more</p>"#,
+        );
+
+        let got = xhtml_blocks(&html, &mut page);
+
+        assert_eq!(got[0].print_page.as_deref(), Some("2"));
+        assert_eq!(page.as_deref(), Some("3"));
     }
 }

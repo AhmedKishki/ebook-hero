@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod cli;
 pub mod document;
 pub mod embed;
 pub mod error;

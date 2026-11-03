@@ -6,7 +6,12 @@ license = "MIT"
 repository = "https://github.com/AhmedKishki/ebook-hero"
 description = "Search and read one PDF or EPUB: lexical, semantic and hybrid search, with locators and quote verification, as a CLI and an MCP server."
 
+[[bin]]
+name = "ebook-hero"
+path = "src/main.rs"
+
 [dependencies]
+clap = { version = "4.6", features = ["derive"] }
 dirs = "7"
 fastembed = { version = "7.5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 fs4 = "1.1"
@@ -20,9 +25,12 @@ serde_json = "1"
 sha2 = "0.11"
 tantivy = "0.27"
 thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1.26"
 unicode-segmentation = "1.13"
 zip = { version = "9.2", default-features = false }
 
 [dev-dependencies]
+assert_cmd = "2.2"
 tempfile = "3.27"

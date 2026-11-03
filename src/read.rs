@@ -329,7 +329,7 @@ fn outline_of(document: &Document, passages: &[Passage]) -> OutlineResult {
 
 /// Where a passage is, as a person would cite it: `p. 12–13 (xii–xiii)` for a
 /// PDF and `ch1.xhtml ¶3–5, print p. 45` for an EPUB.
-fn locator_text(locator: &PassageLocator) -> String {
+pub fn locator_text(locator: &PassageLocator) -> String {
     match locator {
         PassageLocator::Pdf {
             page_start,

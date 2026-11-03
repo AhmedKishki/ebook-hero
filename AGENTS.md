@@ -16,7 +16,7 @@
 
 - Readers in `src/extract/` turn a file into a `Document` (`src/document/`). Everything after them reads a `Document` and never changes it.
 - `passages`, `index`, `search`, `read`, and `verify` hold the logic. `cli.rs` and `mcp.rs` parse arguments and format output only. Both call `Session`.
-- `src/settings.rs` holds every search, index and limit constant and the version numbers. Reader heuristics live in their reader module.
+- `src/settings.rs` holds the search, read and limit constants and the version numbers. Input caps, writer budgets and reader heuristics live in the module that uses them.
 
 ## Rules
 

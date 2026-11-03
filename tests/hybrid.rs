@@ -280,7 +280,9 @@ fn rerank_false_keeps_fused_order() {
 #[ignore = "needs the embedding and reranker models"]
 fn rerank_orders_hits_by_reranker_score() {
     let fixture = models_fixture(&HARBOUR);
-    let query = "tides and the moon";
+    // Stopwords match nothing, so the query needs words from more than one
+    // passage to give the reranker something to reorder.
+    let query = "tides of the moon at the harbour";
     let plain = fixture.search(query, Mode::Hybrid, 5, false).unwrap();
     let reranked = fixture.search(query, Mode::Hybrid, 5, true).unwrap();
 

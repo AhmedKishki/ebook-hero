@@ -25,10 +25,14 @@ use crate::normalize::normalize;
 /// A gap between two words above this many font sizes is a column gutter or
 /// two labels on one baseline, not a word space.
 const SPLIT_GAP: f32 = 2.0;
-/// Two words whose gap is within this many font sizes, either way, touch.
-/// pdf_oxide's word breaks hold otherwise: some PDFs give word boxes that
-/// overlap their neighbours, so a gap below zero is no sign of a join.
+/// Two words whose gap is at most this many font sizes touch, however much
+/// their boxes overlap: some PDFs give word boxes that overlap their
+/// neighbours, so overlap alone is no sign of a join, but it is no sign
+/// against one either.
 const TOUCH_GAP: f32 = 0.025;
+/// Closing punctuation belongs to the word before it up to this many font
+/// sizes away, since some fonts set a comma or full stop a little apart.
+const CLOSING_GAP: f32 = 0.1;
 /// Characters that close what comes before them; a word made only of these
 /// belongs to the word it touches on its left.
 const CLOSING: &[char] = &[
@@ -302,25 +306,28 @@ fn word_size(size: f32, height: f32) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// Whether two neighbouring words are one: they touch, within `TOUCH_GAP`
-/// font sizes of the previous word, and their characters say they belong
-/// together. Those are digits on both sides of the gap (pdf_oxide cuts
-/// `1996` into `199 6`), a word of closing punctuation after a word or one of
-/// opening punctuation before it, and a hyphen at a line end.
+/// Whether two neighbouring words are one: their characters say they belong
+/// together and the gap, in font sizes of the previous word, is small enough,
+/// however much the boxes overlap. A word made only of closing punctuation
+/// joins the word before it up to `CLOSING_GAP` away. Digits on both sides of
+/// the gap (pdf_oxide cuts `1996` into `199 6`), a word made only of opening
+/// punctuation before a word, and a hyphen at a line end, the soft one
+/// included, join up to `TOUCH_GAP` away. Two letters never join.
 fn joins(previous: &str, next: &str, gap: f32, previous_size: f32) -> bool {
-    if gap.abs() > TOUCH_GAP * previous_size {
-        return false;
+    let within = |font_sizes: f32| gap <= font_sizes * previous_size;
+    let only = |word: &str, set: &[char]| word.chars().all(|c| set.contains(&c));
+    if only(next, CLOSING) {
+        return within(CLOSING_GAP);
     }
     let digits = match (previous.chars().next_back(), next.chars().next()) {
         (Some(last), Some(first)) => last.is_numeric() && first.is_numeric(),
         _ => false,
     };
-    let only = |word: &str, set: &[char]| word.chars().all(|c| set.contains(&c));
-    digits
-        || only(next, CLOSING)
-        || only(previous, OPENING)
-        || (next.chars().count() == 1 && only(next, HYPHENS))
-        || previous.ends_with(HYPHENS)
+    within(TOUCH_GAP)
+        && (digits
+            || only(previous, OPENING)
+            || (next.chars().count() == 1 && only(next, HYPHENS))
+            || previous.ends_with(HYPHENS))
 }
 
 /// Rebuilds a pdf_oxide line from its words and cuts it at wide gaps.
@@ -648,20 +655,90 @@ mod tests {
     #[test]
     fn overlapping_word_boxes_keep_the_words_apart() {
         // Some PDFs give word boxes that overlap their neighbours by up to a
-        // few font sizes; the word breaks still hold.
+        // few font sizes; the word breaks between letters still hold.
         let line = line_of(vec![
             word("The", 100.0, 700.0, 18.0, 10.0),
             word("social", 115.0, 700.0, 30.0, 10.0),
             word("world", 120.0, 700.0, 25.0, 10.0),
             word("of", 144.7, 700.0, 10.0, 10.0),
-            word("2012", 150.0, 700.0, 20.0, 10.0),
-            word("13", 169.0, 700.0, 10.0, 10.0),
-            word(",", 178.0, 700.0, 2.0, 10.0),
+            word("one", 149.7, 700.0, 15.0, 10.0),
         ]);
 
         let lines = split_line(&line, 0.0, 792.0);
 
-        assert_eq!(texts(&lines), ["The social world of 2012 13 ,"]);
+        assert_eq!(texts(&lines), ["The social world of one"]);
+    }
+
+    /// The text of the one line that `words` make.
+    fn joined(words: Vec<TextBlock>) -> String {
+        let lines = split_line(&line_of(words), 0.0, 792.0);
+        assert_eq!(lines.len(), 1);
+        lines[0].text.clone()
+    }
+
+    #[test]
+    fn digits_join_however_much_their_boxes_overlap() {
+        // "79" starts 0.5 font sizes inside "19".
+        let year = vec![
+            word("19", 100.0, 700.0, 10.0, 10.0),
+            word("79", 105.0, 700.0, 10.0, 10.0),
+        ];
+
+        assert_eq!(joined(year), "1979");
+    }
+
+    #[test]
+    fn digits_a_little_apart_stay_apart() {
+        let numbers = vec![
+            word("12", 100.0, 700.0, 10.0, 10.0),
+            word("13", 110.6, 700.0, 10.0, 10.0),
+        ];
+
+        assert_eq!(joined(numbers), "12 13");
+    }
+
+    #[test]
+    fn a_comma_after_a_number_joins_when_it_overlaps_or_sits_close() {
+        let comma_at = |x: f32| {
+            vec![
+                word("1996", 100.0, 700.0, 20.0, 10.0),
+                word(",", x, 700.0, 2.0, 10.0),
+            ]
+        };
+
+        assert_eq!(joined(comma_at(115.0)), "1996,", "0.5 font sizes inside");
+        assert_eq!(joined(comma_at(120.6)), "1996,", "0.06 font sizes apart");
+        assert_eq!(joined(comma_at(121.5)), "1996 ,", "0.15 font sizes apart");
+    }
+
+    #[test]
+    fn a_word_broken_at_a_soft_hyphen_is_one_word() {
+        let broken = vec![
+            word("con\u{AD}", 100.0, 700.0, 30.0, 10.0),
+            word("tinue", 127.2, 700.0, 25.0, 10.0),
+        ];
+
+        assert_eq!(normalize(&joined(broken)), "continue");
+    }
+
+    #[test]
+    fn letters_stay_apart_even_when_their_boxes_overlap() {
+        let words = vec![
+            word("one", 100.0, 700.0, 15.0, 10.0),
+            word("word", 110.0, 700.0, 20.0, 10.0),
+        ];
+
+        assert_eq!(joined(words), "one word");
+    }
+
+    #[test]
+    fn an_opening_bracket_joins_a_word_that_overlaps_it() {
+        let words = vec![
+            word("(", 100.0, 700.0, 3.0, 10.0),
+            word("Stones", 98.0, 700.0, 30.0, 10.0),
+        ];
+
+        assert_eq!(joined(words), "(Stones");
     }
 
     #[test]

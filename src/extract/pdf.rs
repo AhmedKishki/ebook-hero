@@ -25,10 +25,25 @@ use crate::normalize::normalize;
 /// A gap between two words above this many font sizes is a column gutter or
 /// two labels on one baseline, not a word space.
 const SPLIT_GAP: f32 = 2.0;
-/// A gap above this many font sizes is a word space. Below it the words join,
-/// which mends numbers that pdf_oxide cuts apart (`199 6`) and keeps a
-/// line-end hyphen on its word.
-const SPACE_GAP: f32 = 0.08;
+/// Two words whose gap is within this many font sizes, either way, touch.
+/// pdf_oxide's word breaks hold otherwise: some PDFs give word boxes that
+/// overlap their neighbours, so a gap below zero is no sign of a join.
+const TOUCH_GAP: f32 = 0.025;
+/// Characters that close what comes before them; a word made only of these
+/// belongs to the word it touches on its left.
+const CLOSING: &[char] = &[
+    '.', ',', ';', ':', '!', '?', ')', ']', '}', '’', '”', '"', '\'', '…', '»',
+];
+/// Characters that open what comes after them; a word made only of these
+/// belongs to the word it touches on its right.
+const OPENING: &[char] = &['(', '[', '{', '‘', '“', '"', '\'', '«', '¿', '¡'];
+/// The hyphens that end a line inside a word, the soft one included.
+const HYPHENS: &[char] = &['-', '\u{2010}', '\u{00AD}'];
+/// A page whose rebuilt words of letters average more characters than this
+/// has lost its word spaces...
+const GLUED_WORD_LENGTH: f32 = 9.0;
+/// ... judged only on a page with at least this many such words.
+const GLUED_MIN_WORDS: usize = 50;
 
 /// What the file gave, before the book is assembled. An `Err` is the text of
 /// the pdf_oxide error that stopped that part.
@@ -36,6 +51,8 @@ struct Read {
     /// One result per page, in page order. An `Ok` page without lines has no
     /// text.
     pages: Vec<std::result::Result<PageLines, String>>,
+    /// How many pages fell back to pdf_oxide's own line text.
+    respaced_pages: usize,
     labels: std::result::Result<Vec<PageLabelRange>, String>,
     outline: std::result::Result<Option<Vec<OutlineItem>>, String>,
 }
@@ -54,10 +71,17 @@ pub fn read_pdf(path: &Path, source: Source) -> Result<Document> {
     let page_count = doc.page_count().map_err(|e| unreadable(path, e))?;
     let page_total = u32::try_from(page_count).map_err(|e| unreadable(path, e))?;
 
+    let mut respaced_pages = 0;
+    let pages = (0..page_count)
+        .map(|index| {
+            let (page, respaced) = read_page(&doc, index)?;
+            respaced_pages += usize::from(respaced);
+            Ok(page)
+        })
+        .collect();
     let read = Read {
-        pages: (0..page_count)
-            .map(|index| read_page(&doc, index))
-            .collect(),
+        pages,
+        respaced_pages,
         labels: PageLabelExtractor::extract(&doc).map_err(|e| e.to_string()),
         outline: doc.get_outline().map_err(|e| e.to_string()),
     };
@@ -112,6 +136,14 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
                 reason,
             }),
     );
+    if read.respaced_pages > 0 {
+        let n = read.respaced_pages;
+        let pages = if n == 1 { "page" } else { "pages" };
+        warnings.push(Warning::UnreadablePart {
+            part: "word spacing".to_string(),
+            reason: format!("geometry looked wrong on {n} {pages}; used the PDF's own word breaks"),
+        });
+    }
     let labels = read.labels.unwrap_or_else(|reason| {
         warnings.push(Warning::UnreadablePart {
             part: "page labels".to_string(),
@@ -176,19 +208,81 @@ fn unreadable(path: &Path, reason: impl Display) -> Error {
     }
 }
 
-/// The lines of the page at 0-based `index`, in top-origin points.
-fn read_page(doc: &PdfDocument, index: usize) -> std::result::Result<PageLines, String> {
+/// The lines of the page at 0-based `index`, in top-origin points, and
+/// whether they fell back to pdf_oxide's own line text.
+fn read_page(doc: &PdfDocument, index: usize) -> std::result::Result<(PageLines, bool), String> {
     let (x0, y0, x1, y1) = doc.get_page_media_box(index).map_err(|e| e.to_string())?;
     let text_lines = doc.extract_text_lines(index).map_err(|e| e.to_string())?;
-    let lines = text_lines
-        .iter()
-        .flat_map(|line| split_line(line, x0, y1))
-        .collect();
-    Ok(PageLines {
+    let (lines, respaced) = page_lines(&text_lines, x0, y1);
+    let page = PageLines {
         page: index as u32 + 1,
         width: x1 - x0,
         height: y1 - y0,
         lines,
+    };
+    Ok((page, respaced))
+}
+
+/// The lines of a page rebuilt from their words, and `false`. When the
+/// rebuilt words of letters are too long on average, the joins misread the
+/// page, so its lines are pdf_oxide's own text instead, uncut, and `true`.
+fn page_lines(text_lines: &[TextLine], x0: f32, y1: f32) -> (Vec<Line>, bool) {
+    let lines: Vec<Line> = text_lines
+        .iter()
+        .flat_map(|line| split_line(line, x0, y1))
+        .collect();
+    if !looks_glued(&lines) {
+        return (lines, false);
+    }
+    let lines = text_lines
+        .iter()
+        .filter_map(|line| whole_line(line, x0, y1))
+        .collect();
+    (lines, true)
+}
+
+/// Whether the lines have at least `GLUED_MIN_WORDS` words of letters and
+/// these average more than `GLUED_WORD_LENGTH` characters.
+fn looks_glued(lines: &[Line]) -> bool {
+    let (words, chars) = lines
+        .iter()
+        .flat_map(|line| line.text.split_whitespace())
+        .filter_map(letters_length)
+        .fold((0, 0), |(words, chars), n| (words + 1, chars + n));
+    words >= GLUED_MIN_WORDS && chars as f32 > GLUED_WORD_LENGTH * words as f32
+}
+
+/// The length in characters of a word made of letters once the punctuation
+/// around it is trimmed, or `None` for any other word.
+fn letters_length(word: &str) -> Option<usize> {
+    let core = word.trim_matches(|c: char| !c.is_alphabetic());
+    (!core.is_empty() && core.chars().all(char::is_alphabetic)).then(|| core.chars().count())
+}
+
+/// A pdf_oxide line as it stands, with its text, or `None` when it is blank.
+fn whole_line(line: &TextLine, x0: f32, y1: f32) -> Option<Line> {
+    if line.text.trim().is_empty() {
+        return None;
+    }
+    let sizes: Vec<f32> = line
+        .words
+        .iter()
+        .filter(|word| !word.text.trim().is_empty())
+        .map(|word| word_size(word.avg_font_size, word.bbox.height))
+        .collect();
+    let font_size = if sizes.is_empty() {
+        word_size(0.0, line.bbox.height)
+    } else {
+        sizes.iter().sum::<f32>() / sizes.len() as f32
+    };
+    let b = &line.bbox;
+    Some(Line {
+        text: line.text.clone(),
+        left: b.x - x0,
+        right: b.x + b.width - x0,
+        top: y1 - (b.y + b.height),
+        bottom: y1 - b.y,
+        font_size,
     })
 }
 
@@ -208,15 +302,38 @@ fn word_size(size: f32, height: f32) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// Whether two neighbouring words are one: they touch, within `TOUCH_GAP`
+/// font sizes of the previous word, and their characters say they belong
+/// together. Those are digits on both sides of the gap (pdf_oxide cuts
+/// `1996` into `199 6`), a word of closing punctuation after a word or one of
+/// opening punctuation before it, and a hyphen at a line end.
+fn joins(previous: &str, next: &str, gap: f32, previous_size: f32) -> bool {
+    if gap.abs() > TOUCH_GAP * previous_size {
+        return false;
+    }
+    let digits = match (previous.chars().next_back(), next.chars().next()) {
+        (Some(last), Some(first)) => last.is_numeric() && first.is_numeric(),
+        _ => false,
+    };
+    let only = |word: &str, set: &[char]| word.chars().all(|c| set.contains(&c));
+    digits
+        || only(next, CLOSING)
+        || only(previous, OPENING)
+        || (next.chars().count() == 1 && only(next, HYPHENS))
+        || previous.ends_with(HYPHENS)
+}
+
 /// Rebuilds a pdf_oxide line from its words and cuts it at wide gaps.
 ///
-/// The line's own text is not used: it puts a space between all words, which
-/// breaks numbers apart and detaches a line-end hyphen. `x0` is the left edge
-/// and `y1` the top edge of the page's media box.
+/// The words are pdf_oxide's, kept apart by a space unless [`joins`] says
+/// they are one. The line's own text would put a space between all words,
+/// which breaks numbers apart and detaches a line-end hyphen. `x0` is the
+/// left edge and `y1` the top edge of the page's media box.
 fn split_line(line: &TextLine, x0: f32, y1: f32) -> Vec<Line> {
     let mut runs: Vec<Run> = Vec::new();
     let mut previous_end = 0.0;
     let mut previous_size = 0.0;
+    let mut previous_word = "";
     for word in &line.words {
         if word.text.trim().is_empty() {
             continue;
@@ -232,7 +349,7 @@ fn split_line(line: &TextLine, x0: f32, y1: f32) -> Vec<Line> {
             });
         }
         let Some(run) = runs.last_mut() else { continue };
-        if !run.text.is_empty() && gap > SPACE_GAP * previous_size {
+        if !run.text.is_empty() && !joins(previous_word, &word.text, gap, previous_size) {
             run.text.push(' ');
         }
         run.text.push_str(&word.text);
@@ -245,6 +362,7 @@ fn split_line(line: &TextLine, x0: f32, y1: f32) -> Vec<Line> {
         run.sizes.push(size);
         previous_end = b.x + b.width;
         previous_size = size;
+        previous_word = &word.text;
     }
     runs.into_iter()
         .map(|run| Line {
@@ -496,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn words_join_unless_a_gap_is_wider_than_a_space() {
+    fn digits_and_a_line_end_hyphen_join_when_they_touch() {
         let line = line_of(vec![
             word("in", 100.0, 700.0, 10.0, 10.0),
             word("199", 113.0, 700.0, 15.0, 10.0),
@@ -508,6 +626,127 @@ mod tests {
         let lines = split_line(&line, 0.0, 792.0);
 
         assert_eq!(texts(&lines), ["in 1996 infor-"]);
+    }
+
+    #[test]
+    fn punctuation_and_a_hyphenated_word_join_when_they_touch() {
+        let line = line_of(vec![
+            word("see", 100.0, 700.0, 15.0, 10.0),
+            word("(", 117.0, 700.0, 3.0, 10.0),
+            word("Stones", 120.1, 700.0, 30.0, 10.0),
+            word("),", 150.0, 700.0, 5.0, 10.0),
+            word("self-", 160.0, 700.0, 20.0, 10.0),
+            word("evident", 179.9, 700.0, 30.0, 10.0),
+            word("”.", 210.1, 700.0, 5.0, 10.0),
+        ]);
+
+        let lines = split_line(&line, 0.0, 792.0);
+
+        assert_eq!(texts(&lines), ["see (Stones), self-evident”."]);
+    }
+
+    #[test]
+    fn overlapping_word_boxes_keep_the_words_apart() {
+        // Some PDFs give word boxes that overlap their neighbours by up to a
+        // few font sizes; the word breaks still hold.
+        let line = line_of(vec![
+            word("The", 100.0, 700.0, 18.0, 10.0),
+            word("social", 115.0, 700.0, 30.0, 10.0),
+            word("world", 120.0, 700.0, 25.0, 10.0),
+            word("of", 144.7, 700.0, 10.0, 10.0),
+            word("2012", 150.0, 700.0, 20.0, 10.0),
+            word("13", 169.0, 700.0, 10.0, 10.0),
+            word(",", 178.0, 700.0, 2.0, 10.0),
+        ]);
+
+        let lines = split_line(&line, 0.0, 792.0);
+
+        assert_eq!(texts(&lines), ["The social world of 2012 13 ,"]);
+    }
+
+    #[test]
+    fn letters_stay_apart_however_close_they_are() {
+        let line = line_of(vec![
+            word("one", 100.0, 700.0, 15.0, 10.0),
+            word("word", 115.1, 700.0, 20.0, 10.0),
+            word("two", 135.0, 700.0, 15.0, 10.0),
+        ]);
+
+        let lines = split_line(&line, 0.0, 792.0);
+
+        assert_eq!(texts(&lines), ["one word two"]);
+    }
+
+    /// A line whose words carry no spaces between them while its own text,
+    /// as pdf_oxide gives it, has them.
+    fn glued_line(y: f32) -> TextLine {
+        let words: Vec<TextBlock> = (0..10)
+            .map(|i| word("joinedwordz", 100.0 + 50.0 * i as f32, y, 50.0, 10.0))
+            .collect();
+        TextLine {
+            bbox: Rect {
+                x: 100.0,
+                y,
+                width: 500.0,
+                height: 10.0,
+            },
+            text: "joined wordz ".repeat(10).trim_end().to_string(),
+            words,
+        }
+    }
+
+    #[test]
+    fn a_page_of_overlong_words_falls_back_to_the_pdf_word_breaks() {
+        let text_lines: Vec<TextLine> = (0..5)
+            .map(|i| glued_line(700.0 - 12.0 * i as f32))
+            .collect();
+
+        let (lines, fell_back) = page_lines(&text_lines, 0.0, 792.0);
+
+        assert!(fell_back);
+        assert_eq!(lines.len(), 5);
+        assert!(lines.iter().all(|l| l.text == text_lines[0].text));
+        assert_eq!((lines[0].left, lines[0].right), (100.0, 600.0));
+        assert_eq!((lines[0].top, lines[0].bottom), (82.0, 92.0));
+        assert_eq!(lines[0].font_size, 10.0);
+    }
+
+    #[test]
+    fn long_words_on_a_page_with_few_words_are_kept() {
+        // 40 words of 11 letters: too few words to judge the page.
+        let text_lines: Vec<TextLine> = (0..4)
+            .map(|i| glued_line(700.0 - 12.0 * i as f32))
+            .collect();
+
+        let (lines, fell_back) = page_lines(&text_lines, 0.0, 792.0);
+
+        assert!(!fell_back);
+        assert!(
+            lines
+                .iter()
+                .all(|l| l.text.starts_with("joinedwordz joinedwordz"))
+        );
+    }
+
+    #[test]
+    fn a_page_of_ordinary_words_keeps_the_rebuilt_lines() {
+        let words = |y: f32| {
+            (0..20)
+                .map(|i| word("plain", 100.0 + 30.0 * i as f32, y, 25.0, 10.0))
+                .collect::<Vec<_>>()
+        };
+        let text_lines: Vec<TextLine> = (0..5)
+            .map(|i| {
+                let mut line = line_of(words(700.0 - 12.0 * i as f32));
+                line.text = "something else".to_string();
+                line
+            })
+            .collect();
+
+        let (lines, fell_back) = page_lines(&text_lines, 0.0, 792.0);
+
+        assert!(!fell_back);
+        assert!(lines.iter().all(|l| l.text.starts_with("plain plain")));
     }
 
     #[test]
@@ -777,6 +1016,7 @@ mod tests {
     fn read_of(pages: Vec<std::result::Result<PageLines, String>>) -> Read {
         Read {
             pages,
+            respaced_pages: 0,
             labels: Ok(Vec::new()),
             outline: Ok(None),
         }
@@ -889,6 +1129,7 @@ mod tests {
             Ok(text_page(3)),
             Err("second".to_string()),
         ]);
+        read.respaced_pages = 1;
         read.labels = Err("labels".to_string());
         read.outline = Err("outline".to_string());
 
@@ -900,9 +1141,29 @@ mod tests {
                 Warning::PagesWithoutText { pages: vec![2] },
                 unreadable_part("page 1", "first"),
                 unreadable_part("page 4", "second"),
+                unreadable_part(
+                    "word spacing",
+                    "geometry looked wrong on 1 page; used the PDF's own word breaks"
+                ),
                 unreadable_part("page labels", "labels"),
                 unreadable_part("outline", "outline"),
             ]
+        );
+    }
+
+    #[test]
+    fn pages_that_fell_back_to_the_pdf_word_breaks_are_one_warning() {
+        let mut read = read_of(vec![Ok(text_page(1)), Ok(text_page(2))]);
+        read.respaced_pages = 2;
+
+        let doc = build(read).unwrap();
+
+        assert_eq!(
+            doc.warnings,
+            [unreadable_part(
+                "word spacing",
+                "geometry looked wrong on 2 pages; used the PDF's own word breaks"
+            )]
         );
     }
 

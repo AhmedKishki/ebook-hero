@@ -282,3 +282,34 @@ fn password_protected_pdf_is_unreadable_not_empty() {
         other => panic!("expected Unreadable, got {other:?}"),
     }
 }
+
+/// The mean length in characters of the words made of letters, once the
+/// punctuation around each word is trimmed.
+fn mean_letters_word_length(doc: &Document) -> f64 {
+    let lengths: Vec<usize> = doc
+        .blocks
+        .iter()
+        .flat_map(|b| b.text.split_whitespace())
+        .map(|word| word.trim_matches(|c: char| !c.is_alphabetic()))
+        .filter(|core| !core.is_empty() && core.chars().all(char::is_alphabetic))
+        .map(|core| core.chars().count())
+        .collect();
+    assert!(!lengths.is_empty(), "the book has no words of letters");
+    lengths.iter().sum::<usize>() as f64 / lengths.len() as f64
+}
+
+/// Words keep their spaces in a real book. Set `EBOOK_HERO_SMOKE_PDF` to the
+/// PDF to check.
+#[test]
+#[ignore = "reads the PDF named by EBOOK_HERO_SMOKE_PDF"]
+fn smoke_pdf_word_length() {
+    let Some(path) = std::env::var_os("EBOOK_HERO_SMOKE_PDF") else {
+        eprintln!("EBOOK_HERO_SMOKE_PDF is not set; skipping");
+        return;
+    };
+    let doc = extract(&PathBuf::from(path), "smoke").unwrap();
+
+    let mean = mean_letters_word_length(&doc);
+
+    assert!(mean < 9.0, "mean word length {mean:.2}");
+}

@@ -202,28 +202,51 @@ fn two_column_centre(lines: &[Line], page_width: f32) -> Option<f32> {
 /// Puts the lines of a page into reading order.
 ///
 /// A page is two columns when at least four lines lie entirely left of the
-/// centre and at least four entirely right of it. Then the order is: lines
-/// that cross the centre and sit above the columns, the left column, the right
-/// column, and the remaining lines that cross the centre, among them any that
-/// sit between column lines. Each part runs top to bottom. Any other page keeps
-/// the order it was given.
+/// centre and at least four entirely right of it. The columns start at the
+/// first row where a line of each column shares the height of a line of the
+/// other. Then the order is: the lines above the columns, the left column, the
+/// right column, and the remaining lines that cross the centre, among them any
+/// that sit between column lines. Each part runs top to bottom. The lines
+/// above the columns are those that cross the centre, and any line of a column
+/// that sits above the last of them, such as a short heading over a paragraph
+/// that spans the page. Any other page keeps the order it was given.
 pub fn order_columns(lines: Vec<Line>, page_width: f32) -> Vec<Line> {
     let Some(centre) = two_column_centre(&lines, page_width) else {
         return lines;
     };
-    let columns_top = lines
+    let zone = |line: &Line| zone_of(line, Some(centre));
+    let rows_of = |wanted: Zone| Rows::new(lines.iter().filter(|l| zone(l) == wanted));
+    let (left_rows, right_rows) = (rows_of(Zone::Left), rows_of(Zone::Right));
+    let shares_a_row = |line: &Line| match zone(line) {
+        Zone::Left => right_rows.overlap(line),
+        Zone::Right => left_rows.overlap(line),
+        Zone::Across => false,
+    };
+    let top = |counted: &dyn Fn(&Line) -> bool| {
+        lines
+            .iter()
+            .filter(|l| counted(l))
+            .map(|l| l.top)
+            .reduce(f32::min)
+    };
+    // Columns that never share a row start at their first line.
+    let columns_top = top(&shares_a_row)
+        .or_else(|| top(&|l| zone(l) != Zone::Across))
+        .unwrap_or(f32::INFINITY);
+    let header_bottom = lines
         .iter()
-        .filter(|l| zone_of(l, Some(centre)) != Zone::Across)
-        .map(|l| l.top)
-        .fold(f32::INFINITY, f32::min);
+        .filter(|l| zone(l) == Zone::Across && l.middle() < columns_top)
+        .map(Line::middle)
+        .fold(f32::NEG_INFINITY, f32::max);
     let (mut above, mut left, mut right, mut below) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for line in lines {
-        match zone_of(&line, Some(centre)) {
-            Zone::Left => left.push(line),
-            Zone::Right => right.push(line),
+        match zone(&line) {
             Zone::Across if line.middle() < columns_top => above.push(line),
             Zone::Across => below.push(line),
+            _ if line.middle() < header_bottom => above.push(line),
+            Zone::Left => left.push(line),
+            Zone::Right => right.push(line),
         }
     }
     [above, left, right, below]
@@ -233,6 +256,40 @@ pub fn order_columns(lines: Vec<Line>, page_width: f32) -> Vec<Line> {
             part
         })
         .collect()
+}
+
+/// The heights the lines of one column take up, to ask whether a line of the
+/// other column shares a row with one of them.
+struct Rows {
+    /// The tops of the lines, ascending.
+    tops: Vec<f32>,
+    /// `max_bottom[i]` is the lowest bottom among the first `i + 1` lines.
+    max_bottom: Vec<f32>,
+}
+
+impl Rows {
+    fn new<'a>(lines: impl Iterator<Item = &'a Line>) -> Rows {
+        let mut spans: Vec<(f32, f32)> = lines.map(|l| (l.top, l.bottom)).collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut lowest = f32::NEG_INFINITY;
+        Rows {
+            tops: spans.iter().map(|span| span.0).collect(),
+            max_bottom: spans
+                .iter()
+                .map(|span| {
+                    lowest = lowest.max(span.1);
+                    lowest
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether one of the lines overlaps `line` in height: it starts above
+    /// the bottom of `line` and ends below its top.
+    fn overlap(&self, line: &Line) -> bool {
+        let starting_above = self.tops.partition_point(|&top| top < line.bottom);
+        starting_above > 0 && self.max_bottom[starting_above - 1] > line.top
+    }
 }
 
 /// The value that most of `values` lie within `tolerance` of; on a tie, the
@@ -1255,6 +1312,48 @@ mod tests {
         assert_eq!(names[7], "Omega line 0");
         assert_eq!(names[12], "Omega line 5");
         assert_eq!(names[13], "Footer");
+    }
+
+    #[test]
+    fn a_heading_and_a_paragraph_above_the_columns_are_read_before_them() {
+        let mut lines = vec![
+            // Short enough to lie left of the centre.
+            line_at("Heading", 40.0, 40.0, 80.0, 14.0),
+            line_at("A paragraph across the page", 40.0, 64.0, 352.0, BODY_PT),
+            line_at("over both columns.", 40.0, 76.0, 200.0, BODY_PT),
+        ];
+        lines.extend(two_column_lines());
+
+        let ordered = order_columns(lines, PAGE_W);
+
+        let names = line_texts(&ordered);
+        assert_eq!(
+            names[..5],
+            [
+                "Heading",
+                "A paragraph across the page",
+                "over both columns.",
+                "Alpha line 0",
+                "Alpha line 1"
+            ]
+        );
+        assert_eq!(names[8], "Alpha line 5.");
+        assert_eq!(names[9], "Omega line 0");
+        assert_eq!(names.len(), 15);
+    }
+
+    #[test]
+    fn a_column_that_starts_a_row_higher_stays_in_its_column() {
+        let lines: Vec<Line> = two_column_lines()
+            .into_iter()
+            .filter(|l| l.text != "Alpha line 0")
+            .collect();
+
+        let ordered = order_columns(lines, PAGE_W);
+
+        let names = line_texts(&ordered);
+        assert_eq!(names[0], "Alpha line 1");
+        assert_eq!(names[5], "Omega line 0");
     }
 
     #[test]

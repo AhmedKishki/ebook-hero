@@ -74,7 +74,7 @@ struct ReadArgs {
     path: String,
     /// Read this passage.
     passage_id: Option<u32>,
-    /// Read the passages on this PDF page.
+    /// Read the passages on this PDF page: the physical page, counted from 1. The printed page label is shown in the locator.
     page: Option<u32>,
     /// Read the passages of this outline entry, by the `id` the `outline` tool gives.
     outline_id: Option<u32>,
@@ -172,7 +172,7 @@ impl EbookHero {
     }
 
     #[tool(
-        description = "Read passages as Markdown, with their locators. Give exactly one of `passage_id`, `page` (a PDF page) or `outline_id`. `before` and `after` add up to 10 passages on each side (default 0). Returns at most about 8000 characters per call; when more is left, `next_cursor` is the passage to continue at: pass it as `cursor` and repeat the other arguments unchanged."
+        description = "Read passages as Markdown, with their locators. Give exactly one of `passage_id`, `page` or `outline_id`. `page` is the physical page of a PDF, counted from 1; the printed page label is shown in the locator. `before` and `after` add up to 10 passages on each side (default 0). Returns at most about 8000 characters per call; when more is left, `next_cursor` is the passage to continue at: pass it as `cursor` and repeat the other arguments unchanged."
     )]
     async fn read(&self, Parameters(args): Parameters<ReadArgs>) -> CallToolResult {
         let at = match read_at(&args) {

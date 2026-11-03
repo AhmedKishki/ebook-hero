@@ -627,6 +627,17 @@ fn library_errors_for_bad_arguments_exit_1() {
 }
 
 #[test]
+fn read_help_says_which_page_it_reads() {
+    let env = Env::new();
+
+    let out = env.stdout(&["read", "--help"]);
+
+    assert!(out.contains("physical page"), "{out}");
+    assert!(out.contains("counted from 1"), "{out}");
+    assert!(out.contains("page label"), "{out}");
+}
+
+#[test]
 fn help_lists_every_subcommand() {
     let env = Env::new();
 

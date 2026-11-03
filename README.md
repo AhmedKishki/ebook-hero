@@ -28,7 +28,7 @@ ebook-hero verify book.pdf "a quote you want to check"
 ebook-hero extract book.pdf --format markdown > book.md
 ```
 
-`outline`, `read` (by passage id or outline entry), `index` and `cache` are also commands. Every command takes `--json`, which prints exactly what the MCP tool of the same name returns. `ebook-hero <command> --help` lists the flags.
+`--page` is the physical page of the PDF, counted from 1, as is `page` in the MCP `read` tool; the printed page label is shown in the locator. `outline`, `read` (by passage id or outline entry), `index` and `cache` are also commands. Every command takes `--json`, which prints exactly what the MCP tool of the same name returns. `ebook-hero <command> --help` lists the flags.
 
 ## MCP server
 

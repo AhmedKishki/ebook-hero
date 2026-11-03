@@ -178,6 +178,24 @@ async fn lists_six_tools_and_instructions() {
 }
 
 #[tokio::test]
+async fn the_read_tool_says_which_page_it_reads() {
+    let server = Server::start().await;
+
+    let tools = server.client.list_all_tools().await.unwrap();
+
+    let read = tools.iter().find(|tool| tool.name == "read").unwrap();
+    let description = read.description.as_deref().unwrap();
+    assert!(description.contains("physical page"), "{description}");
+    assert!(description.contains("counted from 1"), "{description}");
+    assert!(description.contains("page label"), "{description}");
+    let page = read.input_schema["properties"]["page"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(page.contains("physical page"), "{page}");
+    server.finish().await;
+}
+
+#[tokio::test]
 async fn every_tool_returns_structured_json_and_text() {
     let server = Server::start().await;
     let quote = "A fair coin has one bit of entropy, because each toss is equally likely to land either way";

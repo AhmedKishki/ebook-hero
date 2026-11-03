@@ -95,7 +95,7 @@ enum Command {
         path: String,
         /// Read this passage
         passage_id: Option<u32>,
-        /// Read the passages on this PDF page
+        /// Read the passages on this PDF page: the physical page, counted from 1 (the printed page label is shown in the locator)
         #[arg(long)]
         page: Option<u32>,
         /// Read the passages of this outline entry

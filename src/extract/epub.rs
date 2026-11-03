@@ -1,6 +1,6 @@
 //! Reads an EPUB 2 or 3 file into the [`Document`] model.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -20,6 +20,13 @@ use crate::normalize::normalize;
 /// bound in memory.
 const MAX_CONTENT_BYTES: u64 = 32 * 1024 * 1024;
 
+/// The most content, in uncompressed bytes, that is read from one book. Once
+/// the content read exceeds it, the rest of the spine is skipped with one
+/// warning, so a small archive cannot fill memory with many large documents.
+const MAX_BOOK_CONTENT_BYTES: u64 = 256 * 1024 * 1024;
+
+const MIB: u64 = 1024 * 1024;
+
 /// Where the blocks of one content document start, and which of them carry
 /// which element id. A table-of-contents target resolves against this.
 #[derive(Default)]
@@ -32,8 +39,15 @@ struct FileBlocks {
 /// included, then the table of contents from the navigation document or the NCX.
 ///
 /// A spine item that cannot be read becomes a [`Warning::UnreadableContent`]
-/// and is skipped. A book with no text in any spine item is an error.
+/// and is skipped, as is a content document listed again in the spine. A book
+/// with no text in any spine item is an error.
 pub fn read_epub(path: &Path, source: Source) -> Result<Document> {
+    read_epub_within(path, source, MAX_BOOK_CONTENT_BYTES)
+}
+
+/// [`read_epub`], reading content documents only until `budget` uncompressed
+/// bytes have been exceeded.
+fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document> {
     let unreadable = |reason: String| Error::Unreadable {
         path: path.to_path_buf(),
         reason,
@@ -50,6 +64,8 @@ pub fn read_epub(path: &Path, source: Source) -> Result<Document> {
     let mut blocks: Vec<Block> = Vec::new();
     let mut warnings = Vec::new();
     let mut files: HashMap<String, FileBlocks> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut content_read = 0;
     let mut print_page = None;
     for entry in epub.spine().iter() {
         let Some(item) = entry.manifest_entry() else {
@@ -60,16 +76,38 @@ pub fn read_epub(path: &Path, source: Source) -> Result<Document> {
             continue;
         };
         let full_path = item.href().path().decode().into_owned();
-        let href = relative_to(&package_dir, &full_path);
+        let href = without_controls(&relative_to(&package_dir, &full_path));
+        if content_read > budget {
+            warnings.push(Warning::UnreadableContent {
+                href,
+                reason: format!(
+                    "book exceeds {} MiB of content; the rest is not read",
+                    MAX_BOOK_CONTENT_BYTES / MIB
+                ),
+            });
+            break;
+        }
+        if !seen.insert(full_path.clone()) {
+            warnings.push(Warning::UnreadableContent {
+                href,
+                reason: "listed again in the spine; read once".to_string(),
+            });
+            continue;
+        }
         let entry_name = full_path.trim_start_matches('/');
-        let content = match read_entry(&mut archive, entry_name, MAX_CONTENT_BYTES) {
+        let read = read_entry(
+            &mut archive,
+            entry_name,
+            MAX_CONTENT_BYTES,
+            &mut content_read,
+        );
+        let content = match read {
             Ok(content) => content,
             Err(error) => {
                 let reason = match error {
-                    EntryError::TooLarge => format!(
-                        "content document exceeds {} MiB",
-                        MAX_CONTENT_BYTES / (1024 * 1024)
-                    ),
+                    EntryError::TooLarge => {
+                        format!("content document exceeds {} MiB", MAX_CONTENT_BYTES / MIB)
+                    }
                     EntryError::Unreadable(reason) => reason,
                 };
                 warnings.push(Warning::UnreadableContent { href, reason });
@@ -179,21 +217,22 @@ enum EntryError {
 }
 
 /// Reads the archive entry `name` as text, refusing one that holds more than
-/// `cap` bytes. The count is of the bytes that actually arrive, because the
-/// size an archive declares for an entry can be false.
+/// `cap` bytes, and adds the bytes it uncompressed to `read`. The count is of
+/// the bytes that actually arrive, because the size an archive declares for an
+/// entry can be false.
 fn read_entry<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     name: &str,
     cap: u64,
+    read: &mut u64,
 ) -> std::result::Result<String, EntryError> {
     let entry = archive
         .by_name(name)
         .map_err(|e| EntryError::Unreadable(e.to_string()))?;
     let mut bytes = Vec::new();
-    entry
-        .take(cap + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| EntryError::Unreadable(e.to_string()))?;
+    let result = entry.take(cap + 1).read_to_end(&mut bytes);
+    *read += bytes.len() as u64;
+    result.map_err(|e| EntryError::Unreadable(e.to_string()))?;
     if bytes.len() as u64 > cap {
         return Err(EntryError::TooLarge);
     }
@@ -223,6 +262,12 @@ fn decode_text(bytes: &[u8]) -> std::result::Result<String, String> {
         .map_err(|_| "content is not valid UTF-16".to_string())
 }
 
+/// `href` without control characters, which a terminal would act on when the
+/// locator is printed.
+fn without_controls(href: &str) -> String {
+    href.chars().filter(|c| !c.is_control()).collect()
+}
+
 /// The path of `path` below `dir`, both absolute. A path outside `dir` keeps
 /// all its components.
 fn relative_to(dir: &str, path: &str) -> String {
@@ -236,10 +281,151 @@ fn relative_to(dir: &str, path: &str) -> String {
 mod tests {
     use std::io::{Cursor, Write};
 
+    use tempfile::TempDir;
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-    use super::{EntryError, read_entry, relative_to};
+    use super::*;
+    use crate::document::Format;
+
+    /// A content document: its manifest href, its entry name below `OEBPS/`,
+    /// and its body.
+    type Item<'a> = (&'a str, &'a str, &'a str);
+
+    fn chapter(body: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body>{body}</body></html>"#
+        )
+    }
+
+    /// Writes an EPUB 3 with `items` in its manifest and the items at the
+    /// indexes `spine` in its spine.
+    fn write_epub(path: &Path, items: &[Item], spine: &[usize]) {
+        let manifest: String = items
+            .iter()
+            .enumerate()
+            .map(|(i, (href, _, _))| {
+                format!(r#"<item id="c{i}" href="{href}" media-type="application/xhtml+xml"/>"#)
+            })
+            .collect();
+        let itemrefs: String = spine
+            .iter()
+            .map(|i| format!(r#"<itemref idref="c{i}"/>"#))
+            .collect();
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:identifier id="uid">urn:uuid:0</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language>
+<meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
+</metadata>
+<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>{manifest}</manifest>
+<spine>{itemrefs}</spine>
+</package>"#
+        );
+        let nav = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Contents</title></head><body><nav epub:type="toc"><ol></ol></nav></body></html>"#;
+        let container = r#"<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut zip = ZipWriter::new(std::fs::File::create(path).unwrap());
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let mut add = |name: &str, data: &[u8]| {
+            zip.start_file(name, stored).unwrap();
+            zip.write_all(data).unwrap();
+        };
+        add("mimetype", b"application/epub+zip");
+        add("META-INF/container.xml", container.as_bytes());
+        add("OEBPS/content.opf", opf.as_bytes());
+        add("OEBPS/nav.xhtml", nav.as_bytes());
+        for (_, entry, body) in items {
+            add(&format!("OEBPS/{entry}"), chapter(body).as_bytes());
+        }
+        zip.finish().unwrap();
+    }
+
+    fn read_with_budget(items: &[Item], spine: &[usize], budget: u64) -> Document {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("book.epub");
+        write_epub(&path, items, spine);
+        let source = Source {
+            sha256: "abc".to_string(),
+            file_name: "book.epub".to_string(),
+            format: Format::Epub,
+        };
+        read_epub_within(&path, source, budget).unwrap()
+    }
+
+    fn texts(doc: &Document) -> Vec<&str> {
+        doc.blocks.iter().map(|b| b.text.as_str()).collect()
+    }
+
+    fn unreadable(href: &str, reason: &str) -> Warning {
+        Warning::UnreadableContent {
+            href: href.to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_document_listed_again_in_the_spine_is_read_once() {
+        let items = [
+            ("ch1.xhtml", "ch1.xhtml", "<p>One.</p>"),
+            ("ch2.xhtml", "ch2.xhtml", "<p>Two.</p>"),
+        ];
+
+        let doc = read_with_budget(&items, &[0, 1, 0, 0], MAX_BOOK_CONTENT_BYTES);
+
+        assert_eq!(texts(&doc), ["One.", "Two."]);
+        assert_eq!(
+            doc.warnings,
+            [
+                unreadable("ch1.xhtml", "listed again in the spine; read once"),
+                unreadable("ch1.xhtml", "listed again in the spine; read once"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reading_stops_once_the_book_exceeds_its_content_budget() {
+        let items = [
+            ("ch1.xhtml", "ch1.xhtml", "<p>One.</p>"),
+            ("ch2.xhtml", "ch2.xhtml", "<p>Two.</p>"),
+            ("ch3.xhtml", "ch3.xhtml", "<p>Three.</p>"),
+            ("ch4.xhtml", "ch4.xhtml", "<p>Four.</p>"),
+        ];
+        // The first document fits the budget exactly; the second takes the
+        // book past it.
+        let budget = chapter("<p>One.</p>").len() as u64;
+
+        let doc = read_with_budget(&items, &[0, 1, 2, 3], budget);
+
+        assert_eq!(texts(&doc), ["One.", "Two."]);
+        assert_eq!(
+            doc.warnings,
+            [unreadable(
+                "ch3.xhtml",
+                "book exceeds 256 MiB of content; the rest is not read"
+            )]
+        );
+    }
+
+    #[test]
+    fn control_characters_are_dropped_from_hrefs() {
+        let items = [("ch%1B1.xhtml", "ch\u{1b}1.xhtml", "<p>One.</p>")];
+
+        let doc = read_with_budget(&items, &[0], MAX_BOOK_CONTENT_BYTES);
+
+        assert_eq!(texts(&doc), ["One."]);
+        assert!(
+            matches!(&doc.blocks[0].locator, Locator::Epub { href, .. } if href == "ch1.xhtml"),
+            "{:?}",
+            doc.blocks[0].locator
+        );
+    }
 
     fn archive(entries: &[(&str, &[u8], CompressionMethod)]) -> ZipArchive<Cursor<Vec<u8>>> {
         let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
@@ -261,11 +447,11 @@ mod tests {
     #[test]
     fn an_entry_at_the_cap_is_read_and_one_byte_more_is_refused() {
         assert_eq!(
-            read_entry(&mut stored(b"0123456789"), "a.xhtml", 10).ok(),
+            read_entry(&mut stored(b"0123456789"), "a.xhtml", 10, &mut 0).ok(),
             Some("0123456789".to_string())
         );
         assert!(matches!(
-            read_entry(&mut stored(b"0123456789A"), "a.xhtml", 10),
+            read_entry(&mut stored(b"0123456789A"), "a.xhtml", 10, &mut 0),
             Err(EntryError::TooLarge)
         ));
     }
@@ -276,15 +462,28 @@ mod tests {
         let mut zip = archive(&[("a.xhtml", &bomb, CompressionMethod::Deflated)]);
 
         assert!(matches!(
-            read_entry(&mut zip, "a.xhtml", 1024),
+            read_entry(&mut zip, "a.xhtml", 1024, &mut 0),
             Err(EntryError::TooLarge)
         ));
         assert_eq!(
-            read_entry(&mut zip, "a.xhtml", bomb.len() as u64)
+            read_entry(&mut zip, "a.xhtml", bomb.len() as u64, &mut 0)
                 .unwrap()
                 .len(),
             bomb.len()
         );
+    }
+
+    #[test]
+    fn the_bytes_uncompressed_are_counted_whether_or_not_the_entry_is_read() {
+        let mut read = 0;
+        read_entry(&mut stored(b"0123456789"), "a.xhtml", 10, &mut read).unwrap();
+        assert_eq!(read, 10);
+        let refused = read_entry(&mut stored(b"0123456789AB"), "a.xhtml", 10, &mut read);
+        assert!(matches!(refused, Err(EntryError::TooLarge)));
+        assert_eq!(read, 21);
+        let invalid = read_entry(&mut stored(b"caf\xE9"), "a.xhtml", 10, &mut read);
+        assert!(matches!(invalid, Err(EntryError::Unreadable(_))));
+        assert_eq!(read, 25);
     }
 
     #[test]
@@ -297,15 +496,15 @@ mod tests {
         }
 
         assert_eq!(
-            read_entry(&mut stored(&le), "a.xhtml", 100).ok(),
+            read_entry(&mut stored(&le), "a.xhtml", 100, &mut 0).ok(),
             Some("<p>é</p>".to_string())
         );
         assert_eq!(
-            read_entry(&mut stored(&be), "a.xhtml", 100).ok(),
+            read_entry(&mut stored(&be), "a.xhtml", 100, &mut 0).ok(),
             Some("<p>é</p>".to_string())
         );
         assert!(matches!(
-            read_entry(&mut stored(&[0xFF, 0xFE, 0x41]), "a.xhtml", 100),
+            read_entry(&mut stored(&[0xFF, 0xFE, 0x41]), "a.xhtml", 100, &mut 0),
             Err(EntryError::Unreadable(_))
         ));
     }
@@ -313,11 +512,11 @@ mod tests {
     #[test]
     fn a_missing_entry_and_invalid_utf8_are_unreadable() {
         assert!(matches!(
-            read_entry(&mut stored(b"x"), "b.xhtml", 100),
+            read_entry(&mut stored(b"x"), "b.xhtml", 100, &mut 0),
             Err(EntryError::Unreadable(_))
         ));
         assert!(matches!(
-            read_entry(&mut stored(b"caf\xE9"), "a.xhtml", 100),
+            read_entry(&mut stored(b"caf\xE9"), "a.xhtml", 100, &mut 0),
             Err(EntryError::Unreadable(_))
         ));
     }

@@ -30,8 +30,20 @@ const SPLIT_GAP: f32 = 2.0;
 /// line-end hyphen on its word.
 const SPACE_GAP: f32 = 0.08;
 
+/// What the file gave, before the book is assembled. An `Err` is the text of
+/// the pdf_oxide error that stopped that part.
+struct Read {
+    /// One result per page, in page order. An `Ok` page without lines has no
+    /// text.
+    pages: Vec<std::result::Result<PageLines, String>>,
+    labels: std::result::Result<Vec<PageLabelRange>, String>,
+    outline: std::result::Result<Option<Vec<OutlineItem>>, String>,
+}
+
 /// Reads a PDF. Fails with `Unreadable` when the file cannot be parsed or
-/// needs a password, and with `NoTextLayer` when no page has any text.
+/// needs a password, and with `NoTextLayer` when no page has any text. A part
+/// that cannot be read, a page, the page labels or the outline, is left out
+/// and named in an `UnreadablePart` warning.
 pub fn read_pdf(path: &Path, source: Source) -> Result<Document> {
     let doc = PdfDocument::open(path).map_err(|e| unreadable(path, e))?;
     // An encrypted PDF opens, but every page then reads as empty, which would
@@ -42,35 +54,84 @@ pub fn read_pdf(path: &Path, source: Source) -> Result<Document> {
     let page_count = doc.page_count().map_err(|e| unreadable(path, e))?;
     let page_total = u32::try_from(page_count).map_err(|e| unreadable(path, e))?;
 
+    let read = Read {
+        pages: (0..page_count)
+            .map(|index| read_page(&doc, index))
+            .collect(),
+        labels: PageLabelExtractor::extract(&doc).map_err(|e| e.to_string()),
+        outline: doc.get_outline().map_err(|e| e.to_string()),
+    };
+    let metadata = Metadata {
+        title: info_text(&doc, "Title"),
+        authors: info_text(&doc, "Author").into_iter().collect(),
+        language: None,
+        page_count: Some(page_total),
+        spine_count: None,
+    };
+    build_document(path, source, metadata, read)
+}
+
+/// Turns what was read into a [`Document`].
+///
+/// When no page has text the book is an error: `Unreadable` with the first
+/// page error if any page failed, otherwise `NoTextLayer`. Otherwise a page
+/// that failed is a warning of its own and is not counted among the pages
+/// without text.
+fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -> Result<Document> {
     let mut pages = Vec::new();
     let mut without_text = Vec::new();
-    let mut first_error = None;
-    for index in 0..page_count {
+    let mut failed = Vec::new();
+    for (index, result) in read.pages.into_iter().enumerate() {
         let number = index as u32 + 1;
-        match read_page(&doc, index, number) {
-            Ok(page) if !page.lines.is_empty() => pages.push(page),
-            Ok(_) => without_text.push(number),
-            Err(error) => {
-                without_text.push(number);
-                first_error.get_or_insert(error);
-            }
+        match result {
+            Ok(page) if page.lines.is_empty() => without_text.push(number),
+            Ok(page) => pages.push(page),
+            Err(reason) => failed.push((number, reason)),
         }
     }
     if pages.is_empty() {
-        return Err(match first_error {
-            Some(error) => unreadable(path, error),
+        return Err(match failed.into_iter().next() {
+            Some((_, reason)) => unreadable(path, reason),
             None => Error::NoTextLayer {
                 path: path.to_path_buf(),
             },
         });
     }
 
-    let labels = PageLabelExtractor::extract(&doc).unwrap_or_default();
+    let mut warnings = Vec::new();
+    if !without_text.is_empty() {
+        warnings.push(Warning::PagesWithoutText {
+            pages: without_text,
+        });
+    }
+    warnings.extend(
+        failed
+            .into_iter()
+            .map(|(number, reason)| Warning::UnreadablePart {
+                part: format!("page {number}"),
+                reason,
+            }),
+    );
+    let labels = read.labels.unwrap_or_else(|reason| {
+        warnings.push(Warning::UnreadablePart {
+            part: "page labels".to_string(),
+            reason,
+        });
+        Vec::new()
+    });
+    let items = read.outline.unwrap_or_else(|reason| {
+        warnings.push(Warning::UnreadablePart {
+            part: "outline".to_string(),
+            reason,
+        });
+        None
+    });
     let label_of = |page: u32| page_label(&labels, page);
 
     let skip = furniture(&pages);
     let laid = paragraphs(&pages, &skip);
-    let entries = outline_entries(&doc, page_count);
+    let page_count = metadata.page_count.unwrap_or_default() as usize;
+    let entries = outline_entries(items.as_deref().unwrap_or_default(), page_count);
     let (mut blocks, outline) = place_headings(&laid, &entries, &label_of);
     assign_sections(&mut blocks);
 
@@ -97,23 +158,10 @@ pub fn read_pdf(path: &Path, source: Source) -> Result<Document> {
         })
         .collect();
 
-    let warnings = if without_text.is_empty() {
-        Vec::new()
-    } else {
-        vec![Warning::PagesWithoutText {
-            pages: without_text,
-        }]
-    };
     Ok(Document {
         schema_version: SCHEMA_VERSION,
         source,
-        metadata: Metadata {
-            title: info_text(&doc, "Title"),
-            authors: info_text(&doc, "Author").into_iter().collect(),
-            language: None,
-            page_count: Some(page_total),
-            spine_count: None,
-        },
+        metadata,
         outline,
         blocks,
         furniture: furniture_blocks,
@@ -128,12 +176,8 @@ fn unreadable(path: &Path, reason: impl Display) -> Error {
     }
 }
 
-/// The lines of one page, in top-origin points. `number` is 1-based.
-fn read_page(
-    doc: &PdfDocument,
-    index: usize,
-    number: u32,
-) -> std::result::Result<PageLines, String> {
+/// The lines of the page at 0-based `index`, in top-origin points.
+fn read_page(doc: &PdfDocument, index: usize) -> std::result::Result<PageLines, String> {
     let (x0, y0, x1, y1) = doc.get_page_media_box(index).map_err(|e| e.to_string())?;
     let text_lines = doc.extract_text_lines(index).map_err(|e| e.to_string())?;
     let lines = text_lines
@@ -141,7 +185,7 @@ fn read_page(
         .flat_map(|line| split_line(line, x0, y1))
         .collect();
     Ok(PageLines {
-        page: number,
+        page: index as u32 + 1,
         width: x1 - x0,
         height: y1 - y0,
         lines,
@@ -247,10 +291,7 @@ struct Entry {
 
 /// The bookmarks that lead to a page, depth first. The level is the depth in
 /// the bookmark tree, the top level being 1.
-fn outline_entries(doc: &PdfDocument, page_count: usize) -> Vec<Entry> {
-    let Ok(Some(items)) = doc.get_outline() else {
-        return Vec::new();
-    };
+fn outline_entries(items: &[OutlineItem], page_count: usize) -> Vec<Entry> {
     let mut entries = Vec::new();
     let mut stack: Vec<(&OutlineItem, usize)> = items.iter().rev().map(|i| (i, 1)).collect();
     while let Some((item, depth)) = stack.pop() {
@@ -424,6 +465,7 @@ mod tests {
     use pdf_oxide::layout::TextBlock;
 
     use super::*;
+    use crate::document::Format;
 
     fn word(text: &str, x: f32, y: f32, width: f32, size: f32) -> TextBlock {
         TextBlock {
@@ -704,5 +746,237 @@ mod tests {
         assert_eq!(blocks[1].kind, BlockKind::Note { label: None });
         assert_eq!(outline[0].block_id, Some(2));
         assert_eq!(outline[1].block_id, Some(0));
+    }
+    fn text_page(page: u32) -> PageLines {
+        let line = |n: f32, text: &str| Line {
+            text: text.to_string(),
+            left: 100.0,
+            top: 300.0 + 12.0 * n,
+            right: 500.0,
+            bottom: 310.0 + 12.0 * n,
+            font_size: 10.0,
+        };
+        PageLines {
+            page,
+            width: 600.0,
+            height: 800.0,
+            lines: vec![
+                line(0.0, "Some text on this page"),
+                line(1.0, "runs over two lines."),
+            ],
+        }
+    }
+
+    fn empty_page(page: u32) -> PageLines {
+        PageLines {
+            lines: Vec::new(),
+            ..text_page(page)
+        }
+    }
+
+    fn read_of(pages: Vec<std::result::Result<PageLines, String>>) -> Read {
+        Read {
+            pages,
+            labels: Ok(Vec::new()),
+            outline: Ok(None),
+        }
+    }
+
+    fn build(read: Read) -> Result<Document> {
+        let source = Source {
+            sha256: "abc".to_string(),
+            file_name: "book.pdf".to_string(),
+            format: Format::Pdf,
+        };
+        let metadata = Metadata {
+            title: None,
+            authors: Vec::new(),
+            language: None,
+            page_count: Some(read.pages.len() as u32),
+            spine_count: None,
+        };
+        build_document(Path::new("book.pdf"), source, metadata, read)
+    }
+
+    fn unreadable_part(part: &str, reason: &str) -> Warning {
+        Warning::UnreadablePart {
+            part: part.to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_failed_page_is_an_unreadable_part_not_a_page_without_text() {
+        let read = read_of(vec![
+            Ok(text_page(1)),
+            Err("bad xref".to_string()),
+            Ok(empty_page(3)),
+        ]);
+
+        let doc = build(read).unwrap();
+
+        assert_eq!(
+            doc.warnings,
+            [
+                Warning::PagesWithoutText { pages: vec![3] },
+                unreadable_part("page 2", "bad xref"),
+            ]
+        );
+        assert_eq!(doc.blocks.len(), 1);
+    }
+
+    #[test]
+    fn an_outline_error_is_an_unreadable_part_and_leaves_no_outline() {
+        let mut read = read_of(vec![Ok(text_page(1))]);
+        read.outline = Err("broken tree".to_string());
+
+        let doc = build(read).unwrap();
+
+        assert_eq!(doc.warnings, [unreadable_part("outline", "broken tree")]);
+        assert!(doc.outline.is_empty());
+        assert_eq!(doc.blocks.len(), 1);
+    }
+
+    #[test]
+    fn a_pdf_without_an_outline_has_no_warning() {
+        let mut read = read_of(vec![Ok(text_page(1))]);
+        assert!(build(read).unwrap().warnings.is_empty());
+
+        read = read_of(vec![Ok(text_page(1))]);
+        read.outline = Ok(Some(Vec::new()));
+        assert!(build(read).unwrap().warnings.is_empty());
+    }
+
+    #[test]
+    fn a_page_label_error_is_an_unreadable_part_and_leaves_no_labels() {
+        let mut read = read_of(vec![Ok(text_page(1))]);
+        read.labels = Err("bad number tree".to_string());
+
+        let doc = build(read).unwrap();
+
+        assert_eq!(
+            doc.warnings,
+            [unreadable_part("page labels", "bad number tree")]
+        );
+        assert!(matches!(
+            doc.blocks[0].locator,
+            Locator::Pdf {
+                page_label: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn page_label_ranges_label_the_blocks() {
+        let mut read = read_of(vec![Ok(text_page(1))]);
+        read.labels = Ok(vec![PageLabelRange::new(0)]);
+
+        let doc = build(read).unwrap();
+
+        assert!(doc.warnings.is_empty());
+        assert!(matches!(
+            &doc.blocks[0].locator,
+            Locator::Pdf { page_label: Some(label), .. } if label == "1"
+        ));
+    }
+
+    #[test]
+    fn warnings_come_in_a_fixed_order() {
+        let mut read = read_of(vec![
+            Err("first".to_string()),
+            Ok(empty_page(2)),
+            Ok(text_page(3)),
+            Err("second".to_string()),
+        ]);
+        read.labels = Err("labels".to_string());
+        read.outline = Err("outline".to_string());
+
+        let doc = build(read).unwrap();
+
+        assert_eq!(
+            doc.warnings,
+            [
+                Warning::PagesWithoutText { pages: vec![2] },
+                unreadable_part("page 1", "first"),
+                unreadable_part("page 4", "second"),
+                unreadable_part("page labels", "labels"),
+                unreadable_part("outline", "outline"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_book_without_text_is_an_error_named_for_its_cause() {
+        let reason = |read| match build(read).unwrap_err() {
+            Error::Unreadable { path, reason } => {
+                assert_eq!(path, Path::new("book.pdf"));
+                Some(reason)
+            }
+            Error::NoTextLayer { path } => {
+                assert_eq!(path, Path::new("book.pdf"));
+                None
+            }
+            other => panic!("unexpected error {other:?}"),
+        };
+
+        let all_failed = read_of(vec![Err("one".to_string()), Err("two".to_string())]);
+        assert_eq!(reason(all_failed).as_deref(), Some("one"));
+        let failed_and_empty = read_of(vec![Ok(empty_page(1)), Err("two".to_string())]);
+        assert_eq!(reason(failed_and_empty).as_deref(), Some("two"));
+        let all_empty = read_of(vec![Ok(empty_page(1)), Ok(empty_page(2))]);
+        assert_eq!(reason(all_empty), None);
+        assert_eq!(reason(read_of(Vec::new())), None);
+    }
+
+    fn item(title: &str, dest: Option<Destination>, children: Vec<OutlineItem>) -> OutlineItem {
+        OutlineItem {
+            title: title.to_string(),
+            dest,
+            children,
+        }
+    }
+
+    #[test]
+    fn bookmarks_flatten_depth_first_with_their_depth_as_level() {
+        let page = |index| Some(Destination::PageIndex(index));
+        let items = vec![
+            item(
+                " Part  One ",
+                page(0),
+                vec![
+                    item(
+                        "Chapter",
+                        page(1),
+                        vec![item("Section", page(1), Vec::new())],
+                    ),
+                    item(
+                        "Named",
+                        Some(Destination::Named("x".to_string())),
+                        vec![item("Under named", page(2), Vec::new())],
+                    ),
+                    item("Past the end", page(9), Vec::new()),
+                ],
+            ),
+            item("   ", page(0), Vec::new()),
+            item("Two", page(2), Vec::new()),
+        ];
+
+        let entries = outline_entries(&items, 3);
+
+        let flat: Vec<_> = entries
+            .iter()
+            .map(|e| (e.title.as_str(), e.level, e.page))
+            .collect();
+        assert_eq!(
+            flat,
+            [
+                ("Part One", 1, 1),
+                ("Chapter", 2, 2),
+                ("Section", 3, 2),
+                ("Under named", 3, 3),
+                ("Two", 1, 3),
+            ]
+        );
     }
 }

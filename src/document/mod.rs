@@ -3,7 +3,7 @@ pub mod markdown;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Document {
@@ -103,8 +103,19 @@ pub enum Locator {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Warning {
-    PagesWithoutText { pages: Vec<u32> },
-    UnreadableContent { href: String, reason: String },
+    PagesWithoutText {
+        pages: Vec<u32>,
+    },
+    UnreadableContent {
+        href: String,
+        reason: String,
+    },
+    /// A part of the file that could not be read and is left out, such as
+    /// `page 7`, `page labels` or `outline`.
+    UnreadablePart {
+        part: String,
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -209,11 +220,18 @@ mod tests {
                 href: "ch9.xhtml".to_string(),
                 reason: "bad markup".to_string(),
             },
+            Warning::UnreadablePart {
+                part: "page labels".to_string(),
+                reason: "bad tree".to_string(),
+            },
         ];
         let json = serde_json::to_string(&doc).unwrap();
         assert!(json.contains(r#""format":"epub""#));
         assert!(json.contains(r#""type":"math""#));
         assert!(json.contains(r#""type":"pages_without_text""#));
+        assert!(
+            json.contains(r#"{"type":"unreadable_part","part":"page labels","reason":"bad tree"}"#)
+        );
         assert_eq!(serde_json::from_str::<Document>(&json).unwrap(), doc);
     }
 }

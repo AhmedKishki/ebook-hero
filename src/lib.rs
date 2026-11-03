@@ -10,5 +10,6 @@ pub mod read;
 pub mod search;
 pub mod session;
 pub mod settings;
+pub mod verify;
 
 pub use error::{Error, Result};

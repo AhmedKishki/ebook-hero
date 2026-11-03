@@ -15,6 +15,7 @@ use crate::read::{self, BookInfo, OutlineResult, ReadParams, ReadResult};
 use crate::search::find::{self, FindResult};
 use crate::search::{self, SearchParams, SearchResult};
 use crate::settings::OPEN_BOOKS;
+use crate::verify::{self, VerifyResult};
 use crate::{Error, Result};
 
 /// A file's size and modification time when it was hashed, and the hash.
@@ -120,6 +121,12 @@ impl Session {
     pub fn info(&self, path: &str) -> Result<BookInfo> {
         let book = self.book(path)?;
         Ok(read::info(&book))
+    }
+
+    /// Checks a quote against the book at `path`; see [`verify::verify_quote`].
+    pub fn verify(&self, path: &str, quote: &str, passage_id: Option<u32>) -> Result<VerifyResult> {
+        let book = self.book(path)?;
+        verify::verify_quote(&book, quote, passage_id)
     }
 
     /// Builds both stages of the index of the book at `path` and summarizes

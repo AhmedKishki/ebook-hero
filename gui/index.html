@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>ebook-hero</title>
+<style>
+  :root {
+    --night: #0f1b33;
+    --panel: #162a4d;
+    --gold: #f0bf3c;
+    --gold-dark: #a86f16;
+    --parchment: #f3ead0;
+    --ruby: #b13347;
+    --gem: #43e6cb;
+    --alarm: #ff9aa8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 10px;
+    background: var(--night);
+    color: var(--parchment);
+    font: 14px/1.4 Georgia, "Times New Roman", serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    gap: 8px;
+  }
+  [hidden] { display: none !important; }
+
+  /* The top is two rows: the tool and the book, then what to ask of it. The
+     logo spans both, so the reading space below gets what a title would take. */
+  form {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    gap: 6px 8px;
+    align-items: center;
+    padding: 7px 10px;
+    background: var(--panel);
+    border: 2px solid var(--gold);
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 2px var(--night), inset 0 0 0 3px var(--gold-dark);
+  }
+  #logo { grid-column: 1; grid-row: 1 / span 2; width: 48px; height: 48px; margin-right: 2px; }
+  #tool { grid-column: 2; grid-row: 1; }
+  #path { grid-column: 3; grid-row: 1; }
+  #browse { grid-column: 4; grid-row: 1; }
+  #address { grid-column: 2; grid-row: 2; }
+  #query { grid-column: 3; grid-row: 2; }
+  #address[hidden] + #query { grid-column: 2 / 4; }
+  #run { grid-column: 4; grid-row: 2; }
+  #tool, #address { min-width: 7.5em; }
+
+  input, select, button {
+    font: inherit;
+    color: var(--parchment);
+    background: var(--night);
+    border: 1px solid var(--gold-dark);
+    border-radius: 4px;
+    padding: 4px 9px;
+    min-width: 0;
+  }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--gem); outline-offset: 1px; }
+  input:disabled { opacity: .3; }
+  button { cursor: pointer; color: var(--gold); }
+  button:hover:not(:disabled) { border-color: var(--gold); }
+  #run { background: var(--ruby); color: #fff; border-color: var(--gold); font-weight: bold; padding: 4px 20px; }
+  #run:disabled { opacity: .55; cursor: progress; }
+
+  /* The tabs, and on the same row what the last command or the open book has to say. */
+  #bar { display: flex; align-items: flex-end; gap: 12px; }
+  #tabs { display: flex; gap: 6px; flex: none; }
+  #tabs button { border-bottom-width: 3px; border-radius: 4px 4px 0 0; padding: 2px 14px; }
+  #tabs button[aria-selected="true"] { color: var(--parchment); border-bottom-color: var(--gold); }
+  #status { flex: 1; min-width: 0; margin: 0; text-align: right; font-size: 13px; color: var(--gem); }
+  #status.failed { color: var(--alarm); }
+
+  a[data-passage] { color: var(--gem); text-decoration: underline dotted; cursor: pointer; }
+  a[data-passage]:hover { text-decoration: underline; }
+
+  pre {
+    margin: 0;
+    padding: 10px 12px;
+    background: #0a1226;
+    border: 1px solid var(--gold-dark);
+    border-radius: 4px;
+    font: 13px/1.5 "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    overflow: auto;
+  }
+  #out { flex: 1; min-height: 0; }
+  #out:empty { display: none; }
+  #err { max-height: 25vh; color: #e6c27a; }
+  #err.failed { color: var(--alarm); border-color: var(--ruby); }
+  #err:empty { display: none; }
+
+  #book-text {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 14px 24px;
+    background: var(--parchment);
+    color: #2a1b12;
+    border: 2px solid var(--gold-dark);
+    border-radius: 4px;
+    font: 17px/1.65 Georgia, "Times New Roman", serif;
+  }
+  /* A long book is drawn as it scrolls into view. */
+  #book-text > * { max-width: 68ch; margin: 0 auto .9em; content-visibility: auto; contain-intrinsic-size: auto 4em; }
+  #book-text :is(h1, h2, h3, h4, h5, h6) { color: #6b1b27; line-height: 1.25; margin-top: 1.4em; }
+  #book-text .item::before { content: "• "; }
+  #book-text .mark { background: #fbe39a; box-shadow: -10px 0 0 var(--gold); border-radius: 2px; }
+</style>
+</head>
+<body>
+<form id="form">
+  <img id="logo" src="icon.png" alt="ebook-hero">
+  <select id="tool" aria-label="Tool"></select>
+  <input id="path" type="text" placeholder="Book: /path/to/book.pdf or .epub" aria-label="Book" spellcheck="false" autocomplete="off" autofocus>
+  <button type="button" id="browse">Browse…</button>
+  <select id="address" hidden aria-label="What the number is"></select>
+  <input id="query" type="text" spellcheck="false" autocomplete="off">
+  <button type="submit" id="run">Run</button>
+</form>
+
+<div id="bar">
+  <div id="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-result" aria-selected="true">Result</button>
+    <button type="button" role="tab" id="tab-book" aria-selected="false">Book</button>
+  </div>
+  <p id="status" role="status"></p>
+</div>
+
+<pre id="out" aria-label="Result"></pre>
+<pre id="err" aria-label="Messages"></pre>
+<article id="book-text" aria-label="Book" hidden></article>
+
+<script src="viewer.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>

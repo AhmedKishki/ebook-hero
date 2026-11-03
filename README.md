@@ -1,6 +1,8 @@
+<p align="center"><img src="assets/logo.svg" alt="A winged shield bearing a tome with a Rust cog on it, and a sword rising behind the shield" width="220"></p>
+
 # ebook-hero
 
-ebook-hero searches a PDF or EPUB, reads the text around what it finds, and checks whether a quote really occurs in the book. It runs as a command-line tool for people and as an MCP server over stdio for agents. Each call names one book file: the first call indexes that book, and later calls reuse the index.
+ebook-hero searches a PDF or EPUB, reads the text around what it finds, and checks whether a quote really occurs in the book. There are three ways to use it: as a [command-line tool](#command-line), as an [MCP server](#mcp-server) over stdio for agents, and in a small [desktop window](#desktop-window). Each call names one book file: the first call indexes that book, and later calls reuse the index.
 
 ## Install
 
@@ -14,6 +16,8 @@ From a clone:
 cargo build --release
 sudo install target/release/ebook-hero /usr/local/bin/
 ```
+
+This installs the command-line tool and the MCP server, which are the same binary. The desktop window is separate and runs this binary; see [Desktop window](#desktop-window).
 
 ## Example
 
@@ -111,6 +115,30 @@ For any other client, add this server entry:
 | `find` | Every passage that contains an exact phrase, with the total number of occurrences. |
 | `read` | Passages as Markdown, by passage id, PDF page or outline entry. |
 | `verify_quote` | Whether a quote occurs in the book, and where. |
+
+## Desktop window
+
+`gui/` holds a small Electron window over the same commands. It has a select for the tool, the path of a book (or Browse…) and one box for the query, phrase, quote or number. It shows what the command prints, and beside the tabs, which binary ran. It runs the `ebook-hero` binary and does not link the library.
+
+![The window after find "off with her head" on alice.epub](assets/gui-find.png)
+
+![The window after read passage 95 of alice.epub](assets/gui-read.png)
+
+Each passage a result names, such as `passage 95`, is a link. Clicking it opens the Book tab, which shows the whole book as `ebook-hero extract` reads it, scrolled to that passage and with its paragraphs marked. In an EPUB the match is exact. In a PDF the passage's paragraphs are marked when they can be matched, and otherwise its whole page range, which the line beside the tabs says. The Book tab also opens the book from its start. It shows the extracted text, not the book's own layout, so there are no images.
+
+![The Book tab with passage 95 marked](assets/gui-book.png)
+
+It needs Node.js with npm. Once, from a clone:
+
+```sh
+cd gui
+npm install
+npm link
+```
+
+Then `ebook-hero-gui` opens the window from any directory. `npm start` in `gui/` does the same without the link. `npm link` makes a symlink to the clone, so after you move or delete the clone, run it again from the new place.
+
+The window runs the first of these that exists: `$EBOOK_HERO_BIN`, `target/release/ebook-hero` in the clone, then `ebook-hero` on the `PATH`. After the [install](#install) above it needs no build in the clone. For `read`, choose passage, page or outline and type its number. A first `search` of a book builds its index and, in the default hybrid mode, downloads the models (see [Storage](#storage)), so the window shows "Running…" for a while. `npm test` in `gui/` checks how the form becomes a command; the tests that need a binary skip themselves if there is none.
 
 ## Storage
 

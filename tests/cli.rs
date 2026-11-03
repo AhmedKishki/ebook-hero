@@ -531,6 +531,34 @@ fn ebook_hero_log_selects_the_log_lines() {
 }
 
 #[test]
+fn a_cache_that_does_not_load_is_rebuilt_with_one_warning_naming_the_cause() {
+    let env = Env::new();
+    let books = TempDir::new().unwrap();
+    let path = epub(books.path(), &["Words to index."]);
+    env.stdout(&["info", &path]);
+    let cached = list_indexes(&env.cache_root()).unwrap();
+    let document = env
+        .cache_root()
+        .join(&cached[0].sha256)
+        .join("document.json");
+    fs::write(&document, b"not json").unwrap();
+
+    let assert = env.run(&["info", &path]).success();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    let warnings: Vec<&str> = stderr.lines().filter(|l| l.contains("WARN")).collect();
+    assert_eq!(warnings.len(), 1, "{stderr}");
+    assert!(
+        warnings[0].contains(&*document.to_string_lossy()),
+        "{stderr}"
+    );
+    assert!(
+        String::from_utf8_lossy(&fs::read(&document).unwrap()).starts_with('{'),
+        "the document was written again"
+    );
+}
+
+#[test]
 fn a_log_filter_that_does_not_parse_is_reported_and_ignored() {
     let env = Env::new();
 

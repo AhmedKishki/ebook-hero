@@ -40,17 +40,23 @@ impl Book {
     /// Otherwise the build lock for this book is taken, the cache is checked
     /// again (another process may have built it while this one waited), and
     /// only then is the index built. A cache that does not load is rebuilt
-    /// like a stale one.
+    /// like a stale one, and why it did not load is logged as a warning.
     pub fn open(cache_root: &Path, path: &Path, sha256: &str) -> Result<Book> {
         cache::require_sha256(sha256)?;
         cache::ensure_private_dir(cache_root)?;
         let dir = cache::stage_dir(cache_root, sha256);
-        if let Some(book) = load_current(&dir, path, sha256) {
+        if let Ok(Some(book)) = load_current(&dir, path, sha256) {
             return Ok(book);
         }
         cache::with_lock(cache_root, sha256, LOCK_WAIT, || {
-            if let Some(book) = load_current(&dir, path, sha256) {
-                return Ok(book);
+            match load_current(&dir, path, sha256) {
+                Ok(Some(book)) => return Ok(book),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(
+                    path = %dir.display(),
+                    %error,
+                    "the cached index did not load; building it again"
+                ),
             }
             cache::remove_stale(cache_root, sha256)?;
             build(cache_root, &dir, path, sha256)?;
@@ -180,12 +186,19 @@ fn removed() -> Error {
     Error::Index("the cached index for this book was removed; call again to rebuild it".to_string())
 }
 
-fn load_current(dir: &Path, path: &Path, sha256: &str) -> Option<Book> {
-    let manifest: Manifest = cache::read_json(&dir.join(MANIFEST_FILE)).ok()?;
-    if !manifest.is_current_stage1() {
-        return None;
+/// The book cached in `dir`, if its stage 1 is current. `Ok(None)` when
+/// nothing is cached there or another version built it; an error when the
+/// cache should load and does not.
+fn load_current(dir: &Path, path: &Path, sha256: &str) -> Result<Option<Book>> {
+    let manifest_path = dir.join(MANIFEST_FILE);
+    if !manifest_path.is_file() {
+        return Ok(None);
     }
-    load(dir, path, sha256).ok()
+    let manifest: Manifest = cache::read_json(&manifest_path)?;
+    if !manifest.is_current_stage1() {
+        return Ok(None);
+    }
+    load(dir, path, sha256).map(Some)
 }
 
 fn load(dir: &Path, path: &Path, sha256: &str) -> Result<Book> {

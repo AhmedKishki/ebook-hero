@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod document;
+pub mod embed;
 pub mod error;
 pub mod extract;
 pub mod index;

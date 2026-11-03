@@ -3,16 +3,20 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-use crate::Result;
 use crate::document::Document;
+use crate::embed::Models;
 use crate::extract::extract;
 use crate::index::cache::{
-    self, DOCUMENT_FILE, MANIFEST_FILE, Manifest, PASSAGES_FILE, TANTIVY_DIR, expected_stage1,
+    self, DOCUMENT_FILE, EmbeddingStamp, MANIFEST_FILE, Manifest, PASSAGES_FILE, TANTIVY_DIR,
+    VECTORS_FILE, expected_stage1,
 };
 use crate::index::lexical::LexicalIndex;
+use crate::index::vectors::Vectors;
 use crate::passages::{Passage, build_passages};
-use crate::settings::LOCK_WAIT;
+use crate::settings::{EMBEDDING_DIM, EMBEDDING_MODEL, LOCK_WAIT};
+use crate::{Error, Result};
 
 pub struct Book {
     pub path: PathBuf,
@@ -21,6 +25,8 @@ pub struct Book {
     pub document: Document,
     pub passages: Vec<Passage>,
     pub lexical: LexicalIndex,
+    /// Stage 2 of the index, loaded or built the first time it is needed.
+    vectors: OnceLock<Vectors>,
 }
 
 impl Book {
@@ -51,6 +57,93 @@ impl Book {
             load(&dir, path, sha256)
         })
     }
+
+    /// The passage embeddings, stage 2 of the index: loaded from the cache if
+    /// they are there, else made with `models` and cached.
+    ///
+    /// Embeddings are loaded only if the manifest says the current model made
+    /// them and the file holds exactly one row per passage. Otherwise, under
+    /// the same lock as stage 1, every passage is embedded, `progress` is told
+    /// how many are done, and the file is written through a temporary one.
+    /// The manifest is stamped last, so an interrupted build is redone.
+    pub fn vectors(&self, models: &Models, progress: &dyn Fn(usize, usize)) -> Result<&Vectors> {
+        if let Some(vectors) = self.vectors.get() {
+            return Ok(vectors);
+        }
+        let root = self
+            .dir
+            .parent()
+            .ok_or_else(|| Error::Index(format!("{} is not inside a cache", self.dir.display())))?;
+        let vectors = cache::with_lock(root, &self.sha256, LOCK_WAIT, || {
+            match self.stored_vectors() {
+                Some(vectors) => Ok(vectors),
+                None => self.embed(models, progress),
+            }
+        })?;
+        Ok(self.vectors.get_or_init(|| vectors))
+    }
+
+    /// True when [`Book::vectors`] needs no model: the embeddings are in
+    /// memory, or the cache holds a stamped file of the right size.
+    pub fn vectors_ready(&self) -> bool {
+        if self.vectors.get().is_some() {
+            return true;
+        }
+        let size = fs::metadata(self.dir.join(VECTORS_FILE)).map(|m| m.len());
+        self.stamped() && size.is_ok_and(|size| size == self.vectors_size())
+    }
+
+    /// True when the manifest says the current model made the cached vectors.
+    fn stamped(&self) -> bool {
+        cache::read_json::<Manifest>(&self.dir.join(MANIFEST_FILE))
+            .is_ok_and(|manifest| manifest.embedding == Some(EmbeddingStamp::current()))
+    }
+
+    /// The size in bytes of a vector file with one row for each passage.
+    fn vectors_size(&self) -> u64 {
+        self.passages.len() as u64 * (EMBEDDING_DIM * size_of::<f32>()) as u64
+    }
+
+    fn stored_vectors(&self) -> Option<Vectors> {
+        if !self.stamped() {
+            return None;
+        }
+        Vectors::read(
+            &self.dir.join(VECTORS_FILE),
+            EMBEDDING_DIM,
+            self.passages.len(),
+        )
+        .ok()
+    }
+
+    /// Embeds every passage and caches the result. Call it only while holding
+    /// the lock for this book.
+    fn embed(&self, models: &Models, progress: &dyn Fn(usize, usize)) -> Result<Vectors> {
+        let texts: Vec<&str> = self.passages.iter().map(|p| p.text.as_str()).collect();
+        let vectors = Vectors::from_rows(models.embed_passages(&texts, progress)?)?;
+        if vectors.rows() > 0 && vectors.dim() != EMBEDDING_DIM {
+            return Err(Error::Index(format!(
+                "{EMBEDDING_MODEL} returned {} values per passage, not {EMBEDDING_DIM}",
+                vectors.dim()
+            )));
+        }
+        let file = self.dir.join(VECTORS_FILE);
+        let temp = self.dir.join(format!("{VECTORS_FILE}.tmp"));
+        let written = vectors
+            .write(&temp)
+            .and_then(|()| fs::rename(&temp, &file).map_err(Into::into));
+        if written.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        written?;
+        let path = self.dir.join(MANIFEST_FILE);
+        let manifest = Manifest {
+            embedding: Some(EmbeddingStamp::current()),
+            ..cache::read_json(&path)?
+        };
+        cache::write_json_atomic(&path, &manifest)?;
+        Ok(vectors)
+    }
 }
 
 fn load_current(dir: &Path, path: &Path, sha256: &str) -> Option<Book> {
@@ -69,6 +162,7 @@ fn load(dir: &Path, path: &Path, sha256: &str) -> Result<Book> {
         document: cache::read_json(&dir.join(DOCUMENT_FILE))?,
         passages: cache::read_json(&dir.join(PASSAGES_FILE))?,
         lexical: LexicalIndex::open(&dir.join(TANTIVY_DIR))?,
+        vectors: OnceLock::new(),
     })
 }
 

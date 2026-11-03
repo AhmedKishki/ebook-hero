@@ -8,6 +8,7 @@ description = "Search and read one PDF or EPUB: lexical, semantic and hybrid sea
 
 [dependencies]
 dirs = "7"
+fastembed = { version = "7.5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 fs4 = "1.1"
 libc = "0.2"
 pdf_oxide = "=0.3.78"

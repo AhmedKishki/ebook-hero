@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
+use crate::embed::Models;
 use crate::index::book::Book;
 use crate::index::cache::{default_cache_root, ensure_private_dir, file_error, sha256_file};
 use crate::search::find::{self, FindResult};
@@ -19,6 +20,7 @@ type Hashed = (u64, SystemTime, String);
 
 pub struct Session {
     cache_root: PathBuf,
+    models: Models,
     /// The most recently used book is last.
     books: Mutex<VecDeque<Arc<Book>>>,
     hashes: Mutex<HashMap<PathBuf, Hashed>>,
@@ -29,15 +31,28 @@ impl Session {
         Session::with_cache_root(default_cache_root())
     }
 
+    /// A session that keeps its indexes in `root` and its models in the
+    /// default models directory.
     pub fn with_cache_root(root: PathBuf) -> Session {
+        Session::with_dirs(root, Models::default_cache_dir())
+    }
+
+    /// A session that keeps its indexes in `cache_root` and its models in
+    /// `models_dir`. The models load when first used.
+    pub fn with_dirs(cache_root: PathBuf, models_dir: PathBuf) -> Session {
         // A root that cannot be used shows up, with its cause, when the first
         // book is opened.
-        let _ = ensure_private_dir(&root);
+        let _ = ensure_private_dir(&cache_root);
         Session {
-            cache_root: root,
+            cache_root,
+            models: Models::new(models_dir),
             books: Mutex::new(VecDeque::new()),
             hashes: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn models(&self) -> &Models {
+        &self.models
     }
 
     /// Opens the book at `path`, building its index first if it has none.

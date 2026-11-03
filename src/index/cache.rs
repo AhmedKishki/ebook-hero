@@ -2,7 +2,8 @@
 //! says whether it is current, and the lock that lets one process build it.
 //!
 //! ```text
-//! <root>/<sha>/                    manifest.json, document.json, passages.json, tantivy/
+//! <root>/<sha>/                    manifest.json, document.json, passages.json, tantivy/,
+//!                                  and, once embedded, vectors.f32
 //! <root>/<sha>.lock                held while building; holds the builder's pid
 //! <root>/<sha>.staging-<pid>-<ns>/ a build in progress, renamed to <sha>/ when done
 //! ```
@@ -26,7 +27,8 @@ use sha2::{Digest, Sha256};
 
 use crate::document::SCHEMA_VERSION;
 use crate::settings::{
-    ANALYZERS_VERSION, EPUB_READER_VERSION, LOCK_POLL, PASSAGES_VERSION, PDF_READER_VERSION,
+    ANALYZERS_VERSION, EMBEDDING_DIM, EMBEDDING_MODEL, EPUB_READER_VERSION, LOCK_POLL,
+    PASSAGES_VERSION, PDF_READER_VERSION,
 };
 use crate::{Error, Result};
 
@@ -38,6 +40,7 @@ pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 pub(crate) const DOCUMENT_FILE: &str = "document.json";
 pub(crate) const PASSAGES_FILE: &str = "passages.json";
 pub(crate) const TANTIVY_DIR: &str = "tantivy";
+pub(crate) const VECTORS_FILE: &str = "vectors.f32";
 
 const HASH_CHUNK: usize = 64 * 1024;
 
@@ -158,6 +161,16 @@ pub struct Manifest {
 pub struct EmbeddingStamp {
     pub model: String,
     pub dim: usize,
+}
+
+impl EmbeddingStamp {
+    /// What vectors made by the model this build uses are stamped with.
+    pub fn current() -> EmbeddingStamp {
+        EmbeddingStamp {
+            model: EMBEDDING_MODEL.to_string(),
+            dim: EMBEDDING_DIM,
+        }
+    }
 }
 
 impl Manifest {

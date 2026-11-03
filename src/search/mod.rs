@@ -10,10 +10,12 @@ use std::str::FromStr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::embed::Models;
 use crate::index::book::Book;
 use crate::passages::{Passage, PassageLocator};
 use crate::search::highlight::{match_ranges, to_char_ranges};
-use crate::search::query::ParsedQuery;
+use crate::search::query::{ParsedQuery, parse_query};
+use crate::settings::SEMANTIC_FLOOR;
 use crate::{Error, Result};
 
 /// How `search` finds passages.
@@ -93,6 +95,41 @@ pub fn lexical_hits(book: &Book, q: &ParsedQuery, limit: usize) -> Result<Vec<Hi
             score,
             lexical_rank: Some(rank),
             semantic_rank: None,
+        });
+    }
+    Ok(hits)
+}
+
+/// The `limit` passages most similar in meaning to `query`, best first, with
+/// `semantic_rank` counting from 1 and `score` the cosine similarity. Passages
+/// below `SEMANTIC_FLOOR` are left out, so there may be fewer, or none.
+///
+/// The first call for a book embeds all its passages, which can take minutes;
+/// `progress(done, total)` reports it. `matches` highlight the query's words
+/// the way lexical hits do.
+pub fn semantic_hits(
+    book: &Book,
+    models: &Models,
+    query: &str,
+    limit: usize,
+    progress: &dyn Fn(usize, usize),
+) -> Result<Vec<Hit>> {
+    let vectors = book.vectors(models, progress)?;
+    let embedded = models.embed_query(query)?;
+    let q = parse_query(query);
+    let mut hits = Vec::new();
+    for (rank, (id, score)) in (1..).zip(vectors.nearest(&embedded, limit, SEMANTIC_FLOOR)) {
+        let passage = passage(book, id)?;
+        let ranges = match_ranges(&passage.text, &q);
+        hits.push(Hit {
+            passage_id: id,
+            text: passage.text.clone(),
+            section: passage.section.clone(),
+            locator: passage.locator.clone(),
+            matches: to_char_ranges(&passage.text, &ranges),
+            score,
+            lexical_rank: None,
+            semantic_rank: Some(rank),
         });
     }
     Ok(hits)

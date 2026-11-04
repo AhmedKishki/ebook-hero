@@ -12,6 +12,7 @@ const BOOK = path.join(__dirname, '..', 'tests', 'fixtures', 'alice.epub');
 test('a tool that takes only a path gets just the path', () => {
   assert.deepEqual(buildArgs({ tool: 'info', path: '/b.pdf' }), ['info', '--', '/b.pdf']);
   assert.deepEqual(buildArgs({ tool: 'outline', path: '/b.pdf', query: 'ignored' }), ['outline', '--', '/b.pdf']);
+  assert.deepEqual(buildArgs({ tool: 'graph', path: '/b.epub' }), ['graph', '--', '/b.epub']);
 });
 
 test('a query that starts with a dash is not read as a flag', () => {

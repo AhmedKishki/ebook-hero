@@ -12,6 +12,8 @@ const err = $('err');
 const bookText = $('book-text');
 const tabResult = $('tab-result');
 const tabBook = $('tab-book');
+const tabGraph = $('tab-graph');
+const graphPane = $('graph-pane');
 
 // "passage 12" where the tools print a passage: before " ·" in a hit, a read
 // result or a verify result, and before "," in an outline entry.
@@ -24,9 +26,16 @@ let lastRun = { path: '' };
 // The book on show in the Book pane, the key main gave it, and what the line said of it.
 let open = { key: null, title: null, note: '' };
 let opening = false;
+// The graph on show in the Graph pane, by the key main gave it, and the path it was asked for by.
+let shownGraph = { key: null, path: '' };
+let graphing = false;
 
 // The one line beside the tabs says something different for each pane.
-const lines = { result: { text: '', failed: false }, book: { text: '', failed: false } };
+const lines = {
+  result: { text: '', failed: false },
+  book: { text: '', failed: false },
+  graph: { text: '', failed: false },
+};
 let pane = 'result';
 
 function say(which, text, failed = false) {
@@ -53,12 +62,13 @@ function sync() {
 
 function showPane(name) {
   pane = name;
-  const book = name === 'book';
-  out.hidden = book;
-  err.hidden = book;
-  bookText.hidden = !book;
-  tabResult.setAttribute('aria-selected', String(!book));
-  tabBook.setAttribute('aria-selected', String(book));
+  out.hidden = name !== 'result';
+  err.hidden = name !== 'result';
+  bookText.hidden = name !== 'book';
+  graphPane.hidden = name !== 'graph';
+  tabResult.setAttribute('aria-selected', String(name === 'result'));
+  tabBook.setAttribute('aria-selected', String(name === 'book'));
+  tabGraph.setAttribute('aria-selected', String(name === 'graph'));
   paintLine();
 }
 
@@ -142,6 +152,29 @@ async function showBook(path, passage) {
   say('book', open.note);
 }
 
+/** Opens the Graph pane on the concept graph of the book at `path`. */
+async function showGraph(path) {
+  if (graphing) return;
+  graphing = true;
+  say('graph', 'Building the concept graph… a large book takes a few seconds the first time.');
+  showPane('graph');
+  let reply;
+  try {
+    reply = await window.ebookHero.openGraph({ path });
+  } catch (error) {
+    reply = { ok: false, stderr: `error: ${error.message}` };
+  }
+  graphing = false;
+  if (!reply.ok) {
+    say('graph', reply.stderr.trim(), true);
+    return;
+  }
+  if (reply.key !== shownGraph.key) graphView.show(reply.graph, reply.positions);
+  shownGraph = { key: reply.key, path };
+  const { concepts, communities } = reply.graph;
+  say('graph', `${concepts.length} concepts in ${communities.length} communities. Click a concept to list its passages.`);
+}
+
 async function browse() {
   const chosen = await window.ebookHero.browse();
   if (chosen) bookPath.value = chosen;
@@ -156,6 +189,13 @@ async function start() {
   $('browse').addEventListener('click', browse);
   tabResult.addEventListener('click', () => showPane('result'));
   tabBook.addEventListener('click', () => showBook(bookPath.value));
+  tabGraph.addEventListener('click', () => showGraph(bookPath.value));
+  graphPane.addEventListener('click', (event) => {
+    const link = event.target.closest('a[data-passage]');
+    if (!link) return;
+    event.preventDefault();
+    showBook(shownGraph.path, Number(link.dataset.passage));
+  });
   out.addEventListener('click', (event) => {
     const link = event.target.closest('a[data-passage]');
     if (!link) return;

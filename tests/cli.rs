@@ -16,6 +16,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 const SAMPLE_PDF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.pdf");
+const ALICE_EPUB: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/alice.epub");
 const IMAGE_ONLY_PDF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/imageonly.pdf");
 
 /// The directories every command runs with: `TMPDIR`, which holds the index
@@ -638,6 +639,46 @@ fn read_help_says_which_page_it_reads() {
 }
 
 #[test]
+fn graph_prints_the_summary_line_then_communities() {
+    let env = Env::new();
+    let out = env.stdout(&["graph", ALICE_EPUB]);
+    let first = out.lines().next().unwrap();
+    let words: Vec<&str> = first.split(' ').collect();
+    assert_eq!(
+        [
+            words[1], words[2], words[4], words[5], words[7], words[8], words[10]
+        ],
+        [
+            "concepts",
+            "in",
+            "communities",
+            "·",
+            "passages",
+            "·",
+            "topics"
+        ],
+        "{first}"
+    );
+    assert!(out.lines().any(|l| l.starts_with("Community 1: ")), "{out}");
+}
+
+#[test]
+fn graph_refuses_a_book_shorter_than_twenty_passages() {
+    let env = Env::new();
+    let stderr = env
+        .run(&["graph", SAMPLE_PDF])
+        .code(1)
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(stderr).unwrap();
+    assert!(
+        stderr.contains("a concept graph needs at least 20"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn help_names_the_mcp_tool_each_json_output_matches() {
     let env = Env::new();
 
@@ -649,7 +690,14 @@ fn help_names_the_mcp_tool_each_json_output_matches() {
         .take_while(|l| !l.trim().is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    for name in ["info", "verify", "book_info", "verify_quote"] {
+    for name in [
+        "info",
+        "verify",
+        "graph",
+        "book_info",
+        "verify_quote",
+        "concept_graph",
+    ] {
         assert!(json.contains(name), "{name}: {json}");
     }
     assert!(!json.contains("same name"), "{json}");
@@ -662,7 +710,7 @@ fn help_lists_every_subcommand() {
     let out = env.stdout(&["--help"]);
 
     for name in [
-        "info", "outline", "search", "find", "read", "verify", "extract", "index", "cache",
+        "info", "outline", "search", "find", "read", "verify", "graph", "extract", "index", "cache",
     ] {
         assert!(
             out.lines().any(|l| l.trim_start().starts_with(name)),

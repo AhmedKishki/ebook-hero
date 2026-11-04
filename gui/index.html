@@ -112,6 +112,33 @@
   #book-text :is(h1, h2, h3, h4, h5, h6) { color: #6b1b27; line-height: 1.25; margin-top: 1.4em; }
   #book-text .item::before { content: "• "; }
   #book-text .mark { background: #fbe39a; box-shadow: -10px 0 0 var(--gold); border-radius: 2px; }
+
+  /* The Graph pane: the drawing, and beside it the communities and the chosen concept's passages. */
+  #graph-pane { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 28%); gap: 8px; }
+  #graph-svg { width: 100%; height: 100%; min-height: 0; background: #0a1226; border: 1px solid var(--gold-dark); border-radius: 4px; }
+  #graph-svg line { stroke: var(--parchment); stroke-opacity: .25; }
+  #graph-svg line.on { stroke: var(--gold); stroke-opacity: .9; }
+  #graph-svg .concept { cursor: pointer; outline: none; }
+  #graph-svg .concept circle { stroke: var(--night); stroke-width: 1.5; }
+  #graph-svg .concept text { font: 12px Georgia, serif; fill: var(--parchment); paint-order: stroke; stroke: #0a1226; stroke-width: 3px; }
+  #graph-svg .concept:focus-visible circle { stroke: var(--gem); stroke-width: 3; }
+  #graph-svg.focus .concept { opacity: .22; }
+  #graph-svg.focus .concept.near { opacity: .8; }
+  #graph-svg.focus .concept.on { opacity: 1; }
+  #graph-svg.focus line { stroke-opacity: .06; }
+  #graph-svg.focus line.on { stroke-opacity: .9; }
+  #graph-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  #graph-legend { display: flex; flex-direction: column; gap: 2px; max-height: 40%; overflow: auto; }
+  #graph-legend button { text-align: left; border: 0; background: none; color: var(--parchment); padding: 2px 4px; font-size: 13px; }
+  #graph-legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  #graph-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; background: #0a1226; border: 1px solid var(--gold-dark); border-radius: 4px; }
+  #graph-concept { margin: 0; font-size: 14px; font-weight: normal; color: var(--gold); }
+  #graph-note { margin: 0; font-size: 12px; color: var(--parchment); opacity: .75; }
+  #graph-note:empty { display: none; }
+  #graph-strip { width: 100%; height: 30px; flex: none; }
+  #graph-strip .axis { stroke: var(--gold-dark); }
+  #graph-strip rect { fill: var(--gem); }
+  #graph-passages { margin: 0; padding: 0; list-style: none; overflow: auto; flex: 1; columns: 2; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -129,6 +156,7 @@
   <div id="tabs" role="tablist">
     <button type="button" role="tab" id="tab-result" aria-selected="true">Result</button>
     <button type="button" role="tab" id="tab-book" aria-selected="false">Book</button>
+    <button type="button" role="tab" id="tab-graph" aria-selected="false">Graph</button>
   </div>
   <p id="status" role="status"></p>
 </div>
@@ -136,8 +164,21 @@
 <pre id="out" aria-label="Result"></pre>
 <pre id="err" aria-label="Messages"></pre>
 <article id="book-text" aria-label="Book" hidden></article>
+<section id="graph-pane" aria-label="Concept graph" hidden>
+  <svg id="graph-svg" role="img" aria-label="The book's concepts and their links"></svg>
+  <div id="graph-side">
+    <div id="graph-legend" aria-label="Communities"></div>
+    <div id="graph-detail">
+      <h2 id="graph-concept"></h2>
+      <p id="graph-note"></p>
+      <svg id="graph-strip" role="img" aria-label="Where the concept occurs in the book"></svg>
+      <ol id="graph-passages" aria-label="The concept's passages"></ol>
+    </div>
+  </div>
+</section>
 
 <script src="viewer.js"></script>
+<script src="graphview.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>

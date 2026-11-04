@@ -19,6 +19,7 @@ const TOOLS = {
   find: { input: 'Phrase' },
   read: { input: 'Number', addresses: ['passage', 'page', 'outline'] },
   verify: { input: 'Quote' },
+  graph: { input: null },
 };
 
 const REPOSITORY = path.join(__dirname, '..');
@@ -158,4 +159,28 @@ function failure(message) {
   return { ok: false, stdout: '', stderr: message };
 }
 
-module.exports = { TOOLS, buildArgs, execBinary, expandHome, failure, findBinary, run, shown };
+/**
+ * The book file `file` names: `{ ok: true, absolute, key }`, where `key`
+ * changes whenever the file does, or a failure that says what is wrong with
+ * the path.
+ */
+function locateBook(file) {
+  const given = String(file ?? '').trim();
+  if (!given) {
+    return failure('error: the path is empty; type the path of a PDF or EPUB, or press Browse');
+  }
+  let absolute;
+  let stat;
+  try {
+    absolute = path.resolve(expandHome(given));
+    stat = fs.statSync(absolute);
+  } catch (error) {
+    return failure(`error: cannot read ${given} (${error.code ?? error.message}); check the path`);
+  }
+  if (!stat.isFile()) {
+    return failure(`error: ${given} is not a file; type the path of a PDF or EPUB`);
+  }
+  return { ok: true, absolute, key: `${absolute}|${stat.size}|${stat.mtimeMs}` };
+}
+
+module.exports = { TOOLS, buildArgs, execBinary, expandHome, failure, findBinary, locateBook, run, shown };

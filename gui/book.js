@@ -4,9 +4,7 @@
 // in it, so `node --test` can exercise it without a display. A reader's own state,
 // such as a position or a bookmark, would belong beside this, not in the page.
 
-const fs = require('node:fs');
-const path = require('node:path');
-const { execBinary, expandHome, failure } = require('./runner');
+const { execBinary, failure, locateBook } = require('./runner');
 
 // A later schema only adds fields (see AGENTS.md), so this version and newer read the same.
 const MIN_SCHEMA_VERSION = 2;
@@ -115,22 +113,9 @@ function createLibrary(exec = execBinary) {
   const books = new Map();
 
   async function load(file) {
-    const given = file.trim();
-    if (!given) {
-      return failure('error: the path is empty; type the path of a PDF or EPUB, or press Browse');
-    }
-    let absolute;
-    let stat;
-    try {
-      absolute = path.resolve(expandHome(given));
-      stat = fs.statSync(absolute);
-    } catch (error) {
-      return failure(`error: cannot read ${given} (${error.code ?? error.message}); check the path`);
-    }
-    if (!stat.isFile()) {
-      return failure(`error: ${given} is not a file; type the path of a PDF or EPUB`);
-    }
-    const key = `${absolute}|${stat.size}|${stat.mtimeMs}`;
+    const where = locateBook(file);
+    if (!where.ok) return where;
+    const { absolute, key } = where;
     if (!books.has(key)) {
       const result = await exec(['extract', '--format', 'json', '--', absolute]);
       if (!result.ok) return result;

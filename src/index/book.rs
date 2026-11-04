@@ -8,14 +8,15 @@ use std::sync::OnceLock;
 use crate::document::Document;
 use crate::embed::Models;
 use crate::extract::extract;
+use crate::graph::{self, GraphResult};
 use crate::index::cache::{
-    self, DOCUMENT_FILE, EmbeddingStamp, MANIFEST_FILE, Manifest, PASSAGES_FILE, TANTIVY_DIR,
-    VECTORS_FILE, expected_stage1, io_error,
+    self, DOCUMENT_FILE, EmbeddingStamp, GRAPH_FILE, MANIFEST_FILE, Manifest, PASSAGES_FILE,
+    TANTIVY_DIR, VECTORS_FILE, expected_stage1, io_error,
 };
 use crate::index::lexical::LexicalIndex;
 use crate::index::vectors::Vectors;
 use crate::passages::{Passage, build_passages};
-use crate::settings::{EMBEDDING_DIM, EMBEDDING_MODEL, LOCK_WAIT};
+use crate::settings::{EMBEDDING_DIM, EMBEDDING_MODEL, GRAPH_VERSION, LOCK_WAIT};
 use crate::{Error, Result};
 
 pub struct Book {
@@ -27,6 +28,8 @@ pub struct Book {
     pub lexical: LexicalIndex,
     /// Stage 2 of the index, loaded or built the first time it is needed.
     vectors: OnceLock<Vectors>,
+    /// The concept graph, loaded or built the first time it is needed.
+    graph: OnceLock<GraphResult>,
 }
 
 impl Book {
@@ -99,6 +102,38 @@ impl Book {
             }
         })?;
         Ok(self.vectors.get_or_init(|| vectors))
+    }
+
+    /// The book's concept graph: read from `graph.json` in the cache when it
+    /// was made by this `GRAPH_VERSION`, else built and written there, under
+    /// the same lock as the index. A file that does not load or is stale is
+    /// rebuilt, and why is logged as a warning. A cache directory removed
+    /// since the book was opened is an error that asks for another call.
+    pub fn graph(&self) -> Result<&GraphResult> {
+        if let Some(graph) = self.graph.get() {
+            return Ok(graph);
+        }
+        let root = self
+            .dir
+            .parent()
+            .ok_or_else(|| Error::Index(format!("{} is not inside a cache", self.dir.display())))?;
+        let graph = cache::with_lock(root, &self.sha256, LOCK_WAIT, || {
+            if !self.dir.is_dir() {
+                return Err(removed());
+            }
+            let file = self.dir.join(GRAPH_FILE);
+            if let Some(graph) = stored_graph(&file) {
+                return Ok(graph);
+            }
+            let result = graph::build(&self.passages)?;
+            let cached = CachedGraph {
+                graph_version: GRAPH_VERSION,
+                result,
+            };
+            cache::write_json_atomic(&file, &cached)?;
+            Ok(cached.result)
+        })?;
+        Ok(self.graph.get_or_init(|| graph))
     }
 
     /// True when [`Book::vectors`] needs no model: the embeddings are in
@@ -181,6 +216,39 @@ fn store_vectors(dir: &Path, vectors: &Vectors) -> Result<()> {
     cache::write_json_atomic(&path, &stamped)
 }
 
+/// `graph.json`: a concept graph and the `GRAPH_VERSION` that made it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedGraph {
+    graph_version: u32,
+    result: GraphResult,
+}
+
+/// The graph cached in `file`, when there is one this version made.
+fn stored_graph(file: &Path) -> Option<GraphResult> {
+    if !file.is_file() {
+        return None;
+    }
+    match cache::read_json::<CachedGraph>(file) {
+        Ok(cached) if cached.graph_version == GRAPH_VERSION => Some(cached.result),
+        Ok(cached) => {
+            tracing::warn!(
+                path = %file.display(),
+                version = cached.graph_version,
+                "the cached concept graph was made by another version; building it again"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                path = %file.display(),
+                %error,
+                "the cached concept graph did not load; building it again"
+            );
+            None
+        }
+    }
+}
+
 /// The error for a book whose cached index was deleted after it was opened.
 fn removed() -> Error {
     Error::Index("the cached index for this book was removed; call again to rebuild it".to_string())
@@ -210,6 +278,7 @@ fn load(dir: &Path, path: &Path, sha256: &str) -> Result<Book> {
         passages: cache::read_json(&dir.join(PASSAGES_FILE))?,
         lexical: LexicalIndex::open(&dir.join(TANTIVY_DIR))?,
         vectors: OnceLock::new(),
+        graph: OnceLock::new(),
     })
 }
 

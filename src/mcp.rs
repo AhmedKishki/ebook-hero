@@ -26,13 +26,22 @@ use crate::session::Session;
 use crate::settings::TOP_K_DEFAULT;
 
 /// What the server tells a client about itself when it connects.
-const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. Ranges are Unicode code points.";
+const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
 
 /// The progress message while the passages of a book are embedded.
 const EMBEDDING_MESSAGE: &str = "embedding passages";
 
 /// The error text when `read` is not given one place to read.
 const ONE_ADDRESS: &str = "give exactly one of passage_id, page, outline_id";
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GraphArgs {
+    /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
+    path: String,
+    /// List every passage of each concept and link (default false: the first ten, with `passage_count` saying how many there are).
+    full: Option<bool>,
+}
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -196,6 +205,15 @@ impl EbookHero {
         self.run(move |session| session.verify(&args.path, &args.quote, args.passage_id))
             .await
     }
+
+    #[tool(
+        description = "Build or load the book's concept graph: up to 60 concepts (phrases that mark its topics); links between concepts that share passages more often than chance, with their NPMI; and communities of linked concepts. A concept's passages are those where it stands as a phrase of its own, so `find` can list more mentions; a link's are those both concepts stand in. Each gives `passage_count` and the first ten passage ids, or all of them with `full`; pass an id as `passage_id` to `read`. Built from the text alone, in seconds, on the first call; later calls read the cache."
+    )]
+    async fn concept_graph(&self, Parameters(args): Parameters<GraphArgs>) -> CallToolResult {
+        let full = args.full.unwrap_or(false);
+        self.run(move |session| session.graph(&args.path, full))
+            .await
+    }
 }
 
 impl EbookHero {
@@ -345,7 +363,7 @@ mod tests {
 
     #[test]
     fn the_instructions_name_every_tool_a_model_must_pick() {
-        for tool in ["search", "find", "read", "verify_quote"] {
+        for tool in ["search", "find", "read", "verify_quote", "concept_graph"] {
             assert!(INSTRUCTIONS.contains(&format!("`{tool}`")), "{tool}");
         }
     }

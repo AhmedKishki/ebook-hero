@@ -1,8 +1,8 @@
-<p align="center"><img src="assets/logo.svg" alt="A winged shield bearing a tome with a Rust cog on it, and a sword rising behind the shield" width="220"></p>
+<p align="center"><img src="assets/logo.svg" alt="A worn tome with a Rust cog on its cover, metal caps on its corners, and tabs and a ribbon bookmark sticking out of its pages" width="220"></p>
 
 # ebook-hero
 
-ebook-hero searches a PDF or EPUB, reads the text around what it finds, and checks whether a quote really occurs in the book. There are three ways to use it: as a [command-line tool](#command-line), as an [MCP server](#mcp-server) over stdio for agents, and in a small [desktop window](#desktop-window). Each call names one book file: the first call indexes that book, and later calls reuse the index.
+ebook-hero searches a PDF or EPUB, reads the text around what it finds, checks whether a quote really occurs in the book, and maps the book's concepts: which of them occur together, and in which passages. There are three ways to use it: as a [command-line tool](#command-line), as an [MCP server](#mcp-server) over stdio for agents, and in a small [desktop window](#desktop-window). Each call names one book file: the first call indexes that book, and later calls reuse the index.
 
 ## Install
 
@@ -68,6 +68,21 @@ $ ebook-hero verify tests/fixtures/alice.epub "the Queen was very kind to everyo
 none; closest passage 93 · CHAPTER VIII. The Queen’s Croquet-Ground ¶10 (3 of 7 words; differs at "very")
 ```
 
+`graph` lists the book's concepts, the phrases that mark its topics, in communities of concepts that share passages more often than chance. Each line gives a concept's number of passages, the first of them, and the concepts it links to with their NPMI, which is 1 when two only ever occur together and 0 when they meet as often as chance would have them:
+
+```console
+$ ebook-hero graph tests/fixtures/alice.epub
+60 concepts in 8 communities · 166 passages · 13 topics
+…
+Community 8: time, hatter, march hare, dormouse
+  time        47 passages, first 3    found 0.18, march hare 0.17, hatter 0.15
+  hatter      18 passages, first 77   march hare 0.92, dormouse 0.76, court 0.38, time 0.15
+  march hare  17 passages, first 77   hatter 0.92, dormouse 0.72, majesty 0.24, time 0.17
+  dormouse    13 passages, first 80   hatter 0.76, march hare 0.72, court 0.48
+```
+
+A concept's passages are those where it stands as a phrase of its own, so `find` can list more mentions of its words. The graph comes from the text alone, without the outline or the embedding model. It takes seconds and is kept with the index. With `--json`, every concept and every link gives its number of passages and the ids of the first ten, which `read` opens; `--full` lists them all.
+
 ## How search works
 
 Search ranks passages: runs of whole paragraphs, up to 220 words, that never cross a heading or, in an EPUB, a file. `--mode` chooses how they are ranked:
@@ -88,10 +103,11 @@ ebook-hero search book.pdf "how do rules persist over time" --mode semantic --to
 ebook-hero find book.pdf "social structure"
 ebook-hero read book.pdf --page 42
 ebook-hero verify book.pdf "a quote you want to check"
+ebook-hero graph book.pdf
 ebook-hero extract book.pdf --format markdown > book.md
 ```
 
-`--page` is the physical page of the PDF, counted from 1, as is `page` in the MCP `read` tool; the printed page label is shown in the locator. `outline`, `read` (by passage id or outline entry), `index` and `cache` are also commands. For `info`, `outline`, `search`, `find`, `read` and `verify`, `--json` prints what the MCP tools `book_info`, `outline`, `search`, `find`, `read` and `verify_quote` return. `ebook-hero <command> --help` lists the flags.
+`--page` is the physical page of the PDF, counted from 1, as is `page` in the MCP `read` tool; the printed page label is shown in the locator. `outline`, `read` (by passage id or outline entry), `index` and `cache` are also commands. For `info`, `outline`, `search`, `find`, `read`, `verify` and `graph`, `--json` prints what the MCP tools `book_info`, `outline`, `search`, `find`, `read`, `verify_quote` and `concept_graph` return. `ebook-hero <command> --help` lists the flags.
 
 ## MCP server
 
@@ -115,6 +131,7 @@ For any other client, add this server entry:
 | `find` | Every passage that contains an exact phrase, with the total number of occurrences. |
 | `read` | Passages as Markdown, by passage id, PDF page or outline entry. |
 | `verify_quote` | Whether a quote occurs in the book, and where. |
+| `concept_graph` | The book's concepts, the links between those that share passages more often than chance, and the communities they form. |
 
 ## Desktop window
 
@@ -127,6 +144,10 @@ For any other client, add this server entry:
 Each passage a result names, such as `passage 95`, is a link. Clicking it opens the Book tab, which shows the whole book as `ebook-hero extract` reads it, scrolled to that passage and with its paragraphs marked. In an EPUB the match is exact. In a PDF the passage's paragraphs are marked when they can be matched, and otherwise its whole page range, which the line beside the tabs says. The Book tab also opens the book from its start. It shows the extracted text, not the book's own layout, so there are no images.
 
 ![The Book tab with passage 95 marked](assets/gui-book.png)
+
+The Graph tab draws the concept graph of the book in the path box, as `ebook-hero graph` builds it. Each circle is a concept, sized by how many passages it occurs in and coloured by its community, and each line joins two concepts that share passages more often than chance, thicker the higher their NPMI. Pointing at a concept lights its links and the concepts at their other ends. Clicking it shows where its passages fall in the book, on a strip, and lists them; each one opens in the Book tab.
+
+![The Graph tab with the concept "mock turtle" chosen](assets/gui-graph.png)
 
 It needs Node.js with npm. Once, from a clone:
 

@@ -74,7 +74,7 @@ impl Server {
             tokio::process::Command::new(env!("CARGO_BIN_EXE_ebook-hero")).configure(|command| {
                 command
                     .arg("mcp")
-                    .env("TMPDIR", tmp.path())
+                    .env("EBOOK_HERO_INDEXES", tmp.path())
                     .env("EBOOK_HERO_MODELS", models)
                     .env("EBOOK_HERO_LOG", "debug");
             });
@@ -251,7 +251,7 @@ async fn structured_result_equals_cli_json() {
         .args([
             "search", SAMPLE_PDF, "entropy", "--mode", "lexical", "--json",
         ])
-        .env("TMPDIR", cli_env.path())
+        .env("EBOOK_HERO_INDEXES", cli_env.path())
         .env("EBOOK_HERO_MODELS", cli_models.path())
         .env_remove("EBOOK_HERO_LOG")
         .assert()
@@ -280,7 +280,7 @@ async fn concept_graph_equals_cli_json() {
     let cli_models = private_tempdir();
     let output = Command::new(env!("CARGO_BIN_EXE_ebook-hero"))
         .args(["graph", ALICE_EPUB, "--json"])
-        .env("TMPDIR", cli_env.path())
+        .env("EBOOK_HERO_INDEXES", cli_env.path())
         .env("EBOOK_HERO_MODELS", cli_models.path())
         .env_remove("EBOOK_HERO_LOG")
         .assert()
@@ -567,7 +567,7 @@ fn without_a_progress_token_only_responses_are_written() {
     let mut child = Child(
         std::process::Command::new(env!("CARGO_BIN_EXE_ebook-hero"))
             .arg("mcp")
-            .env("TMPDIR", tmp.path())
+            .env("EBOOK_HERO_INDEXES", tmp.path())
             .env("EBOOK_HERO_MODELS", Models::default_cache_dir())
             .env("EBOOK_HERO_LOG", "debug")
             .stdin(Stdio::piped())
@@ -636,4 +636,179 @@ fn without_a_progress_token_only_responses_are_written() {
         1,
         "only the response is written: {messages:?}"
     );
+}
+
+/// A server spoken to by hand, one JSON-RPC line at a time, with its index in
+/// a private directory and the models from `$EBOOK_HERO_MODELS` or the user's
+/// cache.
+struct StdioServer {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    lines: std::sync::mpsc::Receiver<String>,
+    next_id: u64,
+    _cache: TempDir,
+}
+
+impl StdioServer {
+    /// Starts the server with `env` added to its environment and initializes it.
+    fn start(env: &[(&str, &str)]) -> StdioServer {
+        let cache = private_tempdir();
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_ebook-hero"));
+        command
+            .arg("mcp")
+            .env("EBOOK_HERO_INDEXES", cache.path())
+            .env("EBOOK_HERO_MODELS", Models::default_cache_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sender, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if sender.send(line.unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut server = StdioServer {
+            child,
+            stdin,
+            lines,
+            next_id: 0,
+            _cache: cache,
+        };
+        let init = server.request(
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "test", "version": "0" }
+            }),
+        );
+        assert!(init.last().unwrap()["result"].is_object(), "{init:?}");
+        server.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+        server
+    }
+
+    fn send(&mut self, message: Value) {
+        writeln!(self.stdin, "{message}").unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    /// Sends a request and returns every message up to its response.
+    fn request(&mut self, method: &str, params: Value) -> Vec<Value> {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+        let mut messages = Vec::new();
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(PATIENCE_WITH_MODELS)
+                .expect("the server went quiet");
+            let message: Value = serde_json::from_str(&line).unwrap();
+            let done = message["id"] == id;
+            messages.push(message);
+            if done {
+                return messages;
+            }
+        }
+    }
+
+    /// Calls a tool and asserts that it succeeded.
+    fn call(&mut self, tool: &str, arguments: Value) {
+        let messages = self.request(
+            "tools/call",
+            json!({ "name": tool, "arguments": arguments }),
+        );
+        let response = messages.last().unwrap();
+        assert_eq!(response["result"]["isError"], false, "{response}");
+    }
+
+    /// The server's resident memory in MiB.
+    #[cfg(target_os = "linux")]
+    fn resident_mib(&self) -> u64 {
+        let status = std::fs::read_to_string(format!("/proc/{}/status", self.child.id())).unwrap();
+        let line = status.lines().find(|l| l.starts_with("VmRSS:")).unwrap();
+        line.split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            / 1024
+    }
+}
+
+impl Drop for StdioServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+const ALICE_QUERIES: [&str; 10] = [
+    "the queen shouts off with her head",
+    "why is a raven like a writing desk",
+    "Alice falls down the rabbit hole and wonders whether she will fall right through the earth",
+    "the caterpillar and the hookah",
+    "who stole the tarts",
+    "the Mock Turtle's story of his education in the school under the sea, with reeling, writhing and the different branches of arithmetic",
+    "a croquet game played with flamingos and hedgehogs",
+    "the Cheshire cat grins and vanishes",
+    "drink me",
+    "the trial, the jury and the evidence that Alice gives at the end of the book",
+];
+
+/// Reranking all thirty candidates in one padded batch made ONNX Runtime keep
+/// close to 2 GB for as long as the server ran. Reranked in small batches,
+/// the server stays well under a gibibyte.
+#[test]
+#[cfg(target_os = "linux")]
+#[ignore = "needs the embedding and reranker models"]
+fn the_server_holds_less_than_a_gibibyte_through_many_hybrid_searches() {
+    let mut server = StdioServer::start(&[]);
+    let mut most = 0;
+    for query in ALICE_QUERIES {
+        server.call("search", json!({ "path": ALICE_EPUB, "query": query }));
+        most = most.max(server.resident_mib());
+    }
+    assert!(most < 1024, "the server held {most} MiB");
+}
+
+/// A server left idle for `EBOOK_HERO_MODEL_IDLE` seconds drops its models
+/// and gives their memory back, and the next search loads them again.
+#[test]
+#[cfg(target_os = "linux")]
+#[ignore = "needs the embedding and reranker models"]
+fn an_idle_server_releases_its_models_and_loads_them_again() {
+    let mut server = StdioServer::start(&[("EBOOK_HERO_MODEL_IDLE", "1")]);
+    server.call(
+        "search",
+        json!({ "path": ALICE_EPUB, "query": ALICE_QUERIES[0] }),
+    );
+    let loaded = server.resident_mib();
+
+    let mut idle = loaded;
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_secs(1));
+        idle = server.resident_mib();
+        if idle < 200 {
+            break;
+        }
+    }
+    assert!(
+        idle < 200,
+        "the server held {idle} MiB after idling, {loaded} MiB loaded"
+    );
+
+    server.call(
+        "search",
+        json!({ "path": ALICE_EPUB, "query": ALICE_QUERIES[1] }),
+    );
+    assert!(server.resident_mib() > idle, "the models loaded again");
 }

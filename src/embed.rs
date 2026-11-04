@@ -1,24 +1,24 @@
 //! The embedding and reranking models. Each loads on first use, from the
-//! models directory (downloaded there if it is not), and then stays loaded.
+//! models directory (downloaded there if it is not), and stays loaded until
+//! [`Models::release_idle`] finds it unused for a while.
 
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::time::{Duration, Instant};
 
 use fastembed::{
     EmbeddingModel, RerankInitOptions, RerankerModel, TextEmbedding, TextInitOptions, TextRerank,
 };
 
-use crate::settings::{EMBED_BATCH, EMBEDDING_MODEL, QUERY_PREFIX, RERANKER_MODEL};
+use crate::settings::{EMBED_BATCH, EMBEDDING_MODEL, QUERY_PREFIX, RERANK_BATCH, RERANKER_MODEL};
 use crate::{Error, Result};
 
 pub struct Models {
     cache_dir: PathBuf,
-    embedder: OnceLock<Mutex<TextEmbedding>>,
-    reranker: OnceLock<Mutex<TextRerank>>,
-    /// Held while a model loads, so two threads never load the same one.
-    loading: Mutex<()>,
+    embedder: Slot<TextEmbedding>,
+    reranker: Slot<TextRerank>,
 }
 
 impl Models {
@@ -27,9 +27,8 @@ impl Models {
     pub fn new(cache_dir: PathBuf) -> Models {
         Models {
             cache_dir,
-            embedder: OnceLock::new(),
-            reranker: OnceLock::new(),
-            loading: Mutex::new(()),
+            embedder: Slot::new(),
+            reranker: Slot::new(),
         }
     }
 
@@ -37,6 +36,20 @@ impl Models {
     /// user's cache directory.
     pub fn default_cache_dir() -> PathBuf {
         models_dir(std::env::var_os("EBOOK_HERO_MODELS"), dirs::cache_dir())
+    }
+
+    /// Drops each model that has not been used for `idle`, so that a server
+    /// gives their memory back between bursts of searches; the next search
+    /// loads them again. A model in use is kept. Returns whether any model was
+    /// dropped.
+    pub fn release_idle(&self, idle: Duration) -> bool {
+        let now = Instant::now();
+        let embedder = self.embedder.release_if_idle(now, idle);
+        let reranker = self.reranker.release_if_idle(now, idle);
+        if embedder || reranker {
+            return_freed_memory();
+        }
+        embedder || reranker
     }
 
     /// Embeds passage texts, `EMBED_BATCH` at a time, and calls
@@ -73,10 +86,13 @@ impl Models {
         if docs.is_empty() {
             return Ok(Vec::new());
         }
-        let model = self.reranker()?;
         // fastembed returns the documents best first, each with its input index.
-        let ranked = locked(model)
-            .rerank(query, docs, false, None)
+        let ranked = self
+            .reranker
+            .with(
+                || self.load(RERANKER_MODEL, load_reranker),
+                |model| model.rerank(query, docs, false, Some(RERANK_BATCH)),
+            )?
             .map_err(|e| self.failed(RERANKER_MODEL, format!("inference failed: {e}")))?;
         let mut scores = vec![None; docs.len()];
         for result in ranked {
@@ -91,9 +107,12 @@ impl Models {
     }
 
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        let model = self.embedder()?;
-        let rows = locked(model)
-            .embed(texts, Some(EMBED_BATCH))
+        let rows = self
+            .embedder
+            .with(
+                || self.load(EMBEDDING_MODEL, load_embedder),
+                |model| model.embed(texts, Some(EMBED_BATCH)),
+            )?
             .map_err(|e| self.failed(EMBEDDING_MODEL, format!("inference failed: {e}")))?;
         if rows.len() == texts.len() {
             Ok(rows)
@@ -102,48 +121,16 @@ impl Models {
         }
     }
 
-    fn embedder(&self) -> Result<&Mutex<TextEmbedding>> {
-        self.load(&self.embedder, EMBEDDING_MODEL, |dir| {
-            TextEmbedding::try_new(
-                TextInitOptions::new(EmbeddingModel::BGESmallENV15)
-                    .with_cache_dir(dir.to_path_buf())
-                    .with_show_download_progress(false),
-            )
-            .map_err(|e| e.to_string())
-        })
-    }
-
-    fn reranker(&self) -> Result<&Mutex<TextRerank>> {
-        self.load(&self.reranker, RERANKER_MODEL, |dir| {
-            TextRerank::try_new(
-                RerankInitOptions::new(RerankerModel::JINARerankerV1TurboEn)
-                    .with_cache_dir(dir.to_path_buf())
-                    .with_show_download_progress(false),
-            )
-            .map_err(|e| e.to_string())
-        })
-    }
-
-    /// The model in `slot`, loaded by `load` if it is not there yet. A failed
-    /// load is not remembered: the next call tries again, which succeeds once
-    /// a missing connection is back.
-    fn load<'a, T>(
+    /// Loads `model` with `load` from the models directory, which is made if
+    /// it is missing.
+    fn load<T>(
         &self,
-        slot: &'a OnceLock<Mutex<T>>,
         model: &str,
         load: impl FnOnce(&Path) -> std::result::Result<T, String>,
-    ) -> Result<&'a Mutex<T>> {
-        if let Some(loaded) = slot.get() {
-            return Ok(loaded);
-        }
-        let _loading = locked(&self.loading);
-        if let Some(loaded) = slot.get() {
-            return Ok(loaded);
-        }
+    ) -> Result<T> {
         fs::create_dir_all(&self.cache_dir)
             .map_err(|e| self.failed(model, format!("cannot create the models directory: {e}")))?;
-        let loaded = load(&self.cache_dir).map_err(|reason| self.failed(model, reason))?;
-        Ok(slot.get_or_init(|| Mutex::new(loaded)))
+        load(&self.cache_dir).map_err(|reason| self.failed(model, reason))
     }
 
     fn failed(&self, model: &str, reason: impl Into<String>) -> Error {
@@ -152,6 +139,96 @@ impl Models {
             cache: self.cache_dir.clone(),
             reason: reason.into(),
         }
+    }
+}
+
+fn load_embedder(dir: &Path) -> std::result::Result<TextEmbedding, String> {
+    TextEmbedding::try_new(
+        TextInitOptions::new(EmbeddingModel::BGESmallENV15)
+            .with_cache_dir(dir.to_path_buf())
+            .with_show_download_progress(false),
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn load_reranker(dir: &Path) -> std::result::Result<TextRerank, String> {
+    TextRerank::try_new(
+        RerankInitOptions::new(RerankerModel::JINARerankerV1TurboEn)
+            .with_cache_dir(dir.to_path_buf())
+            .with_show_download_progress(false),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// One model: loaded on first use and kept until it has been idle for as long
+/// as [`Slot::release_if_idle`] is told.
+struct Slot<T> {
+    held: Mutex<Option<Held<T>>>,
+}
+
+struct Held<T> {
+    model: T,
+    /// When its last use ended.
+    last_used: Instant,
+}
+
+impl<T> Slot<T> {
+    fn new() -> Slot<T> {
+        Slot {
+            held: Mutex::new(None),
+        }
+    }
+
+    /// Runs `work` on the model, loaded first by `load` if it is not there.
+    /// The lock is held while the model loads, so two threads never load it
+    /// at once. A failed load is not remembered: the next call tries again,
+    /// which succeeds once a missing connection is back.
+    fn with<R>(
+        &self,
+        load: impl FnOnce() -> Result<T>,
+        work: impl FnOnce(&mut T) -> R,
+    ) -> Result<R> {
+        let mut held = locked(&self.held);
+        let held = match held.as_mut() {
+            Some(held) => held,
+            None => held.insert(Held {
+                model: load()?,
+                last_used: Instant::now(),
+            }),
+        };
+        let result = work(&mut held.model);
+        held.last_used = Instant::now();
+        Ok(result)
+    }
+
+    /// Drops the model if its last use ended at least `idle` before `now`. A
+    /// model that a thread is using, or loading, is kept. Returns whether it
+    /// was dropped.
+    fn release_if_idle(&self, now: Instant, idle: Duration) -> bool {
+        let mut held = match self.held.try_lock() {
+            Ok(held) => held,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return false,
+        };
+        let idle_long_enough = held
+            .as_ref()
+            .is_some_and(|h| now.saturating_duration_since(h.last_used) >= idle);
+        if idle_long_enough {
+            *held = None;
+        }
+        idle_long_enough
+    }
+}
+
+/// Hands the memory the models freed back to the system. glibc keeps freed
+/// memory for later allocations unless asked, and a server that kept it would
+/// gain nothing from dropping them.
+fn return_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: `malloc_trim` takes a size, touches only the allocator's own
+    // bookkeeping and is safe to call at any time.
+    unsafe {
+        libc::malloc_trim(0);
     }
 }
 
@@ -188,6 +265,7 @@ mod tests {
     use crate::Error;
     use std::ffi::OsString;
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn unavailable_model_names_model_and_remedy() {
@@ -219,6 +297,57 @@ mod tests {
             }
             other => panic!("expected ModelUnavailable, got {other:?}"),
         }
+    }
+
+    /// A slot whose model is the number of the load that made it.
+    fn counting_slot() -> (Slot<usize>, std::cell::Cell<usize>) {
+        (Slot::new(), std::cell::Cell::new(0))
+    }
+
+    fn load_counted(loads: &std::cell::Cell<usize>) -> Result<usize> {
+        loads.set(loads.get() + 1);
+        Ok(loads.get())
+    }
+
+    #[test]
+    fn a_slot_loads_its_model_once_and_drops_it_only_when_idle() {
+        let (slot, loads) = counting_slot();
+        assert_eq!(slot.with(|| load_counted(&loads), |m| *m).unwrap(), 1);
+        assert_eq!(slot.with(|| load_counted(&loads), |m| *m).unwrap(), 1);
+
+        let hour = Duration::from_secs(3600);
+        let now = Instant::now();
+        assert!(!slot.release_if_idle(now, hour), "used just now");
+        assert_eq!(slot.with(|| load_counted(&loads), |m| *m).unwrap(), 1);
+
+        assert!(slot.release_if_idle(now + 2 * hour, hour));
+        assert!(
+            !slot.release_if_idle(now + 2 * hour, hour),
+            "nothing left to drop"
+        );
+        assert_eq!(slot.with(|| load_counted(&loads), |m| *m).unwrap(), 2);
+    }
+
+    #[test]
+    fn a_slot_whose_load_failed_tries_again() {
+        let slot: Slot<usize> = Slot::new();
+        let failed = slot.with(|| Err(Error::InvalidArgument("offline".into())), |m| *m);
+        assert!(failed.is_err());
+        assert_eq!(slot.with(|| Ok(7), |m| *m).unwrap(), 7);
+    }
+
+    #[test]
+    fn a_model_in_use_is_not_released() {
+        let (slot, loads) = counting_slot();
+        let later = Instant::now() + Duration::from_secs(3600);
+        let released = slot
+            .with(
+                || load_counted(&loads),
+                |_| slot.release_if_idle(later, Duration::ZERO),
+            )
+            .unwrap();
+        assert!(!released);
+        assert_eq!(slot.with(|| load_counted(&loads), |m| *m).unwrap(), 1);
     }
 
     #[test]

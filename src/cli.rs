@@ -14,6 +14,7 @@ use tracing_subscriber::EnvFilter;
 use crate::document::markdown::document_to_markdown;
 use crate::document::{Format, Warning};
 use crate::extract::extract;
+use crate::graph::{Concept, GraphResult};
 use crate::index::cache::{
     CachedIndex, ClearReport, clear, default_cache_root, list_indexes, sha256_file,
 };
@@ -38,7 +39,7 @@ const SEPARATOR: &str = " · ";
     about = "Search and read one PDF or EPUB"
 )]
 struct Cli {
-    /// Print the result as JSON. For info, outline, search, find, read and verify, it is what the MCP tools book_info, outline, search, find, read and verify_quote return
+    /// Print the result as JSON. For info, outline, search, find, read, verify and graph, it is what the MCP tools book_info, outline, search, find, read, verify_quote and concept_graph return
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -120,6 +121,11 @@ enum Command {
         /// Look in this passage first
         #[arg(long)]
         passage_id: Option<u32>,
+    },
+    /// List the book's concepts, how they link and the communities they form
+    Graph {
+        /// The PDF or EPUB
+        path: String,
     },
     /// Print the whole book as Markdown or as JSON
     Extract {
@@ -309,6 +315,10 @@ fn run(cli: Cli, progress: &Progress) -> Result<Output> {
             let result = session.verify(&path, &quote, passage_id)?;
             printed(json, &result, verify_text)
         }
+        Command::Graph { path } => {
+            let graph = session.graph(&path)?;
+            printed(json, &graph, graph_text)
+        }
         Command::Index { path } => {
             let info = session.index(&path, &report)?;
             printed(json, &info, info_text)
@@ -395,6 +405,99 @@ fn read_output(result: ReadResult) -> Output {
             .map(|cursor| format!("next: --cursor {cursor}\n"))
             .unwrap_or_default(),
         stdout: result.markdown,
+    }
+}
+
+/// The summary line, then each community: its concepts by passage count, and
+/// one line per concept with its passage count, first passage and linked
+/// concepts by NPMI, highest first.
+fn graph_text(graph: &GraphResult) -> String {
+    let mut out = format!(
+        "{} in {} · {} · {}\n",
+        counted(graph.concepts.len(), "concept"),
+        counted(graph.communities.len(), "community"),
+        counted(graph.passages as usize, "passage"),
+        counted(graph.topics as usize, "topic"),
+    );
+    if graph.concepts.is_empty() {
+        out.push_str("\nno concept occurs in 3 or more passages\n");
+        return out;
+    }
+    let mut partners: Vec<Vec<(f32, u32)>> = vec![Vec::new(); graph.concepts.len()];
+    for link in &graph.links {
+        partners[link.a as usize].push((link.npmi, link.b));
+        partners[link.b as usize].push((link.npmi, link.a));
+    }
+    for list in &mut partners {
+        list.sort_by(|(x, i), (y, j)| y.total_cmp(x).then(i.cmp(j)));
+    }
+    for community in &graph.communities {
+        let mut members: Vec<&Concept> = community
+            .concepts
+            .iter()
+            .map(|&id| &graph.concepts[id as usize])
+            .collect();
+        members.sort_by(|x, y| {
+            y.passages
+                .len()
+                .cmp(&x.passages.len())
+                .then(x.id.cmp(&y.id))
+        });
+        let mut names: Vec<&str> = members.iter().take(5).map(|c| c.label.as_str()).collect();
+        if members.len() > 5 {
+            names.push("…");
+        }
+        let _ = writeln!(
+            out,
+            "\nCommunity {}: {}",
+            community.id + 1,
+            names.join(", ")
+        );
+        let width = members
+            .iter()
+            .map(|c| c.label.chars().count())
+            .max()
+            .unwrap_or(0);
+        let digits = members
+            .iter()
+            .map(|c| c.passages.len().to_string().len())
+            .max()
+            .unwrap_or(1);
+        let first_digits = members
+            .iter()
+            .map(|c| c.passages[0].to_string().len())
+            .max()
+            .unwrap_or(1);
+        for concept in members {
+            let links: Vec<String> = partners[concept.id as usize]
+                .iter()
+                .map(|(npmi, other)| format!("{} {npmi:.2}", graph.concepts[*other as usize].label))
+                .collect();
+            let links = if links.is_empty() {
+                "no links".to_string()
+            } else {
+                links.join(", ")
+            };
+            let pad = width - concept.label.chars().count();
+            let _ = writeln!(
+                out,
+                "  {}{}  {:>digits$} passages, first {:<first_digits$}   {links}",
+                concept.label,
+                " ".repeat(pad),
+                concept.passages.len(),
+                concept.passages[0],
+            );
+        }
+    }
+    out
+}
+
+/// `n` and `noun`, with an s unless `n` is 1 (and "communities" for many).
+fn counted(n: usize, noun: &str) -> String {
+    match (n, noun) {
+        (1, _) => format!("1 {noun}"),
+        (_, "community") => format!("{n} communities"),
+        _ => format!("{n} {noun}s"),
     }
 }
 

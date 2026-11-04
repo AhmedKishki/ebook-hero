@@ -22,13 +22,14 @@ use tokio::io::AsyncReadExt;
 use tokio::task::JoinHandle;
 
 const SAMPLE_PDF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.pdf");
+const ALICE_EPUB: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/alice.epub");
 
 /// How long a test waits for the server before it calls the server stuck.
 const PATIENCE: Duration = Duration::from_secs(60);
 /// The same for tests that load the models and embed a book.
 const PATIENCE_WITH_MODELS: Duration = Duration::from_secs(600);
 
-const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. Ranges are Unicode code points.";
+const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
 
 /// A client that keeps the progress notifications it receives.
 #[derive(Clone, Default)]
@@ -139,7 +140,7 @@ fn is_error(result: &CallToolResult) -> bool {
 }
 
 #[tokio::test]
-async fn lists_six_tools_and_instructions() {
+async fn lists_seven_tools_and_instructions() {
     let server = Server::start().await;
 
     let tools = server.client.list_all_tools().await.unwrap();
@@ -149,6 +150,7 @@ async fn lists_six_tools_and_instructions() {
         names,
         [
             "book_info",
+            "concept_graph",
             "find",
             "outline",
             "read",
@@ -212,6 +214,7 @@ async fn every_tool_returns_structured_json_and_text() {
             "verify_quote",
             json!({ "path": SAMPLE_PDF, "quote": quote }),
         ),
+        ("concept_graph", json!({ "path": ALICE_EPUB })),
     ];
 
     for (tool, arguments) in calls {
@@ -267,6 +270,30 @@ async fn structured_result_equals_cli_json() {
     assert!(!is_error(&result), "{result:?}");
     // The scores are `f32`; the CLI prints them as such, so a value made from
     // the number directly would differ in its last digits.
+    assert_eq!(result.structured_content, Some(cli));
+}
+
+#[tokio::test]
+async fn concept_graph_equals_cli_json() {
+    let server = Server::start().await;
+    let cli_env = private_tempdir();
+    let cli_models = private_tempdir();
+    let output = Command::new(env!("CARGO_BIN_EXE_ebook-hero"))
+        .args(["graph", ALICE_EPUB, "--json"])
+        .env("TMPDIR", cli_env.path())
+        .env("EBOOK_HERO_MODELS", cli_models.path())
+        .env_remove("EBOOK_HERO_LOG")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let cli: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    let result = server
+        .call("concept_graph", json!({ "path": ALICE_EPUB }))
+        .await;
+
+    assert!(!is_error(&result), "{result:?}");
     assert_eq!(result.structured_content, Some(cli));
 }
 

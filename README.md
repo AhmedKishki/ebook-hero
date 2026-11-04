@@ -68,6 +68,21 @@ $ ebook-hero verify tests/fixtures/alice.epub "the Queen was very kind to everyo
 none; closest passage 93 · CHAPTER VIII. The Queen’s Croquet-Ground ¶10 (3 of 7 words; differs at "very")
 ```
 
+`graph` lists the book's concepts, the phrases that mark its topics, in communities of concepts that share passages more often than chance. Each line gives a concept's number of passages, the first of them, and the concepts it links to with their NPMI, which is 1 when two only ever occur together and 0 when they meet as often as chance would have them:
+
+```console
+$ ebook-hero graph tests/fixtures/alice.epub
+60 concepts in 8 communities · 166 passages · 13 topics
+…
+Community 8: time, hatter, march hare, dormouse
+  time        47 passages, first 3    found 0.18, march hare 0.17, hatter 0.15
+  hatter      18 passages, first 77   march hare 0.92, dormouse 0.76, court 0.38, time 0.15
+  march hare  17 passages, first 77   hatter 0.92, dormouse 0.72, majesty 0.24, time 0.17
+  dormouse    13 passages, first 80   hatter 0.76, march hare 0.72, court 0.48
+```
+
+The graph comes from the text alone, without the outline or the embedding model. It takes seconds and is kept with the index. With `--json`, every concept and every link lists its passages, so each one can be read.
+
 ## How search works
 
 Search ranks passages: runs of whole paragraphs, up to 220 words, that never cross a heading or, in an EPUB, a file. `--mode` chooses how they are ranked:
@@ -88,10 +103,11 @@ ebook-hero search book.pdf "how do rules persist over time" --mode semantic --to
 ebook-hero find book.pdf "social structure"
 ebook-hero read book.pdf --page 42
 ebook-hero verify book.pdf "a quote you want to check"
+ebook-hero graph book.pdf
 ebook-hero extract book.pdf --format markdown > book.md
 ```
 
-`--page` is the physical page of the PDF, counted from 1, as is `page` in the MCP `read` tool; the printed page label is shown in the locator. `outline`, `read` (by passage id or outline entry), `index` and `cache` are also commands. For `info`, `outline`, `search`, `find`, `read` and `verify`, `--json` prints what the MCP tools `book_info`, `outline`, `search`, `find`, `read` and `verify_quote` return. `ebook-hero <command> --help` lists the flags.
+`--page` is the physical page of the PDF, counted from 1, as is `page` in the MCP `read` tool; the printed page label is shown in the locator. `outline`, `read` (by passage id or outline entry), `index` and `cache` are also commands. For `info`, `outline`, `search`, `find`, `read`, `verify` and `graph`, `--json` prints what the MCP tools `book_info`, `outline`, `search`, `find`, `read`, `verify_quote` and `concept_graph` return. `ebook-hero <command> --help` lists the flags.
 
 ## MCP server
 
@@ -115,6 +131,7 @@ For any other client, add this server entry:
 | `find` | Every passage that contains an exact phrase, with the total number of occurrences. |
 | `read` | Passages as Markdown, by passage id, PDF page or outline entry. |
 | `verify_quote` | Whether a quote occurs in the book, and where. |
+| `concept_graph` | The book's concepts, the links between those that share passages more often than chance, and the communities they form. |
 
 ## Desktop window
 

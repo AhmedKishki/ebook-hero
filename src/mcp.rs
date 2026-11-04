@@ -26,7 +26,7 @@ use crate::session::Session;
 use crate::settings::TOP_K_DEFAULT;
 
 /// What the server tells a client about itself when it connects.
-const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. Ranges are Unicode code points.";
+const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
 
 /// The progress message while the passages of a book are embedded.
 const EMBEDDING_MESSAGE: &str = "embedding passages";
@@ -196,6 +196,13 @@ impl EbookHero {
         self.run(move |session| session.verify(&args.path, &args.quote, args.passage_id))
             .await
     }
+
+    #[tool(
+        description = "Build or load the book's concept graph: up to 60 concepts (phrases that mark its topics), each with the passages it occurs in; links between concepts that share passages more often than chance, with their NPMI and shared passages; and communities of linked concepts. Built from the text alone, in seconds, on the first call; later calls read the cache."
+    )]
+    async fn concept_graph(&self, Parameters(args): Parameters<PathArgs>) -> CallToolResult {
+        self.run(move |session| session.graph(&args.path)).await
+    }
 }
 
 impl EbookHero {
@@ -345,7 +352,7 @@ mod tests {
 
     #[test]
     fn the_instructions_name_every_tool_a_model_must_pick() {
-        for tool in ["search", "find", "read", "verify_quote"] {
+        for tool in ["search", "find", "read", "verify_quote", "concept_graph"] {
             assert!(INSTRUCTIONS.contains(&format!("`{tool}`")), "{tool}");
         }
     }

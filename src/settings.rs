@@ -31,3 +31,4 @@ pub const GRAPH_CANDIDATE_MAX_SHARE: f64 = 0.3;
 pub const NMF_MAX_ITERATIONS: usize = 500;
 pub const NMF_TOLERANCE: f64 = 1e-4;
 pub const NMF_SEED: u64 = 1;
+pub const GRAPH_CONCEPTS: usize = 60;

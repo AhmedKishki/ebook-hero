@@ -368,7 +368,7 @@ pub fn run(
         let lists: Vec<(Vec<u32>, f32)> = vec![
             (ids(lexical), BM25_WEIGHT),
             (ids(semantic), VECTOR_WEIGHT),
-            (graph, GRAPH_WEIGHT),
+            (graph, graph_weight()),
         ];
         let borrowed: Vec<(&[u32], f32)> = lists
             .iter()
@@ -438,6 +438,14 @@ pub fn run(
         candidates: ids(&candidates).into_iter().take(RERANK_CANDIDATES).collect(),
         millis: started.elapsed().as_secs_f64() * 1000.0,
     })
+}
+
+/// `GRAPH_WEIGHT`, or `$SPIKE_GRAPH_WEIGHT` for the sensitivity runs.
+fn graph_weight() -> f32 {
+    std::env::var("SPIKE_GRAPH_WEIGHT")
+        .ok()
+        .and_then(|w| w.parse().ok())
+        .unwrap_or(GRAPH_WEIGHT)
 }
 
 fn ids(hits: &[Hit]) -> Vec<u32> {

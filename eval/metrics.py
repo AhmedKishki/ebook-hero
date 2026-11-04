@@ -32,9 +32,11 @@ def scores(query, rels):
     for name, r in query["results"].items():
         top, cands = r["top"], r["candidates"]
         first = next((n for n, i in enumerate(top, 1) if i in relevant), None)
+        strict = {i: g for i, g in rels.items() if g == 2}
         out[name] = {
             "ndcg5": ndcg(top, rels, 5),
             "ndcg10": ndcg(top, rels, 10),
+            "strict10": ndcg(top, strict, 10),
             "p5": sum(i in relevant for i in top[:5]) / 5,
             "r10": len(relevant & set(top[:10])) / len(relevant) if relevant else 0.0,
             "r30": len(relevant & set(cands[:30])) / len(relevant) if relevant else 0.0,
@@ -70,8 +72,8 @@ def load(run_dir):
 def table(rows, title):
     names = list(rows[0]["scores"])
     print(f"\n### {title} ({len(rows)} queries)\n")
-    print("| variant | nDCG@5 | nDCG@10 | P@5 | R@10 | R@30 cand. | MRR | Δ nDCG@10 vs hybrid | p | same top 10 | median ms |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    print("| variant | nDCG@5 | nDCG@10 | strict nDCG@10 | P@5 | R@10 | R@30 cand. | MRR | Δ nDCG@10 vs hybrid | p | same top 10 | median ms |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     base = [r["scores"][BASELINE]["ndcg10"] for r in rows]
     for name in names:
         col = lambda m: [r["scores"][name][m] for r in rows]
@@ -79,7 +81,7 @@ def table(rows, title):
         delta = mean("ndcg10") - statistics.mean(base)
         p = randomization(col("ndcg10"), base) if name != BASELINE else float("nan")
         same = sum(col("same_top10"))
-        print(f"| {name} | {mean('ndcg5'):.3f} | {mean('ndcg10'):.3f} | {mean('p5'):.3f} | "
+        print(f"| {name} | {mean('ndcg5'):.3f} | {mean('ndcg10'):.3f} | {mean('strict10'):.3f} | {mean('p5'):.3f} | "
               f"{mean('r10'):.3f} | {mean('r30'):.3f} | {mean('mrr'):.3f} | "
               f"{delta:+.3f} | {p:.3f} | {same}/{len(rows)} | {statistics.median(col('ms')):.0f} |")
 
@@ -117,6 +119,37 @@ def graph_stats(run, rows, title):
           f"{statistics.mean(relevant):.1f} (median {statistics.median(relevant)})")
 
 
+PAIRS = [
+    ("hybrid-norerank", "hybrid"),
+    ("lexical+expand", "lexical"),
+    ("lexical+ppr", "lexical"),
+    ("hybrid+ppr-norerank", "hybrid-norerank"),
+    ("hybrid+pprfb-norerank", "hybrid-norerank"),
+    ("hybrid+ppr", "hybrid"),
+    ("hybrid+pprfb", "hybrid"),
+    ("hybrid+expand", "hybrid"),
+    ("hybrid+diversify", "hybrid"),
+]
+
+
+def pairs(rows, title):
+    print(f"\n### {title}: each change against its own baseline, nDCG@10\n")
+    print("| change | baseline | Δ all | p | wins/ties/losses | Δ on queries naming a concept | p |")
+    print("|---|---|---|---|---|---|---|")
+    seeded = [r for r in rows if r["q"]["seeds"]]
+    for name, base in PAIRS:
+        def delta(rs):
+            a = [r["scores"][name]["ndcg10"] for r in rs]
+            b = [r["scores"][base]["ndcg10"] for r in rs]
+            return statistics.mean(a) - statistics.mean(b), randomization(a, b), a, b
+        d, p, a, b = delta(rows)
+        w = sum(x > y + 1e-9 for x, y in zip(a, b))
+        losses = sum(y > x + 1e-9 for x, y in zip(a, b))
+        ds, ps, _, _ = delta(seeded)
+        print(f"| {name} | {base} | {d:+.3f} | {p:.3f} | {w}/{len(a) - w - losses}/{losses} | "
+              f"{ds:+.3f} ({len(seeded)}) | {ps:.3f} |")
+
+
 def main():
     everything = []
     for arg in sys.argv[1:]:
@@ -129,6 +162,7 @@ def main():
     if len(sys.argv) > 2:
         table(everything, "all books")
         by_type(everything, "all books")
+        pairs(everything, "all books")
 
 
 main()

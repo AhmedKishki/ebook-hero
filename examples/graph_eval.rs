@@ -22,9 +22,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let graph = book.graph()?;
     let concepts = Concepts::new(graph);
     let models = session.models();
+    // `$SPIKE_VARIANTS`, a comma-separated list of names, runs only those.
+    let chosen: Vec<Variant> = match std::env::var("SPIKE_VARIANTS") {
+        Ok(names) => Variant::ALL
+            .into_iter()
+            .filter(|v| names.split(',').any(|n| n == v.name()))
+            .collect(),
+        Err(_) => Variant::ALL.to_vec(),
+    };
 
     eprintln!("warming up: the first call embeds the book and loads both models");
-    for variant in Variant::ALL {
+    for &variant in &chosen {
         run(&book, models, &concepts, "warm up the models", variant)?;
     }
 
@@ -36,15 +44,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let text = query["q"].as_str().ok_or("a query has no \"q\"")?;
         let seeds = concepts.query_seeds(text);
         let mut results = Map::new();
-        for variant in Variant::ALL {
+        for &variant in &chosen {
             let outcome = run(&book, models, &concepts, text, variant)?;
             results.insert(
                 variant.name().to_string(),
                 json!({"top": outcome.top, "candidates": outcome.candidates, "ms": outcome.millis}),
             );
         }
-        let top5: Vec<u32> = results["hybrid"]["top"]
-            .as_array()
+        let top5: Vec<u32> = results
+            .get("hybrid")
+            .and_then(|r| r["top"].as_array())
             .map(|a| a.iter().filter_map(Value::as_u64).map(|id| id as u32).take(5).collect())
             .unwrap_or_default();
         let annotated: Vec<Vec<String>> =

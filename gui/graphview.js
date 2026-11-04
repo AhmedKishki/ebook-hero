@@ -6,10 +6,10 @@
 
 const graphView = (() => {
   const SVG = 'http://www.w3.org/2000/svg';
-  const WIDTH = 1000;
-  const HEIGHT = 700;
-  // Room around the drawing for the circles and the labels to their right.
-  const MARGIN = { left: 30, right: 150, top: 24, bottom: 24 };
+  // The strip is drawn on this many units across, whatever its width.
+  const STRIP_WIDTH = 1000;
+  // Room around the drawing for the circles, and to their right for the labels.
+  const MARGIN = { left: 20, top: 16, bottom: 16, rightShare: 0.2, rightMost: 140 };
   // One colour per community, in the window's palette; communities past these are grey.
   const COLOURS = ['#f0bf3c', '#43e6cb', '#e8798a', '#8fb8ff', '#b9e46a', '#d39bff', '#ff9f5a', '#7fd6f0'];
   const OTHER = '#8a93a6';
@@ -20,6 +20,7 @@ const graphView = (() => {
   const strip = document.getElementById('graph-strip');
   const list = document.getElementById('graph-passages');
   let graph = null;
+  let positions = [];
   let neighbours = [];
 
   const colour = (community) => COLOURS[community] ?? OTHER;
@@ -31,17 +32,31 @@ const graphView = (() => {
     return node;
   }
 
-  /** Draws `shown` with each concept at its place in `positions` (each in [0, 1]²). */
-  function show(shown, positions) {
+  /** Shows `shown` with each concept at its place in `placed` (each in [0, 1]²). */
+  function show(shown, placed) {
     graph = shown;
+    positions = placed;
     neighbours = graph.concepts.map(() => []);
     graph.links.forEach((link, i) => {
       neighbours[link.a].push([link.b, i]);
       neighbours[link.b].push([link.a, i]);
     });
-    const x = (p) => MARGIN.left + p.x * (WIDTH - MARGIN.left - MARGIN.right);
-    const y = (p) => MARGIN.top + p.y * (HEIGHT - MARGIN.top - MARGIN.bottom);
-    drawing.setAttribute('viewBox', `0 0 ${WIDTH} ${HEIGHT}`);
+    draw();
+    drawLegend();
+    choose(null);
+  }
+
+  /**
+   * Draws the graph at the drawing's own size in pixels, so that its labels
+   * stay readable however small the window is.
+   */
+  function draw() {
+    const width = Math.max(drawing.clientWidth, 300);
+    const height = Math.max(drawing.clientHeight, 200);
+    const right = Math.min(MARGIN.rightMost, width * MARGIN.rightShare);
+    const x = (p) => MARGIN.left + p.x * (width - MARGIN.left - right);
+    const y = (p) => MARGIN.top + p.y * (height - MARGIN.top - MARGIN.bottom);
+    drawing.setAttribute('viewBox', `0 0 ${width} ${height}`);
     drawing.replaceChildren();
     const links = element('g', { class: 'links' }, drawing);
     graph.links.forEach((link, i) => {
@@ -55,15 +70,13 @@ const graphView = (() => {
     const most = Math.max(1, ...graph.concepts.map((c) => c.passages.length));
     const concepts = element('g', { class: 'concepts' }, drawing);
     graph.concepts.forEach((concept, i) => {
-      const r = 4 + 10 * Math.sqrt(concept.passages.length / most);
+      const r = 3 + 7 * Math.sqrt(concept.passages.length / most);
       const group = element('g', { class: 'concept', 'data-concept': i, tabindex: 0, role: 'button' }, concepts);
       element('circle', { cx: x(positions[i]), cy: y(positions[i]), r: r.toFixed(1), fill: colour(concept.community) }, group);
       const label = element('text', { x: x(positions[i]) + r + 4, y: y(positions[i]) + 4 }, group);
       label.textContent = concept.label;
       element('title', {}, group).textContent = `${concept.label}: ${concept.passages.length} passages`;
     });
-    drawLegend();
-    choose(null);
   }
 
   function drawLegend() {
@@ -122,10 +135,11 @@ const graphView = (() => {
     }
     const concept = graph.concepts[i];
     title.textContent = `${concept.label} · ${concept.passages.length} passages · community ${concept.community + 1}`;
-    strip.setAttribute('viewBox', `0 0 ${WIDTH} 30`);
-    element('line', { x1: 0, x2: WIDTH, y1: 15, y2: 15, class: 'axis' }, strip);
+    strip.setAttribute('viewBox', `0 0 ${STRIP_WIDTH} 30`);
+    strip.setAttribute('preserveAspectRatio', 'none');
+    element('line', { x1: 0, x2: STRIP_WIDTH, y1: 15, y2: 15, class: 'axis' }, strip);
     for (const p of concept.passages) {
-      const at = (p / Math.max(1, graph.passages - 1)) * (WIDTH - 2);
+      const at = (p / Math.max(1, graph.passages - 1)) * (STRIP_WIDTH - 2);
       element('rect', { x: at.toFixed(1), y: 4, width: 2, height: 22 }, strip);
     }
     list.replaceChildren(...concept.passages.map((p) => {
@@ -169,6 +183,10 @@ const graphView = (() => {
     if (item) lightCommunity(Number(item.dataset.community));
   });
   legend.addEventListener('pointerleave', () => lightCommunity(null));
+  // A resized window, or the pane coming into view, redraws at the new size.
+  new ResizeObserver(() => {
+    if (graph && drawing.clientWidth > 0) draw();
+  }).observe(drawing);
 
   return { show };
 })();

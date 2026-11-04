@@ -2,7 +2,7 @@
 
 # ebook-hero
 
-ebook-hero searches a PDF or EPUB, reads the text around what it finds, and checks whether a quote really occurs in the book. There are three ways to use it: as a [command-line tool](#command-line), as an [MCP server](#mcp-server) over stdio for agents, and in a small [desktop window](#desktop-window). Each call names one book file: the first call indexes that book, and later calls reuse the index.
+ebook-hero searches a PDF or EPUB, reads the text around what it finds, checks whether a quote really occurs in the book, and maps the book's concepts: which of them occur together, and in which passages. There are three ways to use it: as a [command-line tool](#command-line), as an [MCP server](#mcp-server) over stdio for agents, and in a small [desktop window](#desktop-window). Each call names one book file: the first call indexes that book, and later calls reuse the index.
 
 ## Install
 
@@ -144,6 +144,10 @@ For any other client, add this server entry:
 Each passage a result names, such as `passage 95`, is a link. Clicking it opens the Book tab, which shows the whole book as `ebook-hero extract` reads it, scrolled to that passage and with its paragraphs marked. In an EPUB the match is exact. In a PDF the passage's paragraphs are marked when they can be matched, and otherwise its whole page range, which the line beside the tabs says. The Book tab also opens the book from its start. It shows the extracted text, not the book's own layout, so there are no images.
 
 ![The Book tab with passage 95 marked](assets/gui-book.png)
+
+The Graph tab draws the concept graph of the book in the path box, as `ebook-hero graph` builds it. Each circle is a concept, sized by how many passages it occurs in and coloured by its community, and each line joins two concepts that share passages more often than chance, thicker the higher their NPMI. Pointing at a concept lights its links and the concepts at their other ends. Clicking it shows where its passages fall in the book, on a strip, and lists them; each one opens in the Book tab.
+
+![The Graph tab with the concept "mock turtle" chosen](assets/gui-graph.png)
 
 It needs Node.js with npm. Once, from a clone:
 

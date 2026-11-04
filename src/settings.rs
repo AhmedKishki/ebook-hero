@@ -32,3 +32,7 @@ pub const NMF_MAX_ITERATIONS: usize = 500;
 pub const NMF_TOLERANCE: f64 = 1e-4;
 pub const NMF_SEED: u64 = 1;
 pub const GRAPH_CONCEPTS: usize = 60;
+pub const GRAPH_PARTNERS: usize = 3;
+pub const GRAPH_NPMI_FLOOR: f64 = 0.1;
+pub const GRAPH_MIN_SHARED: usize = 2;
+pub const GRAPH_MIN_BOOK_PASSAGES: usize = 20;

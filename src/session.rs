@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use crate::embed::Models;
+use crate::graph::GraphResult;
 use crate::index::book::Book;
 use crate::index::cache::{default_cache_root, ensure_private_dir, file_error, sha256_file};
 use crate::read::{self, BookInfo, OutlineResult, ReadParams, ReadResult};
@@ -110,6 +111,13 @@ impl Session {
         read::validate(&p)?;
         let book = self.book(path)?;
         read::read(&book, &p)
+    }
+
+    /// The concept graph of the book at `path`, built and cached on the first
+    /// call; see [`crate::graph::build`].
+    pub fn graph(&self, path: &str) -> Result<GraphResult> {
+        let book = self.book(path)?;
+        book.graph().cloned()
     }
 
     /// The outline of the book at `path`; see [`read::outline`].

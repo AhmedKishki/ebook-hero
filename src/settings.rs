@@ -36,3 +36,4 @@ pub const GRAPH_PARTNERS: usize = 3;
 pub const GRAPH_NPMI_FLOOR: f64 = 0.1;
 pub const GRAPH_MIN_SHARED: usize = 2;
 pub const GRAPH_MIN_BOOK_PASSAGES: usize = 20;
+pub const GRAPH_VERSION: u32 = 1;

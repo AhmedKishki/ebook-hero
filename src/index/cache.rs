@@ -44,6 +44,7 @@ pub(crate) const DOCUMENT_FILE: &str = "document.json";
 pub(crate) const PASSAGES_FILE: &str = "passages.json";
 pub(crate) const TANTIVY_DIR: &str = "tantivy";
 pub(crate) const VECTORS_FILE: &str = "vectors.f32";
+pub(crate) const GRAPH_FILE: &str = "graph.json";
 
 const HASH_CHUNK: usize = 64 * 1024;
 

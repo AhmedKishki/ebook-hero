@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo.svg" alt="A winged shield bearing a tome with a Rust cog on it, and a sword rising behind the shield" width="220"></p>
+<p align="center"><img src="assets/logo.svg" alt="A worn tome with a Rust cog on its cover, metal caps on its corners, and tabs and a ribbon bookmark sticking out of its pages" width="220"></p>
 
 # ebook-hero
 

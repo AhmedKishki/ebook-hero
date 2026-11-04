@@ -43,6 +43,25 @@ pub fn phrases_in(text: &str) -> Vec<(String, String)> {
     phrases(text, &mut HashMap::new())
 }
 
+/// SPIKE: every run of content words in `text`, each word stemmed the way a
+/// concept's key is, whatever the run's length.
+pub fn stemmed_runs(text: &str) -> Vec<Vec<String>> {
+    let lower = text.to_lowercase();
+    let mut runs = Vec::new();
+    let mut run = Vec::new();
+    for word in words(&lower) {
+        match word.filter(|w| is_content(w)) {
+            Some(w) => run.push(stem_word(w)),
+            None if !run.is_empty() => runs.push(std::mem::take(&mut run)),
+            None => {}
+        }
+    }
+    if !run.is_empty() {
+        runs.push(run);
+    }
+    runs
+}
+
 /// [`phrases_in`] with a memo of the stems already computed, which a whole
 /// book reuses.
 fn phrases(text: &str, stems: &mut HashMap<String, String>) -> Vec<(String, String)> {

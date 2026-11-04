@@ -6,7 +6,7 @@ use std::path::Path;
 
 use tantivy::collector::{DocSetCollector, TopDocs};
 use tantivy::columnar::{Column, ColumnValues};
-use tantivy::query::{BooleanQuery, Occur, PhraseQuery, Query, TermQuery};
+use tantivy::query::{BooleanQuery, BoostQuery, Occur, PhraseQuery, Query, TermQuery};
 use tantivy::schema::{
     FAST, Field, INDEXED, IndexRecordOption, Schema, TextFieldIndexing, TextOptions,
 };
@@ -89,7 +89,40 @@ impl LexicalIndex {
     /// Each word is a `Should` clause on `text` and on `section`; each phrase is
     /// a `Must` clause on `text_exact`. A query with no tokens finds nothing.
     pub fn search(&self, q: &ParsedQuery, limit: usize) -> Result<Vec<(u32, f32)>> {
+        self.search_with(q, &[], limit)
+    }
+
+    /// SPIKE: [`LexicalIndex::search`] with `extra` phrases, each a `Should`
+    /// clause on the stemmed `text` field boosted by its weight. A phrase of
+    /// several words must occur as a phrase.
+    pub fn search_with(
+        &self,
+        q: &ParsedQuery,
+        extra: &[(String, f32)],
+        limit: usize,
+    ) -> Result<Vec<(u32, f32)>> {
         let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        for (phrase, boost) in extra {
+            let mut terms: Vec<(usize, Term)> = analysis::tokens(STEMMED, phrase)
+                .into_iter()
+                .map(|t| (t.position, Term::from_field_text(self.text, &t.text)))
+                .collect();
+            let query: Box<dyn Query> = match terms.len() {
+                0 => continue,
+                1 => Box::new(TermQuery::new(
+                    terms.pop().unwrap().1,
+                    IndexRecordOption::WithFreqs,
+                )),
+                _ => {
+                    let first = terms[0].0;
+                    for (position, _) in &mut terms {
+                        *position -= first;
+                    }
+                    Box::new(PhraseQuery::new_with_offset(terms))
+                }
+            };
+            clauses.push((Occur::Should, Box::new(BoostQuery::new(query, *boost))));
+        }
         for word in &q.words {
             for token in analysis::tokens(STEMMED, word) {
                 for field in [self.text, self.section] {

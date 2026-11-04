@@ -3,6 +3,7 @@
 
 pub mod find;
 pub mod fusion;
+pub mod graph_spike;
 pub mod highlight;
 pub mod query;
 

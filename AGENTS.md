@@ -16,10 +16,11 @@
 ## Architecture
 
 - Readers in `src/extract/` turn a file into a `Document` (`src/document/`). Everything after them reads a `Document` and never changes it.
-- `passages`, `index`, `search`, `read`, and `verify` hold the logic. `cli.rs` and `mcp.rs` parse arguments and format output only. Both call `Session`.
+- `passages`, `index`, `search`, `read`, `verify` and `graph` hold the logic. `cli.rs` and `mcp.rs` parse arguments and format output only. Both call `Session`.
 - `src/settings.rs` holds the search, read and limit constants and the version numbers. Input caps, writer budgets and reader heuristics live in the module that uses them.
-- `gui/` is an Electron window that runs the built `ebook-hero` binary and shows what it prints. It does not link the library, and its logic is finding that binary and turning the form into one command (`gui/runner.js`), and reading the book for its Book tab (`gui/book.js`). `gui/launch.js` starts Electron; `npm start` and the `ebook-hero-gui` command both run it.
+- `gui/` is an Electron window that runs the built `ebook-hero` binary and shows what it prints. It does not link the library, and its logic is finding that binary and turning the form into one command (`gui/runner.js`), reading the book for its Book tab (`gui/book.js`), and reading the concept graph for its Graph tab (`gui/graph.js`). `gui/launch.js` starts Electron; `npm start` and the `ebook-hero-gui` command both run it.
 - `gui/book.js` reads `ebook-hero extract --format json` and `read --json`: `schema_version`, `metadata.title`, `source.format`, `blocks[].{id, kind, text, locator}` and a passage's `locator`. Renaming or removing one of these breaks the window, so bump `MIN_SCHEMA_VERSION` there with it.
+- `gui/graph.js` reads `ebook-hero graph --json`: `passages`, `concepts[].{id, label, passages, community}`, `links[].{a, b, npmi, passages}` and `communities[].{id, concepts}`. Renaming or removing one of these breaks the window.
 
 ## Rules
 

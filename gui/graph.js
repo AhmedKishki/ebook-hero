@@ -10,6 +10,9 @@ const KEPT_GRAPHS = 2;
 // How far, as a share of the drawing, a concept may move in the first step of
 // the layout; the step shrinks to nothing by the last.
 const START_TEMPERATURE = 0.1;
+// The ideal distance between concepts is this over the square root of their
+// number, as in the spike's networkx layout: wide enough for their labels.
+const SPREAD = 1.6;
 
 class GraphError extends Error {}
 
@@ -36,14 +39,17 @@ function parseGraph(text) {
 /**
  * Where to draw each concept: `{ x, y }` in [0, 1]², by Fruchterman and
  * Reingold's spring layout. Linked concepts pull together, harder the higher
- * their NPMI, and every concept pushes every other away. The start comes from
- * `seed`, so the same graph is always drawn the same way.
+ * their NPMI, and every concept pushes every other away. Nothing holds the
+ * concepts inside a frame while they settle, as nothing does in networkx's
+ * version; the result is scaled to fit afterwards, so no concept is pinned to
+ * an edge. The start comes from `seed`, so the same graph is always drawn the
+ * same way.
  */
 function layout(graph, { seed = 1, iterations = 300 } = {}) {
   const n = graph.concepts.length;
   const random = mulberry32(seed);
   const pos = Array.from({ length: n }, () => ({ x: random(), y: random() }));
-  const k = Math.sqrt(1 / Math.max(n, 1));
+  const k = SPREAD / Math.sqrt(Math.max(n, 1));
   const links = graph.links.filter((l) => l.a < n && l.b < n && l.a !== l.b);
   for (let step = 0; step < iterations; step++) {
     const move = pos.map(() => ({ x: 0, y: 0 }));
@@ -70,15 +76,11 @@ function layout(graph, { seed = 1, iterations = 300 } = {}) {
       const d = Math.hypot(move[i].x, move[i].y);
       if (d === 0) continue;
       const stride = Math.min(d, temperature);
-      pos[i].x = clamp(pos[i].x + (move[i].x / d) * stride);
-      pos[i].y = clamp(pos[i].y + (move[i].y / d) * stride);
+      pos[i].x += (move[i].x / d) * stride;
+      pos[i].y += (move[i].y / d) * stride;
     }
   }
   return normalised(pos);
-}
-
-function clamp(v) {
-  return Math.min(1, Math.max(0, v));
 }
 
 /** The positions stretched to fill [0, 1]² on each axis, or centred on an axis where they do not spread. */

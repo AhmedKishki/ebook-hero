@@ -36,6 +36,15 @@ const ONE_ADDRESS: &str = "give exactly one of passage_id, page, outline_id";
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct GraphArgs {
+    /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
+    path: String,
+    /// List every passage of each concept and link (default false: the first ten, with `passage_count` saying how many there are).
+    full: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PathArgs {
     /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
     path: String,
@@ -198,10 +207,12 @@ impl EbookHero {
     }
 
     #[tool(
-        description = "Build or load the book's concept graph: up to 60 concepts (phrases that mark its topics), each with the passages it occurs in; links between concepts that share passages more often than chance, with their NPMI and shared passages; and communities of linked concepts. Built from the text alone, in seconds, on the first call; later calls read the cache."
+        description = "Build or load the book's concept graph: up to 60 concepts (phrases that mark its topics); links between concepts that share passages more often than chance, with their NPMI; and communities of linked concepts. A concept's passages are those where it stands as a phrase of its own, so `find` can list more mentions; a link's are those both concepts stand in. Each gives `passage_count` and the first ten passage ids, or all of them with `full`; pass an id as `passage_id` to `read`. Built from the text alone, in seconds, on the first call; later calls read the cache."
     )]
-    async fn concept_graph(&self, Parameters(args): Parameters<PathArgs>) -> CallToolResult {
-        self.run(move |session| session.graph(&args.path)).await
+    async fn concept_graph(&self, Parameters(args): Parameters<GraphArgs>) -> CallToolResult {
+        let full = args.full.unwrap_or(false);
+        self.run(move |session| session.graph(&args.path, full))
+            .await
     }
 }
 

@@ -11,8 +11,7 @@ use crate::settings::{
 
 /// The SMART system's 571 stopwords, one per line, as Appendix 11 of Lewis,
 /// Yang, Rose and Li, "RCV1: A New Benchmark Collection for Text
-/// Categorization Research", JMLR 5 (2004), republishes them. RAKE was
-/// published with this list.
+/// Categorization Research", JMLR 5 (2004), republishes them.
 const SMART_STOPWORDS: &str = include_str!("smart_stopwords.txt");
 
 /// A word with fewer letters than this cuts a phrase, like a stopword.

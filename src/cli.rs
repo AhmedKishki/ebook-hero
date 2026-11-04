@@ -126,6 +126,9 @@ enum Command {
     Graph {
         /// The PDF or EPUB
         path: String,
+        /// With --json, list every passage of each concept and link, not only the first ten
+        #[arg(long)]
+        full: bool,
     },
     /// Print the whole book as Markdown or as JSON
     Extract {
@@ -315,8 +318,8 @@ fn run(cli: Cli, progress: &Progress) -> Result<Output> {
             let result = session.verify(&path, &quote, passage_id)?;
             printed(json, &result, verify_text)
         }
-        Command::Graph { path } => {
-            let graph = session.graph(&path)?;
+        Command::Graph { path, full } => {
+            let graph = session.graph(&path, full)?;
             printed(json, &graph, graph_text)
         }
         Command::Index { path } => {
@@ -420,7 +423,9 @@ fn graph_text(graph: &GraphResult) -> String {
         counted(graph.topics as usize, "topic"),
     );
     if graph.concepts.is_empty() {
-        out.push_str("\nno concept occurs in 3 or more passages\n");
+        out.push_str(
+            "\nno phrase occurs in at least 3 passages and in at most 30% of them, so the book has no concepts\n",
+        );
         return out;
     }
     let mut partners: Vec<Vec<(f32, u32)>> = vec![Vec::new(); graph.concepts.len()];
@@ -437,12 +442,7 @@ fn graph_text(graph: &GraphResult) -> String {
             .iter()
             .map(|&id| &graph.concepts[id as usize])
             .collect();
-        members.sort_by(|x, y| {
-            y.passages
-                .len()
-                .cmp(&x.passages.len())
-                .then(x.id.cmp(&y.id))
-        });
+        members.sort_by(|x, y| y.passage_count.cmp(&x.passage_count).then(x.id.cmp(&y.id)));
         let mut names: Vec<&str> = members.iter().take(5).map(|c| c.label.as_str()).collect();
         if members.len() > 5 {
             names.push("…");
@@ -460,7 +460,7 @@ fn graph_text(graph: &GraphResult) -> String {
             .unwrap_or(0);
         let digits = members
             .iter()
-            .map(|c| c.passages.len().to_string().len())
+            .map(|c| c.passage_count.to_string().len())
             .max()
             .unwrap_or(1);
         let first_digits = members
@@ -484,7 +484,7 @@ fn graph_text(graph: &GraphResult) -> String {
                 "  {}{}  {:>digits$} passages, first {:<first_digits$}   {links}",
                 concept.label,
                 " ".repeat(pad),
-                concept.passages.len(),
+                concept.passage_count,
                 concept.passages[0],
             );
         }
@@ -769,6 +769,22 @@ fn clear_text(report: &ClearReport) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_empty_graph_says_why_it_has_no_concepts() {
+        let graph = GraphResult {
+            passages: 25,
+            topics: 5,
+            concepts: Vec::new(),
+            links: Vec::new(),
+            communities: Vec::new(),
+        };
+        let text = graph_text(&graph);
+        assert!(
+            text.contains("no phrase occurs in at least 3 passages and in at most 30% of them"),
+            "{text}"
+        );
+    }
+
     use super::*;
     use crate::passages::HeadingPlace;
 

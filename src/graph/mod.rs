@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::passages::Passage;
 use crate::settings::{
     GRAPH_CONCEPTS, GRAPH_MIN_BOOK_PASSAGES, GRAPH_MIN_SHARED, GRAPH_NPMI_FLOOR, GRAPH_PARTNERS,
+    GRAPH_PASSAGES_SHOWN,
 };
 use crate::{Error, Result};
 use communities::louvain;
@@ -41,7 +42,12 @@ pub struct Concept {
     pub id: u32,
     /// The form the book most often writes it in, lowercased.
     pub label: String,
-    /// The passages it occurs in, in reading order.
+    /// How many passages it stands in as a phrase of its own, cut off from
+    /// other words by stopwords or punctuation.
+    pub passage_count: u32,
+    /// Those passages' ids, in reading order: all of them when the full graph
+    /// was asked for, else the first ten. `find` lists every mention of the
+    /// words, including those inside longer phrases.
     pub passages: Vec<u32>,
     /// The index of its community in `communities`.
     pub community: u32,
@@ -57,7 +63,10 @@ pub struct Link {
     /// Normalized pointwise mutual information: 1 when the two only ever
     /// occur together, 0 when they share passages as often as chance.
     pub npmi: f32,
-    /// The passages both occur in, in reading order.
+    /// How many passages both concepts stand in.
+    pub passage_count: u32,
+    /// Those passages' ids, in reading order: all of them when the full graph
+    /// was asked for, else the first ten.
     pub passages: Vec<u32>,
 }
 
@@ -68,6 +77,21 @@ pub struct Community {
     pub id: u32,
     /// Its concepts' ids, ascending.
     pub concepts: Vec<u32>,
+}
+
+impl GraphResult {
+    /// This graph with each concept's and link's passages cut to their first
+    /// `GRAPH_PASSAGES_SHOWN`; `passage_count` still says how many there are.
+    pub fn abridged(&self) -> GraphResult {
+        let mut short = self.clone();
+        for concept in &mut short.concepts {
+            concept.passages.truncate(GRAPH_PASSAGES_SHOWN);
+        }
+        for link in &mut short.links {
+            link.passages.truncate(GRAPH_PASSAGES_SHOWN);
+        }
+        short
+    }
 }
 
 /// The concept graph of a book's passages, which must be in reading order.
@@ -116,6 +140,7 @@ pub fn build(passages: &[Passage]) -> Result<GraphResult> {
             .map(|(i, c)| Concept {
                 id: i as u32,
                 label: c.label.clone(),
+                passage_count: c.passages.len() as u32,
                 passages: c.passages.iter().map(id_of).collect(),
                 community: community_of[i],
             })
@@ -126,6 +151,7 @@ pub fn build(passages: &[Passage]) -> Result<GraphResult> {
                 a: l.a as u32,
                 b: l.b as u32,
                 npmi: ((l.npmi * 1000.0).round() / 1000.0) as f32,
+                passage_count: l.shared.len() as u32,
                 passages: l.shared.iter().map(id_of).collect(),
             })
             .collect(),

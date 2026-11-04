@@ -114,10 +114,16 @@ impl Session {
     }
 
     /// The concept graph of the book at `path`, built and cached on the first
-    /// call; see [`crate::graph::build`].
-    pub fn graph(&self, path: &str) -> Result<GraphResult> {
+    /// call; see [`crate::graph::build`]. Unless `full`, each concept and link
+    /// lists only its first passages; see [`GraphResult::abridged`].
+    pub fn graph(&self, path: &str, full: bool) -> Result<GraphResult> {
         let book = self.book(path)?;
-        book.graph().cloned()
+        let graph = book.graph()?;
+        Ok(if full {
+            graph.clone()
+        } else {
+            graph.abridged()
+        })
     }
 
     /// The outline of the book at `path`; see [`read::outline`].

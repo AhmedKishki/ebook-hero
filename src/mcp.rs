@@ -208,7 +208,7 @@ impl EbookHero {
     }
 
     #[tool(
-        description = "Build or load the book's concept graph: up to 60 concepts (phrases that mark its topics); links between concepts that share passages more often than chance, with their NPMI; and communities of linked concepts. A concept's passages are those where it stands as a phrase of its own, so `find` can list more mentions; a link's are those both concepts stand in. Each gives `passage_count` and the first ten passage ids, or all of them with `full`; pass an id as `passage_id` to `read`. Built from the text alone, in seconds, on the first call; later calls read the cache."
+        description = "Build or load the book's concept graph: up to 60 concepts (phrases that mark its topics); links between concepts that share passages more often than chance, with their NPMI; and communities of linked concepts. A concept's passages are those where it stands as a phrase of its own, so `find` can list more mentions; a link's are those both concepts stand in. Each gives `passage_count` and the first ten passage ids, or all of them with `full`; pass an id as `passage_id` to `read`. Built from the text alone, without notes, contents, lists of figures, tables or abbreviations, bibliography and index, in seconds, on the first call; later calls read the cache. `passages_read` counts the passages that held other text."
     )]
     async fn concept_graph(&self, Parameters(args): Parameters<GraphArgs>) -> CallToolResult {
         let full = args.full.unwrap_or(false);

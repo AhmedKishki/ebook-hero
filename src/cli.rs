@@ -413,13 +413,21 @@ fn read_output(result: ReadResult) -> Output {
 
 /// The summary line, then each community: its concepts by passage count, and
 /// one line per concept with its passage count, first passage and linked
-/// concepts by NPMI, highest first.
+/// concepts by NPMI, highest first. The summary says how many passages the
+/// graph read when it left some out.
 fn graph_text(graph: &GraphResult) -> String {
+    let passages = if graph.passages_read == graph.passages {
+        counted(graph.passages as usize, "passage")
+    } else {
+        format!(
+            "{} of {} passages read",
+            graph.passages_read, graph.passages
+        )
+    };
     let mut out = format!(
-        "{} in {} · {} · {}\n",
+        "{} in {} · {passages} · {}\n",
         counted(graph.concepts.len(), "concept"),
         counted(graph.communities.len(), "community"),
-        counted(graph.passages as usize, "passage"),
         counted(graph.topics as usize, "topic"),
     );
     if graph.concepts.is_empty() {
@@ -773,6 +781,7 @@ mod tests {
     fn an_empty_graph_says_why_it_has_no_concepts() {
         let graph = GraphResult {
             passages: 25,
+            passages_read: 25,
             topics: 5,
             concepts: Vec::new(),
             links: Vec::new(),
@@ -782,6 +791,29 @@ mod tests {
         assert!(
             text.contains("no phrase occurs in at least 3 passages and in at most 30% of them"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn a_graph_that_left_passages_out_says_how_many_it_read() {
+        let graph = |passages_read| GraphResult {
+            passages: 650,
+            passages_read,
+            topics: 24,
+            concepts: Vec::new(),
+            links: Vec::new(),
+            communities: Vec::new(),
+        };
+        assert!(
+            graph_text(&graph(555)).starts_with(
+                "0 concepts in 0 communities · 555 of 650 passages read · 24 topics\n"
+            ),
+            "{}",
+            graph_text(&graph(555))
+        );
+        assert!(
+            graph_text(&graph(650))
+                .starts_with("0 concepts in 0 communities · 650 passages · 24 topics\n")
         );
     }
 

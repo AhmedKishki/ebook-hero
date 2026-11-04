@@ -9,7 +9,7 @@ use std::path::Path;
 
 use zip::ZipArchive;
 
-use crate::document::{Block, BlockKind, Document, Format, Source};
+use crate::document::{Apparatus, Block, BlockKind, Document, Format, Source};
 use crate::error::{Error, Result};
 
 /// How far into a file the `%PDF-` marker may start.
@@ -92,7 +92,8 @@ pub fn extract(path: &Path, sha256: &str) -> Result<Document> {
     }
 }
 
-/// Gives every block the path of headings above it, outermost first.
+/// Gives every block the path of headings above it, outermost first, and the
+/// apparatus that path names; see [`assign_apparatus`].
 ///
 /// A heading of level `n` replaces the entries of level `n` and deeper on the
 /// stack, so a heading's own section ends with its text. Levels that a book
@@ -100,7 +101,7 @@ pub fn extract(path: &Path, sha256: &str) -> Result<Document> {
 /// section, not a growing list.
 pub(crate) fn assign_sections(blocks: &mut [Block]) {
     let mut stack: Vec<(u8, &str)> = Vec::new();
-    for block in blocks {
+    for block in blocks.iter_mut() {
         if let BlockKind::Heading { level } = block.kind {
             while stack.last().is_some_and(|(open, _)| *open >= level) {
                 stack.pop();
@@ -109,6 +110,72 @@ pub(crate) fn assign_sections(blocks: &mut [Block]) {
         }
         block.section = stack.iter().map(|(_, text)| text.to_string()).collect();
     }
+    assign_apparatus(blocks);
+}
+
+/// The headings that open apparatus, as [`apparatus_named`] compares them.
+const APPARATUS_HEADINGS: &[(&str, Apparatus)] = &[
+    ("contents", Apparatus::Contents),
+    ("table of contents", Apparatus::Contents),
+    ("figures", Apparatus::Lists),
+    ("tables", Apparatus::Lists),
+    ("illustrations", Apparatus::Lists),
+    ("abbreviations", Apparatus::Lists),
+    ("figures and tables", Apparatus::Lists),
+    ("list of figures", Apparatus::Lists),
+    ("list of tables", Apparatus::Lists),
+    ("list of illustrations", Apparatus::Lists),
+    ("list of abbreviations", Apparatus::Lists),
+    ("list of figures and tables", Apparatus::Lists),
+    ("list of maps", Apparatus::Lists),
+    ("list of plates", Apparatus::Lists),
+    ("notes", Apparatus::Notes),
+    ("endnotes", Apparatus::Notes),
+    ("footnotes", Apparatus::Notes),
+    ("bibliography", Apparatus::Bibliography),
+    ("select bibliography", Apparatus::Bibliography),
+    ("selected bibliography", Apparatus::Bibliography),
+    ("references", Apparatus::Bibliography),
+    ("works cited", Apparatus::Bibliography),
+    ("further reading", Apparatus::Bibliography),
+    ("index", Apparatus::Index),
+    ("general index", Apparatus::Index),
+    ("subject index", Apparatus::Index),
+    ("name index", Apparatus::Index),
+    ("author index", Apparatus::Index),
+    ("index of names", Apparatus::Index),
+    ("index of subjects", Apparatus::Index),
+];
+
+/// Gives every block without an apparatus the one its section names: that of
+/// the innermost heading of its `section` that is one of
+/// `APPARATUS_HEADINGS`, so the notes under "Notes" in a chapter, and the
+/// whole of a bibliography with subheadings, are apparatus. A block keeps
+/// the apparatus its reader gave it.
+fn assign_apparatus(blocks: &mut [Block]) {
+    for block in blocks.iter_mut().filter(|b| b.apparatus.is_none()) {
+        block.apparatus = block
+            .section
+            .iter()
+            .rev()
+            .find_map(|heading| apparatus_named(heading));
+    }
+}
+
+/// The apparatus that `heading` opens: the heading lowercased, with what is
+/// not a letter trimmed from both ends and each run of whitespace read as one
+/// space, must be one of `APPARATUS_HEADINGS`. "Notes on method" opens none.
+fn apparatus_named(heading: &str) -> Option<Apparatus> {
+    let trimmed = heading.trim_matches(|c: char| !c.is_alphabetic());
+    let name = trimmed
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    APPARATUS_HEADINGS
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|&(_, apparatus)| apparatus)
 }
 
 #[cfg(test)]
@@ -124,6 +191,7 @@ mod tests {
             orig: None,
             spans: Vec::new(),
             section: vec!["stale".to_string()],
+            apparatus: None,
             locator: Locator::Epub {
                 href: "a.xhtml".to_string(),
                 anchor: None,
@@ -228,6 +296,77 @@ mod tests {
                 ("B2", vec!["A", "B2"]),
             ]
         );
+    }
+
+    fn apparatus(blocks: &[Block]) -> Vec<(&str, Option<Apparatus>)> {
+        blocks
+            .iter()
+            .map(|b| (b.text.as_str(), b.apparatus))
+            .collect()
+    }
+
+    #[test]
+    fn apparatus_comes_from_the_innermost_heading_that_names_one() {
+        let heading = |level, text| block(BlockKind::Heading { level }, text);
+        let paragraph = |text| block(BlockKind::Paragraph, text);
+        let mut blocks = vec![
+            heading(1, "CONTENTS"),
+            paragraph("1 Beginnings"),
+            heading(1, "List of  Figures"),
+            paragraph("2.1 A figure"),
+            heading(1, "1 Beginnings"),
+            paragraph("Text."),
+            heading(2, "Notes"),
+            paragraph("1 A source."),
+            heading(1, "2 Method"),
+            heading(2, "Notes on method"),
+            paragraph("Method text."),
+            heading(1, "Bibliography"),
+            heading(2, "Primary sources"),
+            paragraph("Bhaskar, Roy. 1975."),
+            heading(1, " Index. "),
+            paragraph("absence, 12"),
+        ];
+
+        assign_sections(&mut blocks);
+
+        use Apparatus::*;
+        assert_eq!(
+            apparatus(&blocks),
+            [
+                ("CONTENTS", Some(Contents)),
+                ("1 Beginnings", Some(Contents)),
+                ("List of  Figures", Some(Lists)),
+                ("2.1 A figure", Some(Lists)),
+                ("1 Beginnings", None),
+                ("Text.", None),
+                ("Notes", Some(Notes)),
+                ("1 A source.", Some(Notes)),
+                ("2 Method", None),
+                ("Notes on method", None),
+                ("Method text.", None),
+                ("Bibliography", Some(Bibliography)),
+                ("Primary sources", Some(Bibliography)),
+                ("Bhaskar, Roy. 1975.", Some(Bibliography)),
+                (" Index. ", Some(Index)),
+                ("absence, 12", Some(Index)),
+            ]
+        );
+    }
+
+    #[test]
+    fn apparatus_the_markup_gave_is_kept() {
+        let mut blocks = vec![
+            block(BlockKind::Heading { level: 1 }, "Notes"),
+            Block {
+                apparatus: Some(Apparatus::Bibliography),
+                ..block(BlockKind::Paragraph, "Bhaskar, Roy. 1975.")
+            },
+        ];
+
+        assign_sections(&mut blocks);
+
+        assert_eq!(blocks[1].apparatus, Some(Apparatus::Bibliography));
     }
 
     #[test]

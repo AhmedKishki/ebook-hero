@@ -72,16 +72,16 @@ none; closest passage 93 · CHAPTER VIII. The Queen’s Croquet-Ground ¶10 (3 o
 
 ```console
 $ ebook-hero graph tests/fixtures/alice.epub
-60 concepts in 8 communities · 166 passages · 13 topics
+60 concepts in 9 communities · 165 of 166 passages read · 13 topics
 …
-Community 8: time, hatter, march hare, dormouse
+Community 7: time, hatter, march hare, dormouse
   time        47 passages, first 3    found 0.18, march hare 0.17, hatter 0.15
   hatter      18 passages, first 77   march hare 0.92, dormouse 0.76, court 0.38, time 0.15
-  march hare  17 passages, first 77   hatter 0.92, dormouse 0.72, majesty 0.24, time 0.17
+  march hare  17 passages, first 77   hatter 0.92, dormouse 0.72, executed 0.24, time 0.17
   dormouse    13 passages, first 80   hatter 0.76, march hare 0.72, court 0.48
 ```
 
-A concept's passages are those where it stands as a phrase of its own, so `find` can list more mentions of its words. The graph comes from the text alone, without the outline or the embedding model. It takes seconds and is kept with the index. With `--json`, every concept and every link gives its number of passages and the ids of the first ten, which `read` opens; `--full` lists them all.
+A concept's passages are those where it stands as a phrase of its own, so `find` can list more mentions of its words. The graph comes from the text alone, without the outline or the embedding model. It leaves out notes, the table of contents, lists of figures, tables or abbreviations, the bibliography and the index, because their names, publishers and page numbers would crowd out the book's own concepts; the first line says how many passages that leaves, here all but the contents. The extractor finds these parts by their headings, such as "Notes" or "Bibliography", by `epub:type` or `role` in an EPUB 3, and by notes that link back to their markers in any EPUB. A word that a number follows in most of its occurrences, such as "Figure" in "Figure 2.1", labels something else and is no concept. The graph takes seconds and is kept with the index. With `--json`, every concept and every link gives its number of passages and the ids of the first ten, which `read` opens; `--full` lists them all.
 
 ## How search works
 

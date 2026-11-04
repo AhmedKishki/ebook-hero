@@ -190,6 +190,7 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
             orig: None,
             spans: Vec::new(),
             section: Vec::new(),
+            apparatus: None,
             locator: pdf_locator(page, None, label_of(page), Some(bbox)),
         })
         .collect();
@@ -518,6 +519,7 @@ fn place_headings(
             orig: None,
             spans: Vec::new(),
             section: Vec::new(),
+            apparatus: None,
             locator,
         });
     }

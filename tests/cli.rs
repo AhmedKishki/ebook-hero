@@ -643,22 +643,21 @@ fn graph_prints_the_summary_line_then_communities() {
     let env = Env::new();
     let out = env.stdout(&["graph", ALICE_EPUB]);
     let first = out.lines().next().unwrap();
-    let words: Vec<&str> = first.split(' ').collect();
+    let parts: Vec<Vec<&str>> = first.split(" · ").map(|p| p.split(' ').collect()).collect();
+    assert_eq!(parts.len(), 3, "{first}");
     assert_eq!(
-        [
-            words[1], words[2], words[4], words[5], words[7], words[8], words[10]
-        ],
-        [
-            "concepts",
-            "in",
-            "communities",
-            "·",
-            "passages",
-            "·",
-            "topics"
-        ],
+        [parts[0][1], parts[0][2], parts[0][4]],
+        ["concepts", "in", "communities"],
         "{first}"
     );
+    // Alice's table of contents is left out, so the line says how many
+    // passages the graph read.
+    assert_eq!(
+        [parts[1][1], parts[1][3], parts[1][4]],
+        ["of", "passages", "read"],
+        "{first}"
+    );
+    assert_eq!(parts[2][1], "topics", "{first}");
     assert!(out.lines().any(|l| l.starts_with("Community 1: ")), "{out}");
 }
 

@@ -17,6 +17,11 @@ const SMART_STOPWORDS: &str = include_str!("smart_stopwords.txt");
 /// A word with fewer letters than this cuts a phrase, like a stopword.
 const MIN_WORD_LETTERS: usize = 3;
 
+/// A one-word phrase that a numeral follows in more than this share of its
+/// occurrences labels chapters, figures or tables, as "figure" does in
+/// "Figure 2.1", and is no candidate.
+const LABEL_SHARE: f64 = 0.5;
+
 /// A phrase that may become a concept. `passages` are indices into the texts
 /// it was found in, ascending.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,30 +46,66 @@ fn stopwords() -> &'static HashSet<&'static str> {
 /// stemmed words joined by spaces) and its lowercased form.
 pub fn phrases_in(text: &str) -> Vec<(String, String)> {
     phrases(text, &mut HashMap::new())
+        .into_iter()
+        .map(|p| (p.key, p.form))
+        .collect()
+}
+
+/// One occurrence of a phrase.
+struct Found {
+    key: String,
+    form: String,
+    /// Whether a numeral follows it, as "2.1" follows "figure" in "figure 2.1".
+    numbered: bool,
 }
 
 /// [`phrases_in`] with a memo of the stems already computed, which a whole
-/// book reuses.
-fn phrases(text: &str, stems: &mut HashMap<String, String>) -> Vec<(String, String)> {
+/// book reuses, and whether a numeral follows each phrase.
+fn phrases(text: &str, stems: &mut HashMap<String, String>) -> Vec<Found> {
     let lower = text.to_lowercase();
     let mut found = Vec::new();
     let mut run: Vec<&str> = Vec::new();
+    let mut run_end = 0;
     for word in words(&lower) {
-        match word.filter(|w| is_content(w)) {
-            Some(w) => run.push(w),
-            None => flush(&mut run, &mut found, stems),
+        match word.filter(|(w, _)| is_content(w)) {
+            Some((w, end)) => {
+                run.push(w);
+                run_end = end;
+            }
+            None => flush(
+                &mut run,
+                numeral_follows(&lower, run_end),
+                &mut found,
+                stems,
+            ),
         }
     }
-    flush(&mut run, &mut found, stems);
+    flush(
+        &mut run,
+        numeral_follows(&lower, run_end),
+        &mut found,
+        stems,
+    );
     found
 }
 
-/// The text as a sequence of words, with `None` wherever a phrase is cut:
-/// at punctuation, digits and every other character that is neither a letter
-/// nor whitespace. Whitespace only separates words. A word is a run of letters that may hold `-`, `'` or `’` between two
-/// letters; a final possessive `'s` is dropped, and a word that still holds an
-/// apostrophe, a contraction such as "don't", is not a word.
-fn words(text: &str) -> Vec<Option<&str>> {
+/// Whether a numeral follows byte `at` of `text` past whitespace, and past a
+/// period before it: "figure 2" and "fig. 2", but not "realism17" or
+/// "realism.17", whose digits mark a note.
+fn numeral_follows(text: &str, at: usize) -> bool {
+    let after = &text[at..];
+    let after = after.strip_prefix('.').unwrap_or(after);
+    let rest = after.trim_start();
+    rest.len() < after.len() && rest.starts_with(char::is_numeric)
+}
+
+/// The text as a sequence of words, each with the byte where it ends, and
+/// `None` wherever a phrase is cut: at punctuation, digits and every other
+/// character that is neither a letter nor whitespace. Whitespace only
+/// separates words. A word is a run of letters that may hold `-`, `'` or `’`
+/// between two letters; a final possessive `'s` is dropped, and a word that
+/// still holds an apostrophe, a contraction such as "don't", is not a word.
+fn words(text: &str) -> Vec<Option<(&str, usize)>> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -103,7 +144,7 @@ fn words(text: &str) -> Vec<Option<&str>> {
         if word.contains(['\'', '’']) {
             out.push(None);
         } else {
-            out.push(Some(word));
+            out.push(Some((word, end)));
         }
         i = j;
     }
@@ -119,7 +160,8 @@ fn is_content(word: &str) -> bool {
 /// phrase, a longer one is dropped.
 fn flush(
     run: &mut Vec<&str>,
-    found: &mut Vec<(String, String)>,
+    numbered: bool,
+    found: &mut Vec<Found>,
     stems: &mut HashMap<String, String>,
 ) {
     if !run.is_empty() && run.len() <= GRAPH_PHRASE_MAX_WORDS {
@@ -133,41 +175,56 @@ fn flush(
             })
             .collect::<Vec<_>>()
             .join(" ");
-        found.push((key, run.join(" ")));
+        found.push(Found {
+            key,
+            form: run.join(" "),
+            numbered,
+        });
     }
     run.clear();
 }
 
 /// The phrases of `texts` that occur in at least
 /// `GRAPH_CANDIDATE_MIN_PASSAGES` of them and in at most
-/// `GRAPH_CANDIDATE_MAX_SHARE` of them, sorted by key. A phrase's label is the
-/// form it most often has, ties going to the form seen first.
+/// `GRAPH_CANDIDATE_MAX_SHARE` of them, sorted by key, without the one-word
+/// phrases that a numeral follows in more than `LABEL_SHARE` of their
+/// occurrences. A phrase's label is the form it most often has, ties going to
+/// the form seen first.
 pub fn candidates(texts: &[&str]) -> Vec<Candidate> {
     #[derive(Default)]
     struct Seen {
         passages: Vec<u32>,
         /// Each form with how often it occurs and when it was first seen.
         forms: HashMap<String, (usize, usize)>,
+        occurrences: usize,
+        numbered: usize,
     }
     let mut stems = HashMap::new();
     let mut seen: HashMap<String, Seen> = HashMap::new();
     let mut order = 0;
     for (i, text) in texts.iter().enumerate() {
         let i = i as u32;
-        for (key, form) in phrases(text, &mut stems) {
-            let entry = seen.entry(key).or_default();
+        for found in phrases(text, &mut stems) {
+            let entry = seen.entry(found.key).or_default();
             if entry.passages.last() != Some(&i) {
                 entry.passages.push(i);
             }
-            entry.forms.entry(form).or_insert((0, order)).0 += 1;
+            entry.forms.entry(found.form).or_insert((0, order)).0 += 1;
+            entry.occurrences += 1;
+            entry.numbered += usize::from(found.numbered);
             order += 1;
         }
     }
     let most = GRAPH_CANDIDATE_MAX_SHARE * texts.len() as f64;
+    let is_label = |key: &str, s: &Seen| {
+        !key.contains(' ') && s.numbered as f64 > LABEL_SHARE * s.occurrences as f64
+    };
     let mut kept: Vec<Candidate> = seen
         .into_iter()
-        .filter(|(_, s)| {
-            s.passages.len() >= GRAPH_CANDIDATE_MIN_PASSAGES && s.passages.len() as f64 <= most
+        .filter(|(key, s)| {
+            s.passages.len() >= GRAPH_CANDIDATE_MIN_PASSAGES
+                && s.passages.len() as f64 <= most
+                && !is_label(key, s)
         })
         .map(|(key, s)| {
             let label = s
@@ -225,6 +282,31 @@ mod tests {
     #[test]
     fn runs_longer_than_three_words_are_not_candidates() {
         assert!(phrases_in("red green blue yellow").is_empty());
+    }
+
+    #[test]
+    fn a_word_a_numeral_mostly_follows_is_a_label_and_no_candidate() {
+        // "figure" comes before a number in 3 of its 4 passages and "fig" in
+        // all 3, once past a period; "theory" in 1 of 3. "world war" is
+        // always numbered but has two words.
+        let mut texts = vec![
+            "see figure 2.1 here",
+            "as figure 3 is",
+            "figure 4, then",
+            "in the figure, then",
+            "see fig. 2 here",
+            "as fig. 3 is",
+            "in fig. 5 again",
+            "theory 1 is here",
+            "the theory, then",
+            "a theory, again",
+            "world war 2 began",
+            "the world war 2, then",
+            "in world war 2 again",
+        ];
+        texts.extend(["filler"; 7]);
+        let got: Vec<String> = candidates(&texts).into_iter().map(|c| c.label).collect();
+        assert_eq!(got, ["theory", "world war"]);
     }
 
     #[test]

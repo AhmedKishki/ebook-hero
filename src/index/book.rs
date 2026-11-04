@@ -125,7 +125,7 @@ impl Book {
             if let Some(graph) = stored_graph(&file) {
                 return Ok(graph);
             }
-            let result = graph::build(&self.passages)?;
+            let result = graph::build(&self.document.blocks, &self.passages)?;
             let cached = CachedGraph {
                 graph_version: GRAPH_VERSION,
                 result,

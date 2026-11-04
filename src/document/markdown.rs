@@ -69,6 +69,7 @@ mod tests {
             orig: None,
             spans: Vec::new(),
             section: Vec::new(),
+            apparatus: None,
             locator: Locator::Pdf {
                 page,
                 page_end: None,

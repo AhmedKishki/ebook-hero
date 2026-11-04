@@ -5,11 +5,13 @@ pub mod communities;
 pub mod phrases;
 pub mod topics;
 
-use std::collections::BTreeSet;
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::document::{Block, BlockKind};
 use crate::passages::Passage;
 use crate::settings::{
     GRAPH_CONCEPTS, GRAPH_MIN_BOOK_PASSAGES, GRAPH_MIN_SHARED, GRAPH_NPMI_FLOOR, GRAPH_PARTNERS,
@@ -25,6 +27,10 @@ use topics::{passage_topics, topic_count};
 pub struct GraphResult {
     /// How many passages the book has.
     pub passages: u32,
+    /// How many of them the graph was built from: those with text outside
+    /// notes, tables of contents, lists of figures, tables or abbreviations,
+    /// bibliographies and indexes. Link NPMI counts these passages.
+    pub passages_read: u32,
     /// How many topics the concepts were chosen with.
     pub topics: u32,
     /// The concepts, in the order the book first mentions them.
@@ -94,16 +100,36 @@ impl GraphResult {
     }
 }
 
-/// The concept graph of a book's passages, which must be in reading order.
-pub fn build(passages: &[Passage]) -> Result<GraphResult> {
-    let n = passages.len();
-    if n < GRAPH_MIN_BOOK_PASSAGES {
-        return Err(Error::InvalidArgument(format!(
-            "the book has {n} passages; a concept graph needs at least \
-             {GRAPH_MIN_BOOK_PASSAGES}, so use search or find on a book this short"
-        )));
+/// The concept graph of a book's passages, which must be in reading order,
+/// cut from `blocks`. The graph reads each passage without its notes and
+/// apparatus, and leaves out the passages that nothing else is left of.
+pub fn build(blocks: &[Block], passages: &[Passage]) -> Result<GraphResult> {
+    let left_out: HashSet<u32> = blocks
+        .iter()
+        .filter(|b| matches!(b.kind, BlockKind::Note { .. }) || b.apparatus.is_some())
+        .map(|b| b.id)
+        .collect();
+    let read: Vec<(u32, Cow<str>)> = passages
+        .iter()
+        .map(|p| (p.id, text_outside(p, &left_out)))
+        .filter(|(_, text)| !text.trim().is_empty())
+        .collect();
+    let (n, r) = (passages.len(), read.len());
+    if r < GRAPH_MIN_BOOK_PASSAGES {
+        return Err(Error::InvalidArgument(if r == n {
+            format!(
+                "the book has {n} passages; a concept graph needs at least \
+                 {GRAPH_MIN_BOOK_PASSAGES}, so use search or find on a book this short"
+            )
+        } else {
+            format!(
+                "{r} of the book's {n} passages have text outside notes, contents, \
+                 lists, bibliography and index; a concept graph needs at least \
+                 {GRAPH_MIN_BOOK_PASSAGES}, so use search or find on this book"
+            )
+        }));
     }
-    let texts: Vec<&str> = passages.iter().map(|p| p.text.as_str()).collect();
+    let texts: Vec<&str> = read.iter().map(|(_, text)| text.as_ref()).collect();
     let selection = select(&texts);
     let mut concepts = selection.concepts;
     concepts.sort_by(|x, y| {
@@ -112,7 +138,7 @@ pub fn build(passages: &[Passage]) -> Result<GraphResult> {
             .then(x.label.cmp(&y.label))
     });
 
-    let links = links(&concepts, n);
+    let links = links(&concepts, r);
     let edges: Vec<(usize, usize, f64)> = links.iter().map(|l| (l.a, l.b, l.npmi)).collect();
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for (concept, community) in louvain(concepts.len(), &edges).into_iter().enumerate() {
@@ -130,9 +156,10 @@ pub fn build(passages: &[Passage]) -> Result<GraphResult> {
         }
     }
 
-    let id_of = |index: &u32| passages[*index as usize].id;
+    let id_of = |index: &u32| read[*index as usize].0;
     Ok(GraphResult {
         passages: n as u32,
+        passages_read: r as u32,
         topics: selection.topics,
         concepts: concepts
             .iter()
@@ -164,6 +191,27 @@ pub fn build(passages: &[Passage]) -> Result<GraphResult> {
             })
             .collect(),
     })
+}
+
+/// The text of `passage` without the pieces of the blocks in `left_out`, the
+/// pieces left joined by a blank line.
+fn text_outside<'a>(passage: &'a Passage, left_out: &HashSet<u32>) -> Cow<'a, str> {
+    if !passage
+        .blocks
+        .iter()
+        .any(|range| left_out.contains(&range.block_id))
+    {
+        return Cow::Borrowed(&passage.text);
+    }
+    Cow::Owned(
+        passage
+            .blocks
+            .iter()
+            .filter(|range| !left_out.contains(&range.block_id))
+            .map(|range| &passage.text[range.start..range.end])
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    )
 }
 
 /// A link before it is numbered for output; `shared` holds passage indices.
@@ -300,17 +348,53 @@ fn mutual_information(occurs: &[u32], topic_of: &[usize], topic_sizes: &[usize])
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::passages::PassageLocator;
+    use crate::document::{Apparatus, BlockKind, Locator};
+    use crate::passages::{BlockRange, PassageLocator};
 
-    fn fake_passages(texts: &[&str]) -> Vec<Passage> {
-        texts
-            .iter()
-            .enumerate()
-            .map(|(i, text)| Passage {
+    /// A piece of a passage: its text, kind and apparatus.
+    type Piece<'a> = (&'a str, BlockKind, Option<Apparatus>);
+
+    /// A book with one passage of `pieces`, a block each, per entry of
+    /// `passages`.
+    fn fake_book(passages: &[Vec<Piece>]) -> (Vec<Block>, Vec<Passage>) {
+        let mut blocks = Vec::new();
+        let mut out = Vec::new();
+        for (i, pieces) in passages.iter().enumerate() {
+            let mut text = String::new();
+            let mut ranges = Vec::new();
+            for (piece, kind, apparatus) in pieces {
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                let id = blocks.len() as u32;
+                ranges.push(BlockRange {
+                    block_id: id,
+                    block_offset: 0,
+                    start: text.len(),
+                    end: text.len() + piece.len(),
+                });
+                text.push_str(piece);
+                blocks.push(Block {
+                    id,
+                    kind: kind.clone(),
+                    text: piece.to_string(),
+                    orig: None,
+                    spans: Vec::new(),
+                    section: Vec::new(),
+                    apparatus: *apparatus,
+                    locator: Locator::Epub {
+                        href: "ch.xhtml".to_string(),
+                        anchor: None,
+                        para: id + 1,
+                        print_page: None,
+                    },
+                });
+            }
+            out.push(Passage {
                 id: i as u32,
-                text: text.to_string(),
+                text,
                 section: Vec::new(),
-                blocks: Vec::new(),
+                blocks: ranges,
                 locator: PassageLocator::Epub {
                     href: "ch.xhtml".to_string(),
                     para_start: i as u32,
@@ -318,8 +402,22 @@ mod tests {
                     print_page: None,
                     under_heading: None,
                 },
-            })
-            .collect()
+            });
+        }
+        (blocks, out)
+    }
+
+    /// A book of one paragraph per passage.
+    fn fake_passages(texts: &[&str]) -> (Vec<Block>, Vec<Passage>) {
+        let passages: Vec<Vec<Piece>> = texts
+            .iter()
+            .map(|text| vec![(*text, BlockKind::Paragraph, None)])
+            .collect();
+        fake_book(&passages)
+    }
+
+    fn build_of((blocks, passages): (Vec<Block>, Vec<Passage>)) -> Result<GraphResult> {
+        build(&blocks, &passages)
     }
 
     #[test]
@@ -330,7 +428,7 @@ mod tests {
 
     #[test]
     fn a_book_shorter_than_twenty_passages_is_refused() {
-        let error = build(&fake_passages(&["one passage"; 19]))
+        let error = build_of(fake_passages(&["one passage"; 19]))
             .unwrap_err()
             .to_string();
         assert!(
@@ -341,9 +439,60 @@ mod tests {
 
     #[test]
     fn a_book_whose_phrases_are_all_too_common_has_an_empty_graph() {
-        let g = build(&fake_passages(&["the same words everywhere"; 30])).unwrap();
+        let g = build_of(fake_passages(&["the same words everywhere"; 30])).unwrap();
         assert!(g.concepts.is_empty() && g.links.is_empty() && g.communities.is_empty());
         assert_eq!(g.passages, 30);
+    }
+
+    #[test]
+    fn notes_and_apparatus_stay_out_of_the_graph() {
+        // 10 passages of index, then 30 of text that each hold 3 of 30 words,
+        // and 6 of which also hold a note. Read whole, the index's "zzindex"
+        // and the notes' "london" and "routledge" would be concepts.
+        let index = ("zzindex, 12", BlockKind::Paragraph, Some(Apparatus::Index));
+        let note = ("London: Routledge.", BlockKind::Note { label: None }, None);
+        let texts: Vec<String> = (0..30)
+            .map(|i| {
+                (0..30)
+                    .filter(|j| (i + 30 - j) % 30 < 3)
+                    .map(word)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect();
+        let mut passages: Vec<Vec<Piece>> = vec![vec![index]; 10];
+        for (i, text) in texts.iter().enumerate() {
+            let mut pieces = vec![(text.as_str(), BlockKind::Paragraph, None)];
+            if i % 5 == 0 {
+                pieces.push(note.clone());
+            }
+            passages.push(pieces);
+        }
+
+        let g = build_of(fake_book(&passages)).unwrap();
+
+        assert_eq!((g.passages, g.passages_read), (40, 30));
+        let labels: Vec<&str> = g.concepts.iter().map(|c| c.label.as_str()).collect();
+        for left_out in ["zzindex", "london", "routledge"] {
+            assert!(!labels.contains(&left_out), "{left_out}: {labels:?}");
+        }
+        let first = g.concepts.iter().find(|c| c.label == word(0)).unwrap();
+        assert_eq!(first.passages, [10, 11, 12]);
+    }
+
+    #[test]
+    fn a_book_with_too_little_text_outside_its_apparatus_is_refused() {
+        let index = ("apple, 12", BlockKind::Paragraph, Some(Apparatus::Index));
+        let mut passages: Vec<Vec<Piece>> = vec![vec![("text", BlockKind::Paragraph, None)]; 15];
+        passages.extend(vec![vec![index]; 10]);
+        let error = build_of(fake_book(&passages)).unwrap_err().to_string();
+        assert!(
+            error.contains(
+                "15 of the book's 25 passages have text outside notes, contents, \
+                 lists, bibliography and index; a concept graph needs at least 20"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

@@ -8,9 +8,11 @@ use std::path::Path;
 use rbook::Epub;
 use zip::ZipArchive;
 
-use super::{assign_sections, xhtml::xhtml_blocks};
+use super::assign_sections;
+use super::xhtml::{RawLink, xhtml_blocks};
 use crate::document::{
-    Block, Document, Locator, Metadata, OutlineEntry, SCHEMA_VERSION, Source, Warning,
+    Apparatus, Block, BlockKind, Document, Locator, Metadata, OutlineEntry, SCHEMA_VERSION, Source,
+    Warning,
 };
 use crate::error::{Error, Result};
 use crate::normalize::normalize;
@@ -64,6 +66,11 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
     let mut blocks: Vec<Block> = Vec::new();
     let mut warnings = Vec::new();
     let mut files: HashMap<String, FileBlocks> = HashMap::new();
+    // The path of each content document read, and for each block the
+    // document it is in and the links it holds.
+    let mut paths: Vec<String> = Vec::new();
+    let mut file_of: Vec<usize> = Vec::new();
+    let mut links: Vec<Vec<RawLink>> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut content_read = 0;
     let mut print_page = None;
@@ -114,6 +121,7 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
                 continue;
             }
         };
+        paths.push(full_path.clone());
         let file = files.entry(full_path).or_default();
         for (index, raw) in xhtml_blocks(&content, &mut print_page)
             .into_iter()
@@ -124,6 +132,8 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
             for element_id in raw.ids {
                 file.by_id.entry(element_id).or_insert(id);
             }
+            file_of.push(paths.len() - 1);
+            links.push(raw.links);
             blocks.push(Block {
                 id,
                 kind: raw.kind,
@@ -131,6 +141,7 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
                 orig: None,
                 spans: Vec::new(),
                 section: Vec::new(),
+                apparatus: raw.apparatus,
                 locator: Locator::Epub {
                     href: href.clone(),
                     anchor: raw.anchor,
@@ -144,6 +155,7 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
         return Err(unreadable("no readable text".to_string()));
     }
     assign_sections(&mut blocks);
+    mark_linked_notes(&mut blocks, &links, &file_of, &paths, &files);
 
     let metadata = epub.metadata();
     Ok(Document {
@@ -207,6 +219,127 @@ fn outline(epub: &Epub, files: &HashMap<String, FileBlocks>) -> Vec<OutlineEntry
         });
     }
     outline
+}
+
+/// Makes a note of each paragraph or list item that a marker outside it links
+/// to and that links back to the marker: how an EPUB without `epub:type`, such
+/// as one converted from another format, ties a note to its place in the text.
+/// A marker is a link with an id and short text ([`RawLink::short`]) outside
+/// headings and outside contents, lists, bibliography and index, whose entries
+/// link to captions and headings that may link back. The note's label is the
+/// id the marker links to. Runs after [`assign_sections`], which gives blocks
+/// their apparatus.
+fn mark_linked_notes(
+    blocks: &mut [Block],
+    links: &[Vec<RawLink>],
+    file_of: &[usize],
+    paths: &[String],
+    files: &HashMap<String, FileBlocks>,
+) {
+    // Each marker by its document and id, with the document and id it links
+    // to and the block it is in.
+    let mut markers: HashMap<(&str, &str), (String, String, u32)> = HashMap::new();
+    for (block, held) in blocks.iter().zip(links) {
+        let may_mark = matches!(block.apparatus, None | Some(Apparatus::Notes));
+        if matches!(block.kind, BlockKind::Heading { .. }) || !may_mark {
+            continue;
+        }
+        let path = paths[file_of[block.id as usize]].as_str();
+        for link in held.iter().filter(|link| link.short) {
+            let Some(id) = link.id.as_deref() else {
+                continue;
+            };
+            if let Some((to_path, to_id)) = resolve_link(path, &link.href) {
+                markers
+                    .entry((path, id))
+                    .or_insert((to_path, to_id, block.id));
+            }
+        }
+    }
+    for (block, held) in blocks.iter_mut().zip(links) {
+        if !matches!(block.kind, BlockKind::Paragraph | BlockKind::ListItem) {
+            continue;
+        }
+        let path = paths[file_of[block.id as usize]].as_str();
+        let label = held.iter().find_map(|link| {
+            let (to_path, to_id) = resolve_link(path, &link.href)?;
+            let (back_path, back_id, marker_block) =
+                markers.get(&(to_path.as_str(), to_id.as_str()))?;
+            let carries_back_id = files.get(back_path)?.by_id.get(back_id) == Some(&block.id);
+            (*marker_block != block.id && back_path == path && carries_back_id)
+                .then(|| back_id.clone())
+        });
+        if let Some(label) = label {
+            block.kind = BlockKind::Note { label: Some(label) };
+        }
+    }
+}
+
+/// The content document and fragment that `href`, met in the document at
+/// `base`, links to. `None` for a link without a fragment, and for one with a
+/// scheme such as `https:` or `mailto:`, which leaves the book.
+fn resolve_link(base: &str, href: &str) -> Option<(String, String)> {
+    let (path, fragment) = href.split_once('#')?;
+    if fragment.is_empty() || path.contains(':') {
+        return None;
+    }
+    let path = percent_decode(path);
+    let target = if path.is_empty() {
+        base.to_string()
+    } else {
+        join_path(base, &path)
+    };
+    Some((target, percent_decode(fragment)))
+}
+
+/// `path` read from the directory of the document at `base`, or from the root
+/// of the book when it starts with `/`, with `.` and `..` resolved. The result
+/// starts with `/` when `base` does.
+fn join_path(base: &str, path: &str) -> String {
+    let mut segments: Vec<&str> = Vec::new();
+    if !path.starts_with('/') {
+        segments.extend(base.split('/').filter(|s| !s.is_empty()));
+        segments.pop();
+    }
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            segment => segments.push(segment),
+        }
+    }
+    let joined = segments.join("/");
+    if base.starts_with('/') {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+/// `text` with each `%` and two hex digits replaced by the byte they encode.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|pair| std::str::from_utf8(pair).ok())
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[derive(Debug)]

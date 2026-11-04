@@ -3,7 +3,7 @@ pub mod markdown;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Document {
@@ -57,7 +57,28 @@ pub struct Block {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<Span>,
     pub section: Vec<String>,
+    /// The apparatus the block belongs to: what an EPUB's `epub:type` or
+    /// `role` says, else what the innermost heading of `section` that names
+    /// one says. `None` for the book's own text. A note in the text, such as a
+    /// footnote, is a `Note` block outside any apparatus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apparatus: Option<Apparatus>,
     pub locator: Locator,
+}
+
+/// The parts of a book that point into it or out of it rather than carry its
+/// text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Apparatus {
+    /// A table of contents.
+    Contents,
+    /// A list of figures, tables, illustrations or abbreviations.
+    Lists,
+    /// Notes gathered under a heading of their own.
+    Notes,
+    Bibliography,
+    Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -136,6 +157,7 @@ mod tests {
             orig: None,
             spans: Vec::new(),
             section: vec!["Entropy".to_string()],
+            apparatus: None,
             locator: pdf(page),
         };
         Document {

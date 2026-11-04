@@ -2,7 +2,7 @@
 
 use scraper::{ElementRef, Html, Node};
 
-use crate::document::BlockKind;
+use crate::document::{Apparatus, BlockKind};
 use crate::normalize::normalize;
 
 /// One block of an XHTML document, before the EPUB reader gives it an id,
@@ -18,7 +18,28 @@ pub struct RawBlock {
     pub ids: Vec<String>,
     /// The printed page in effect where the block's text starts.
     pub print_page: Option<String>,
+    /// The apparatus that the `epub:type` or `role` of the block or of an
+    /// element around it names.
+    pub apparatus: Option<Apparatus>,
+    /// The links in the block, in document order, and those met since the
+    /// previous emitted block.
+    pub links: Vec<RawLink>,
 }
+
+/// An `<a href>` element.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawLink {
+    pub href: String,
+    /// The element's own id.
+    pub id: Option<String>,
+    /// Whether its text has at most `MAX_MARKER_CHARS` characters that are not
+    /// whitespace, as the marker of a note has.
+    pub short: bool,
+}
+
+/// The most characters that are not whitespace a note marker such as `12`,
+/// `[12]` or `*` has.
+pub const MAX_MARKER_CHARS: usize = 8;
 
 /// The longest element id, in bytes, that is kept. Every block copies the last
 /// id it follows into its anchor, so a hostile file could otherwise multiply
@@ -84,9 +105,13 @@ pub fn xhtml_blocks(html: &str, print_page: &mut Option<String>) -> Vec<RawBlock
         blocks: Vec::new(),
         print_page,
         pending_ids: Vec::new(),
+        pending_links: Vec::new(),
         last_id: None,
         open: None,
-        runs: vec![BlockKind::Paragraph],
+        runs: vec![Run {
+            kind: BlockKind::Paragraph,
+            apparatus: None,
+        }],
         leaf_depth: 0,
         skip_depth: 0,
     };
@@ -172,6 +197,23 @@ fn classify(el: ElementRef) -> Class {
     }
 }
 
+/// The apparatus that the element's `epub:type` or `role` names, in the EPUB
+/// structural semantics and DPUB-ARIA vocabularies.
+fn apparatus_of(el: ElementRef) -> Option<Apparatus> {
+    let attr = |name| el.value().attr(name).unwrap_or_default();
+    attr("epub:type")
+        .split_whitespace()
+        .chain(attr("role").split_whitespace())
+        .find_map(|token| match token {
+            "toc" | "toc-brief" | "doc-toc" => Some(Apparatus::Contents),
+            "loi" | "lot" | "loa" | "lov" => Some(Apparatus::Lists),
+            "endnotes" | "footnotes" | "rearnotes" | "doc-endnotes" => Some(Apparatus::Notes),
+            "bibliography" | "doc-bibliography" => Some(Apparatus::Bibliography),
+            "index" | "doc-index" => Some(Apparatus::Index),
+            _ => None,
+        })
+}
+
 fn heading_level(tag: &str) -> Option<u8> {
     match tag {
         "h1" => Some(1),
@@ -193,6 +235,15 @@ struct Open {
     anchor: Option<String>,
     ids: Vec<String>,
     print_page: Option<String>,
+    apparatus: Option<Apparatus>,
+    links: Vec<RawLink>,
+}
+
+/// What the loose text of a container becomes.
+struct Run {
+    kind: BlockKind,
+    /// The apparatus the container or an element around it names.
+    apparatus: Option<Apparatus>,
 }
 
 struct Walker<'a> {
@@ -201,11 +252,14 @@ struct Walker<'a> {
     /// Ids met since the last emitted block while no block was open. Empty
     /// while a block is open, which takes them.
     pending_ids: Vec<String>,
+    /// Links met since the last emitted block while no block was open, kept
+    /// like `pending_ids`.
+    pending_links: Vec<RawLink>,
     /// The last id met, inside a block or outside.
     last_id: Option<String>,
     open: Option<Open>,
-    /// For each container being walked, the kind that its loose text becomes.
-    runs: Vec<BlockKind>,
+    /// For each container being walked, what its loose text becomes.
+    runs: Vec<Run>,
     /// Elements open inside the current leaf block, the leaf itself included;
     /// zero between leaf blocks.
     leaf_depth: usize,
@@ -225,6 +279,7 @@ impl Walker<'_> {
             self.flush();
         }
         self.meet_id(el);
+        self.meet_link(el);
         match class {
             Class::Skipped => self.skip_depth = 1,
             Class::PageBreak => {
@@ -232,13 +287,16 @@ impl Walker<'_> {
                 self.skip_depth = 1;
             }
             Class::Leaf(kind) if !in_leaf => {
-                self.begin(kind);
+                self.begin(kind, apparatus_of(el).or(self.apparatus()));
                 self.leaf_depth = 1;
             }
-            Class::Container if !in_leaf => self.runs.push(if el.value().name() == "li" {
-                BlockKind::ListItem
-            } else {
-                BlockKind::Paragraph
+            Class::Container if !in_leaf => self.runs.push(Run {
+                kind: if el.value().name() == "li" {
+                    BlockKind::ListItem
+                } else {
+                    BlockKind::Paragraph
+                },
+                apparatus: apparatus_of(el).or(self.apparatus()),
             }),
             // Inside a leaf block, elements that would be blocks elsewhere
             // only separate the words around them.
@@ -283,10 +341,18 @@ impl Walker<'_> {
             if text.trim().is_empty() {
                 return;
             }
-            let kind = self.runs.last().cloned().unwrap_or(BlockKind::Paragraph);
-            self.begin(kind);
+            let kind = self
+                .runs
+                .last()
+                .map_or(BlockKind::Paragraph, |run| run.kind.clone());
+            self.begin(kind, self.apparatus());
         }
         self.push_text(text);
+    }
+
+    /// The apparatus of the innermost container being walked.
+    fn apparatus(&self) -> Option<Apparatus> {
+        self.runs.last().and_then(|run| run.apparatus)
     }
 
     fn push_text(&mut self, text: &str) {
@@ -298,7 +364,7 @@ impl Walker<'_> {
         open.text.push_str(text);
     }
 
-    fn begin(&mut self, kind: BlockKind) {
+    fn begin(&mut self, kind: BlockKind, apparatus: Option<Apparatus>) {
         self.open = Some(Open {
             kind,
             text: String::new(),
@@ -306,6 +372,8 @@ impl Walker<'_> {
             anchor: self.last_id.clone(),
             ids: std::mem::take(&mut self.pending_ids),
             print_page: None,
+            apparatus,
+            links: std::mem::take(&mut self.pending_links),
         });
     }
 
@@ -316,8 +384,9 @@ impl Walker<'_> {
         let Some(open) = self.open.take() else { return };
         let text = normalize(&open.text);
         if text.is_empty() {
-            debug_assert!(self.pending_ids.is_empty());
+            debug_assert!(self.pending_ids.is_empty() && self.pending_links.is_empty());
             self.pending_ids = open.ids;
+            self.pending_links = open.links;
             return;
         }
         self.blocks.push(RawBlock {
@@ -326,7 +395,27 @@ impl Walker<'_> {
             anchor: open.anchor,
             ids: open.ids,
             print_page: open.print_page,
+            apparatus: open.apparatus,
+            links: open.links,
         });
+    }
+
+    fn meet_link(&mut self, el: ElementRef) {
+        if el.value().name() != "a" {
+            return;
+        }
+        let Some(href) = el.value().attr("href") else {
+            return;
+        };
+        let link = RawLink {
+            href: href.to_owned(),
+            id: element_id(el).map(str::to_owned),
+            short: short_text(el, MAX_MARKER_CHARS).is_some(),
+        };
+        match &mut self.open {
+            Some(open) => open.links.push(link),
+            None => self.pending_links.push(link),
+        }
     }
 
     fn meet_id(&mut self, el: ElementRef) {
@@ -345,7 +434,9 @@ impl Walker<'_> {
     fn page_break(&mut self, el: ElementRef) {
         let label = page_label(el.value().attr("title"))
             .or_else(|| page_label(el.value().attr("aria-label")))
-            .or_else(|| short_text(el).and_then(|text| page_label(Some(&text))))
+            .or_else(|| {
+                short_text(el, MAX_PAGE_LABEL_CHARS).and_then(|text| page_label(Some(&text)))
+            })
             .or_else(|| page_label(element_id(el).and_then(last_digits)));
         if label.is_some() {
             *self.print_page = label;
@@ -370,15 +461,15 @@ fn page_label(candidate: Option<&str>) -> Option<String> {
     Some(normalize(trimmed)).filter(|label| !label.is_empty())
 }
 
-/// The text of the element, unless it holds more than `MAX_PAGE_LABEL_CHARS`
-/// characters that are not whitespace. A marker wrapped around a chapter stops
-/// being read as soon as it is clear that it is no label.
-fn short_text(el: ElementRef) -> Option<String> {
+/// The text of the element, unless it holds more than `max` characters that
+/// are not whitespace. A marker wrapped around a chapter stops being read as
+/// soon as it is clear that it is no label.
+fn short_text(el: ElementRef, max: usize) -> Option<String> {
     let mut text = String::new();
     let mut visible = 0;
     for fragment in el.text() {
         visible += fragment.chars().filter(|c| !c.is_whitespace()).count();
-        if visible > MAX_PAGE_LABEL_CHARS {
+        if visible > max {
             return None;
         }
         text.push_str(fragment);
@@ -576,6 +667,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn apparatus_comes_from_the_epub_type_or_role_of_an_element_around_the_block() {
+        let got = blocks(
+            r#"<p>Text.</p><section epub:type="bibliography"><h1>Works</h1><div><p>Book one.</p></div></section><section role="doc-index">loose <p>apple, 3</p></section><p>After.</p>"#,
+        );
+        let apparatus: Vec<_> = got.iter().map(|b| (b.text.as_str(), b.apparatus)).collect();
+        assert_eq!(
+            apparatus,
+            [
+                ("Text.", None),
+                ("Works", Some(Apparatus::Bibliography)),
+                ("Book one.", Some(Apparatus::Bibliography)),
+                ("loose", Some(Apparatus::Index)),
+                ("apple, 3", Some(Apparatus::Index)),
+                ("After.", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_body_typed_as_an_index_makes_its_blocks_index() {
+        let html = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Index</title></head>
+<body epub:type="backmatter index"><p>apple, 3</p><p>pear, 5</p></body>
+</html>"#;
+        let got = xhtml_blocks(html, &mut None);
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|b| b.apparatus == Some(Apparatus::Index)));
+    }
+
+    #[test]
+    fn links_are_kept_with_their_id_and_whether_their_text_is_short() {
+        let got = blocks(
+            r##"<p>Claim<a id="r1" href="#n1"><sup>12</sup></a> and <a href="other.xhtml#x">a longer link</a>.</p><div><a id="r2" href="#n2">*</a> loose</div>"##,
+        );
+        let link = |href: &str, id: Option<&str>, short| RawLink {
+            href: href.to_string(),
+            id: id.map(str::to_owned),
+            short,
+        };
+        assert_eq!(
+            got[0].links,
+            [
+                link("#n1", Some("r1"), true),
+                link("other.xhtml#x", None, false)
+            ]
+        );
+        assert_eq!(got[1].links, [link("#n2", Some("r2"), true)]);
     }
 
     #[test]

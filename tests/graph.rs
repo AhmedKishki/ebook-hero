@@ -54,7 +54,7 @@ fn every_link_is_backed_by_the_passages_it_names() {
         for p in &link.passages {
             assert!(a.passages.contains(p) && b.passages.contains(p), "{link:?}");
         }
-        let n = f64::from(graph.passages);
+        let n = f64::from(graph.passages_read);
         let shared = link.passages.len() as f64;
         let (da, db) = (a.passages.len() as f64, b.passages.len() as f64);
         let npmi = (shared * n / (da * db)).ln() / -(shared / n).ln();

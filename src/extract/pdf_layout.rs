@@ -1,22 +1,15 @@
 //! Rebuilds paragraphs from the positioned text lines of PDF pages.
 //!
 //! The functions here are pure: they take lines with their boxes in top-origin
-//! points and return text. [`furniture`] finds running headers and page numbers,
-//! [`order_columns`] puts a two-column page into reading order, and
+//! points and return text. [`order_columns`] puts a two-column page into
+//! reading order, and
 //! [`paragraphs`] joins the remaining lines into paragraphs, footnotes
 //! included, and carries a paragraph across a page break.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::normalize::normalize;
 
-/// The top and bottom share of the page height where furniture can sit.
-/// Chapter-opening folios were measured at 11% from the bottom.
-const BAND_FRACTION: f32 = 0.12;
-/// A running line must recur on at least this many pages...
-const FURNITURE_MIN_PAGES: usize = 3;
-/// ...and on at least this share of the pages.
-const FURNITURE_MIN_SHARE: f32 = 0.5;
 /// Lines needed entirely on each side of the page centre to call it two columns.
 const COLUMN_MIN_LINES: usize = 4;
 /// A gap above this many median pitches starts a paragraph.
@@ -41,8 +34,6 @@ const SENTENCE_END: [char; 6] = ['.', '?', '!', ':', '\u{201D}', '"'];
 /// Characters that break a word at the end of a line.
 const HYPHENS: [char; 2] = ['-', '\u{2010}'];
 const SOFT_HYPHEN: char = '\u{AD}';
-/// Letters a roman numeral page number is written with.
-const ROMAN_DIGITS: &str = "ivxlcdm";
 
 /// One line of text with its box in top-origin page points (`top < bottom`).
 #[derive(Debug, Clone, PartialEq)]
@@ -83,93 +74,6 @@ pub struct LaidParagraph {
     pub page_end: u32,
     pub bbox: [f32; 4],
     pub note: bool,
-}
-
-/// Finds running headers, footers and page numbers.
-///
-/// Only lines in the top or bottom band of a page count. A band line is
-/// furniture when its text, lowercased with each digit run turned into `#`,
-/// recurs in the band on at least half the pages (and at least three), or when
-/// the whole line is a page number: digits or roman numerals, optionally after
-/// `page`. Returns `(page, line index)` pairs, the index being the line's
-/// position in that page's `lines`.
-pub fn furniture(pages: &[PageLines]) -> HashSet<(u32, usize)> {
-    struct BandLine {
-        page: u32,
-        index: usize,
-        folio: bool,
-        key: String,
-    }
-
-    let mut band_lines = Vec::new();
-    let mut pages_with_key: HashMap<String, usize> = HashMap::new();
-    for page in pages {
-        let mut keys_here = HashSet::new();
-        for (index, line) in page.lines.iter().enumerate() {
-            if !in_band(line, page.height) {
-                continue;
-            }
-            let text = normalize(&line.text);
-            if text.is_empty() {
-                continue;
-            }
-            let key = recurrence_key(&text);
-            keys_here.insert(key.clone());
-            band_lines.push(BandLine {
-                page: page.page,
-                index,
-                folio: is_page_number(&text),
-                key,
-            });
-        }
-        for key in keys_here {
-            *pages_with_key.entry(key).or_insert(0) += 1;
-        }
-    }
-
-    let share = (pages.len() as f32 * FURNITURE_MIN_SHARE).ceil() as usize;
-    let needed = share.max(FURNITURE_MIN_PAGES);
-    band_lines
-        .into_iter()
-        .filter(|b| b.folio || pages_with_key[&b.key] >= needed)
-        .map(|b| (b.page, b.index))
-        .collect()
-}
-
-fn in_band(line: &Line, page_height: f32) -> bool {
-    let middle = line.middle();
-    page_height > 0.0
-        && (middle < BAND_FRACTION * page_height || middle > (1.0 - BAND_FRACTION) * page_height)
-}
-
-/// Lowercases the text and turns every run of digits into one `#`.
-fn recurrence_key(text: &str) -> String {
-    let mut key = String::with_capacity(text.len());
-    let mut in_digits = false;
-    for c in text.to_lowercase().chars() {
-        if c.is_ascii_digit() {
-            if !in_digits {
-                key.push('#');
-            }
-            in_digits = true;
-        } else {
-            in_digits = false;
-            key.push(c);
-        }
-    }
-    key
-}
-
-/// Matches `^(page\s+)?([0-9]+|[ivxlcdm]+)$`, ignoring case.
-fn is_page_number(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    let number = match lower.strip_prefix("page") {
-        Some(rest) if rest.starts_with(char::is_whitespace) => rest.trim_start(),
-        _ => lower.as_str(),
-    };
-    !number.is_empty()
-        && (number.chars().all(|c| c.is_ascii_digit())
-            || number.chars().all(|c| ROMAN_DIGITS.contains(c)))
 }
 
 /// Which part of the page a line belongs to. On a page without columns every
@@ -759,91 +663,6 @@ mod tests {
     fn line_texts(lines: &[Line]) -> Vec<&str> {
         lines.iter().map(|l| l.text.as_str()).collect()
     }
-
-    // Furniture
-
-    #[test]
-    fn repeated_header_and_page_numbers_are_furniture() {
-        let pages: Vec<PageLines> = (1..=4u32)
-            .map(|n| {
-                page(
-                    n,
-                    vec![
-                        line_at("Chapter 3 · Entropy", RECTO_MARGIN, 30.0, 140.0, 9.0),
-                        full(
-                            &format!("Body text that is different on page {n}."),
-                            0,
-                            RECTO_MARGIN,
-                        ),
-                        line_at(&(11 + n).to_string(), 200.0, 600.0, 12.0, BODY_PT),
-                    ],
-                )
-            })
-            .collect();
-
-        let expected: HashSet<(u32, usize)> = (1..=4).flat_map(|n| [(n, 0), (n, 2)]).collect();
-        assert_eq!(furniture(&pages), expected);
-    }
-
-    #[test]
-    fn repeated_body_line_is_not_furniture() {
-        let pages: Vec<PageLines> = (1..=4u32)
-            .map(|n| {
-                page(
-                    n,
-                    vec![full(
-                        "The same sentence appears in the middle of every page.",
-                        20,
-                        RECTO_MARGIN,
-                    )],
-                )
-            })
-            .collect();
-
-        assert!(furniture(&pages).is_empty());
-    }
-
-    #[test]
-    fn folios_are_furniture_without_recurrence() {
-        let folio_top = 0.89 * PAGE_H - 6.0;
-        let pages = vec![page(
-            1,
-            vec![
-                line_at("Page 7", 200.0, 30.0, 40.0, 9.0),
-                line_at("A running title seen once", 100.0, 30.0, 200.0, 9.0),
-                full("12", 20, RECTO_MARGIN),
-                line_at("xiv", 200.0, 600.0, 12.0, BODY_PT),
-                line_at("IV", 200.0, folio_top, 12.0, 11.0),
-            ],
-        )];
-
-        let expected: HashSet<(u32, usize)> = [(1, 0), (1, 3), (1, 4)].into_iter().collect();
-        assert_eq!(furniture(&pages), expected);
-    }
-
-    #[test]
-    fn a_running_header_must_recur_on_half_the_pages_and_at_least_three() {
-        let with_header = |total: u32, headed: u32| -> HashSet<(u32, usize)> {
-            let pages: Vec<PageLines> = (1..=total)
-                .map(|n| {
-                    let mut lines = Vec::new();
-                    if n <= headed {
-                        lines.push(line_at("On the Nature of Entropy", 100.0, 30.0, 200.0, 9.0));
-                    }
-                    lines.push(full("Body text.", 10, RECTO_MARGIN));
-                    page(n, lines)
-                })
-                .collect();
-            furniture(&pages)
-        };
-
-        assert!(with_header(6, 2).is_empty(), "two pages are too few");
-        assert_eq!(with_header(6, 3).len(), 3, "three of six pages is enough");
-        assert!(with_header(8, 3).is_empty(), "three of eight is under half");
-        assert_eq!(with_header(8, 4).len(), 4, "four of eight is half");
-    }
-
-    // Paragraph breaks
 
     #[test]
     fn vertical_gap_breaks_paragraph() {
@@ -1529,7 +1348,7 @@ mod tests {
     // Whole-pipeline behaviour
 
     #[test]
-    fn furniture_lines_are_left_out_of_paragraphs() {
+    fn skipped_lines_are_left_out_of_paragraphs() {
         let pages: Vec<PageLines> = (1..=4u32)
             .map(|n| {
                 page(
@@ -1542,7 +1361,7 @@ mod tests {
                 )
             })
             .collect();
-        let skip = furniture(&pages);
+        let skip: HashSet<(u32, usize)> = (1..=4).flat_map(|n| [(n, 0), (n, 2)]).collect();
 
         let paras = paragraphs(&pages, &skip);
 

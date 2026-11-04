@@ -15,7 +15,8 @@ use pdf_oxide::optional_content::decode_pdf_text_string;
 use pdf_oxide::outline::{Destination, OutlineItem};
 
 use super::assign_sections;
-use super::pdf_layout::{LaidParagraph, Line, PageLines, furniture, paragraphs};
+use super::pdf_furniture::furniture;
+use super::pdf_layout::{LaidParagraph, Line, PageLines, paragraphs};
 use crate::document::{
     Block, BlockKind, Document, Locator, Metadata, OutlineEntry, SCHEMA_VERSION, Source, Warning,
 };
@@ -164,7 +165,7 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
     });
     let label_of = |page: u32| page_label(&labels, page);
 
-    let skip = super::furniture_mdl::furniture(&pages);
+    let skip = furniture(&pages);
     let laid = paragraphs(&pages, &skip);
     let page_count = metadata.page_count.unwrap_or_default() as usize;
     let entries = outline_entries(items.as_deref().unwrap_or_default(), page_count);

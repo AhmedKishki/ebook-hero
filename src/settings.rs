@@ -25,3 +25,6 @@ pub const PDF_READER_VERSION: u32 = 2;
 pub const EPUB_READER_VERSION: u32 = 2;
 pub const PASSAGES_VERSION: u32 = 2;
 pub const ANALYZERS_VERSION: u32 = 2;
+pub const GRAPH_PHRASE_MAX_WORDS: usize = 3;
+pub const GRAPH_CANDIDATE_MIN_PASSAGES: usize = 3;
+pub const GRAPH_CANDIDATE_MAX_SHARE: f64 = 0.3;

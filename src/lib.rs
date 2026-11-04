@@ -4,6 +4,7 @@ pub mod document;
 pub mod embed;
 pub mod error;
 pub mod extract;
+pub mod graph;
 pub mod index;
 pub mod mcp;
 pub mod normalize;

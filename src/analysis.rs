@@ -24,6 +24,10 @@ pub const STEMMED: &str = "ebook_hero_en_stem";
 /// used for phrases, `find` and quote verification.
 pub const EXACT: &str = "ebook_hero_en_exact";
 
+/// Lowercased, English-stemmed tokens with nothing dropped. Never registered
+/// on the index: it keys the phrases of the concept graph.
+const KEY: &str = "ebook_hero_en_key";
+
 /// A token as the analyzer emits it: `text[start..end]` is the source word,
 /// and `position` is the slot tantivy indexes it at. Tokens the analyzer drops
 /// leave a gap in `position`, so adjacent tokens can still be apart.
@@ -42,8 +46,8 @@ pub fn register(index: &Index) {
     manager.register(EXACT, build_analyzer(EXACT));
 }
 
-/// The tokens `analyzer` (`STEMMED` or `EXACT`) produces for `text`, with byte
-/// offsets into `text`. Panics on any other name.
+/// The tokens `analyzer` (`STEMMED`, `EXACT` or this module's `KEY`) produces
+/// for `text`, with byte offsets into `text`. Panics on any other name.
 pub fn tokens(analyzer: &str, text: &str) -> Vec<Tok> {
     let mut analyzer = build_analyzer(analyzer);
     let mut stream = analyzer.token_stream(text);
@@ -59,6 +63,16 @@ pub fn tokens(analyzer: &str, text: &str) -> Vec<Tok> {
     tokens
 }
 
+/// `word` lowercased and stemmed with the index's English stemmer. A
+/// hyphenated word is stemmed part by part, and its parts are joined with `-`.
+pub fn stem_word(word: &str) -> String {
+    tokens(KEY, word)
+        .into_iter()
+        .map(|token| token.text)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// The only place the pipelines are defined: `register` hands them to the
 /// index and `tokens` runs them directly, so the two cannot drift apart.
 fn build_analyzer(name: &str) -> TextAnalyzer {
@@ -68,6 +82,10 @@ fn build_analyzer(name: &str) -> TextAnalyzer {
         .dynamic();
     match name {
         EXACT => exact.build(),
+        KEY => TextAnalyzer::builder(SimpleTokenizer::default())
+            .filter(LowerCaser)
+            .filter(Stemmer::new(Language::English))
+            .build(),
         STEMMED => exact
             .filter_dynamic(
                 StopWordFilter::new(Language::English).expect("tantivy lists English stopwords"),
@@ -82,6 +100,15 @@ fn build_analyzer(name: &str) -> TextAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stem_word_stems_each_part_of_a_hyphenated_word() {
+        assert_eq!(stem_word("Entropies"), stem_word("entropy"));
+        assert_eq!(
+            stem_word("labor-powers"),
+            format!("{}-{}", stem_word("labor"), stem_word("power"))
+        );
+    }
 
     #[test]
     fn stemmed_and_exact_analyzers() {

@@ -81,7 +81,7 @@ Community 8: time, hatter, march hare, dormouse
   dormouse    13 passages, first 80   hatter 0.76, march hare 0.72, court 0.48
 ```
 
-The graph comes from the text alone, without the outline or the embedding model. It takes seconds and is kept with the index. With `--json`, every concept and every link lists its passages, so each one can be read.
+A concept's passages are those where it stands as a phrase of its own, so `find` can list more mentions of its words. The graph comes from the text alone, without the outline or the embedding model. It takes seconds and is kept with the index. With `--json`, every concept and every link gives its number of passages and the ids of the first ten, which `read` opens; `--full` lists them all.
 
 ## How search works
 

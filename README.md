@@ -174,6 +174,20 @@ The window runs the first of these that exists: `$EBOOK_HERO_BIN`, `target/relea
 - PDFs need a text layer. OCR is not supported.
 - Formulas and figures are not extracted yet.
 
+## Documentation
+
+`docs/` explains how each part works, with its principles and references:
+
+- [document-model.md](docs/document-model.md): the Document that both readers produce and everything else reads.
+- [pdf-reading.md](docs/pdf-reading.md): how a PDF's text lines become paragraphs, notes and headings.
+- [furniture-detection.md](docs/furniture-detection.md): how running heads, page numbers and stamps are found without a model.
+- [epub-reading.md](docs/epub-reading.md): how an EPUB's XHTML becomes blocks.
+- [search.md](docs/search.md): passages, the lexical and semantic indexes, hybrid ranking and reranking, and `find`.
+- [quote-verification.md](docs/quote-verification.md): how `verify` decides whether a quote is in the book.
+- [concept-graph.md](docs/concept-graph.md): concepts, their links and communities.
+
+`evals/` holds evaluations against other tools. [furniture-detection.md](evals/furniture-detection.md) compares furniture detection with docling on 22 books.
+
 ## Licence
 
 MIT

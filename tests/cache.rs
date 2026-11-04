@@ -446,7 +446,7 @@ fn group_writable_root_is_rejected() {
     ] {
         let message = result.unwrap_err().to_string();
         assert!(message.contains("not private"), "{message}");
-        assert!(message.contains("TMPDIR"), "{message}");
+        assert!(message.contains("EBOOK_HERO_INDEXES"), "{message}");
     }
     set_mode(setup.root(), 0o770);
     assert!(Book::open(setup.root(), &path, &sha).is_err());

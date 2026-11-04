@@ -6,6 +6,7 @@
 //! (see `cli`), and nothing here prints.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -23,7 +24,7 @@ use crate::Error;
 use crate::read::{ReadAt, ReadParams};
 use crate::search::{Mode, SearchParams};
 use crate::session::Session;
-use crate::settings::TOP_K_DEFAULT;
+use crate::settings::{MODEL_IDLE, TOP_K_DEFAULT};
 
 /// What the server tells a client about itself when it connects.
 const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
@@ -295,16 +296,52 @@ fn failure(message: &dyn std::fmt::Display) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(message.to_string())])
 }
 
+/// How long the server keeps a model it has not used: `from_env`, the value of
+/// `$EBOOK_HERO_MODEL_IDLE`, in whole seconds, or `MODEL_IDLE` when it is not
+/// set.
+fn model_idle(from_env: Option<std::ffi::OsString>) -> crate::Result<Duration> {
+    let Some(value) = from_env.filter(|v| !v.is_empty()) else {
+        return Ok(MODEL_IDLE);
+    };
+    let text = value.to_string_lossy();
+    match text.parse::<u64>() {
+        Ok(seconds) if seconds > 0 => Ok(Duration::from_secs(seconds)),
+        _ => Err(Error::InvalidArgument(format!(
+            "EBOOK_HERO_MODEL_IDLE is {text:?}; set it to a whole number of seconds, at least 1, \
+             or unset it to keep a model {} seconds after its last use",
+            MODEL_IDLE.as_secs()
+        ))),
+    }
+}
+
+/// Drops the models each time they have been unused for `idle`, checking once
+/// per `idle`, so a model goes between one and two idle periods after its
+/// last use.
+async fn release_idle_models(session: Arc<Session>, idle: Duration) {
+    let mut checks = tokio::time::interval(idle);
+    checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        checks.tick().await;
+        let session = Arc::clone(&session);
+        let released =
+            tokio::task::spawn_blocking(move || session.models().release_idle(idle)).await;
+        if matches!(released, Ok(true)) {
+            tracing::debug!(idle_seconds = idle.as_secs(), "released the idle models");
+        }
+    }
+}
+
 /// Serves the tools over standard input and output until the client
 /// disconnects.
 pub async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let idle = model_idle(std::env::var_os("EBOOK_HERO_MODEL_IDLE"))?;
     // The session makes its cache directory, which is file system work.
     let session = tokio::task::spawn_blocking(Session::new).await?;
-    EbookHero::new(session)
-        .serve(stdio())
-        .await?
-        .waiting()
-        .await?;
+    let server = EbookHero::new(session);
+    let releaser = tokio::spawn(release_idle_models(Arc::clone(&server.session), idle));
+    let served = server.serve(stdio()).await?.waiting().await;
+    releaser.abort();
+    served?;
     Ok(())
 }
 
@@ -312,6 +349,27 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 mod tests {
     use super::*;
     use crate::settings::{FIND_PAGE, READ_MAX_CHARS, READ_NEIGHBOURS_MAX, TOP_K_MAX};
+    use std::ffi::OsString;
+
+    #[test]
+    fn the_idle_time_comes_from_the_environment_in_whole_seconds() {
+        assert_eq!(model_idle(None).unwrap(), MODEL_IDLE);
+        assert_eq!(model_idle(Some(OsString::new())).unwrap(), MODEL_IDLE);
+        assert_eq!(
+            model_idle(Some(OsString::from("90"))).unwrap(),
+            Duration::from_secs(90)
+        );
+        for bad in ["0", "-5", "1.5", "five", " 9"] {
+            let error = model_idle(Some(OsString::from(bad)))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("EBOOK_HERO_MODEL_IDLE")
+                    && error.contains("whole number of seconds"),
+                "{bad}: {error}"
+            );
+        }
+    }
 
     fn description(tool: &str) -> String {
         EbookHero::tool_router()

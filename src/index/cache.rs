@@ -50,8 +50,28 @@ const HASH_CHUNK: usize = 64 * 1024;
 
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
 
+/// `$EBOOK_HERO_INDEXES` if it is set, else `ebook-hero/indexes` in the user's
+/// cache directory, beside the models. A temporary directory would be emptied
+/// at boot, and every book indexed and embedded again.
 pub fn default_cache_root() -> PathBuf {
-    std::env::temp_dir().join("ebook-hero")
+    cache_root_in(std::env::var_os("EBOOK_HERO_INDEXES"), dirs::cache_dir())
+}
+
+/// `from_env` if it is set, used as given, so its parent must exist. Else
+/// `ebook-hero/indexes` in `user_cache`, or in the temporary directory when
+/// there is no user cache, with the `ebook-hero` directory made if it is
+/// missing, as the models directory is.
+fn cache_root_in(from_env: Option<std::ffi::OsString>, user_cache: Option<PathBuf>) -> PathBuf {
+    if let Some(dir) = from_env.filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    let app = user_cache
+        .unwrap_or_else(std::env::temp_dir)
+        .join("ebook-hero");
+    // A directory that cannot be made shows up, with its cause, when the root
+    // in it is made.
+    let _ = fs::create_dir_all(&app);
+    app.join("indexes")
 }
 
 /// True for exactly 64 lowercase hex digits, the form [`sha256_file`] returns.
@@ -122,7 +142,7 @@ fn check_private(root: &Path) -> Result<()> {
         return Ok(());
     };
     Err(Error::Index(format!(
-        "cache directory {} is not private ({reason}); set TMPDIR to a private directory",
+        "cache directory {} is not private ({reason}); set EBOOK_HERO_INDEXES to a private directory",
         root.display()
     )))
 }
@@ -524,6 +544,32 @@ fn holder_pid(lock: &Path) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn the_cache_root_comes_from_the_environment_first_and_else_beside_the_models() {
+        let user_cache = tempfile::tempdir().unwrap();
+        let named = user_cache.path().join("missing").join("indexes");
+
+        let root = cache_root_in(
+            Some(named.clone().into_os_string()),
+            Some(user_cache.path().into()),
+        );
+        assert_eq!(root, named);
+        assert!(
+            !named.parent().unwrap().exists(),
+            "a named root is used as given"
+        );
+
+        for from_env in [None, Some(OsString::new())] {
+            let root = cache_root_in(from_env, Some(user_cache.path().into()));
+            assert_eq!(root, user_cache.path().join("ebook-hero").join("indexes"));
+            assert!(
+                root.parent().unwrap().is_dir(),
+                "the ebook-hero directory is made"
+            );
+        }
+    }
 
     #[test]
     fn sha256_of_known_bytes() {

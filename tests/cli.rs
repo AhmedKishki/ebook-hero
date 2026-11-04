@@ -19,7 +19,7 @@ const SAMPLE_PDF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sa
 const ALICE_EPUB: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/alice.epub");
 const IMAGE_ONLY_PDF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/imageonly.pdf");
 
-/// The directories every command runs with: `TMPDIR`, which holds the index
+/// The directories every command runs with: `EBOOK_HERO_INDEXES`, the index
 /// cache, and the models directory. Both are private and empty, and no test
 /// that uses them loads a model.
 struct Env {
@@ -38,7 +38,7 @@ impl Env {
     fn command(&self) -> Command {
         let mut command = assert_cmd::cargo::cargo_bin_cmd!("ebook-hero");
         command
-            .env("TMPDIR", self.tmp.path())
+            .env("EBOOK_HERO_INDEXES", self.cache_root())
             .env("EBOOK_HERO_MODELS", self.models.path())
             .env_remove("EBOOK_HERO_LOG");
         command
@@ -732,7 +732,7 @@ fn index_reports_progress_and_marks_the_book_ready() {
 
     // The default models directory, so the model is downloaded once.
     let assert = assert_cmd::cargo::cargo_bin_cmd!("ebook-hero")
-        .env("TMPDIR", tmp.path())
+        .env("EBOOK_HERO_INDEXES", tmp.path())
         .env_remove("EBOOK_HERO_MODELS")
         .args(["index", &book])
         .assert()

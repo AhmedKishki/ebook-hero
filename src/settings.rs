@@ -8,6 +8,10 @@ pub const BM25_WEIGHT: f32 = 1.25;
 pub const VECTOR_WEIGHT: f32 = 1.0;
 pub const SEMANTIC_FLOOR: f32 = 0.55;
 pub const RERANK_CANDIDATES: usize = 30;
+/// Candidates the reranker reads at once. Each batch is padded to its longest
+/// candidate and ONNX Runtime keeps the largest batch's memory, so all 30 at
+/// once held about 0.6 GB more than batches of 4, which rank the same.
+pub const RERANK_BATCH: usize = 4;
 pub const TOP_K_DEFAULT: usize = 5;
 pub const TOP_K_MAX: usize = 20;
 pub const FIND_PAGE: usize = 20;
@@ -15,6 +19,10 @@ pub const READ_MAX_CHARS: usize = 8000;
 pub const READ_NEIGHBOURS_MAX: u32 = 10;
 pub const LOCK_WAIT: Duration = Duration::from_secs(900);
 pub const LOCK_POLL: Duration = Duration::from_millis(200);
+/// How long the MCP server keeps a model it has not used, unless
+/// `$EBOOK_HERO_MODEL_IDLE` says otherwise. The models hold about 0.6 GB, and
+/// loading them again takes about a second.
+pub const MODEL_IDLE: Duration = Duration::from_secs(300);
 pub const OPEN_BOOKS: usize = 4;
 pub const EMBED_BATCH: usize = 8;
 pub const QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";

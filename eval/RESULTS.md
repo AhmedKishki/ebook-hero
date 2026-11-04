@@ -1,6 +1,10 @@
-# Concept graph in search: spike results
+# EXPERIMENT: the concept graph in search
 
-Run on 2026-11-04 on branch `worktree-graph-search-spike`. Nothing here is wired into the CLI, MCP or window.
+**Status: experiment, not for merging.** This branch holds throwaway code and its results. Nothing here is wired into the CLI, MCP or window.
+
+**Conclusion: within a single book, using the concept graph in search gives little or no benefit.** With the reranker, every graph variant stays within ±0.01 nDCG@10 of today's `hybrid` search. Without it, the PageRank list makes results worse at every weight tried. Only query expansion helps, and only for `lexical` search (+0.016, p = 0.028). The details follow.
+
+Run on 2026-11-04.
 
 ## What was compared
 

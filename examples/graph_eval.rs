@@ -36,9 +36,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         run(&book, models, &concepts, "warm up the models", variant)?;
     }
 
-    let labels = |cs: &[usize]| -> Vec<String> {
-        cs.iter().map(|&c| concepts.labels[c].clone()).collect()
-    };
+    let labels =
+        |cs: &[usize]| -> Vec<String> { cs.iter().map(|&c| concepts.labels[c].clone()).collect() };
     let mut rows = Vec::new();
     for (i, query) in queries.iter().enumerate() {
         let text = query["q"].as_str().ok_or("a query has no \"q\"")?;
@@ -54,10 +53,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let top5: Vec<u32> = results
             .get("hybrid")
             .and_then(|r| r["top"].as_array())
-            .map(|a| a.iter().filter_map(Value::as_u64).map(|id| id as u32).take(5).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_u64)
+                    .map(|id| id as u32)
+                    .take(5)
+                    .collect()
+            })
             .unwrap_or_default();
-        let annotated: Vec<Vec<String>> =
-            top5.iter().map(|&id| labels(concepts.of_passage(id))).collect();
+        let annotated: Vec<Vec<String>> = top5
+            .iter()
+            .map(|&id| labels(concepts.of_passage(id)))
+            .collect();
         rows.push(json!({
             "id": query["id"],
             "type": query["type"],
@@ -84,7 +91,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         "queries": rows,
     });
-    fs::write(out.join("run.json"), serde_json::to_string_pretty(&summary)?)?;
+    fs::write(
+        out.join("run.json"),
+        serde_json::to_string_pretty(&summary)?,
+    )?;
     let passages: Vec<Value> = book
         .passages
         .iter()

@@ -359,7 +359,9 @@ pub fn run(
     let semantic = || semantic_hits(book, models, query, SEMANTIC_CANDIDATES, &nothing);
     let expanded = || -> Result<Vec<Hit>> {
         let extra = concepts.expansions(&concepts.query_seeds(query));
-        let found = book.lexical.search_with(&parsed, &extra, LEXICAL_CANDIDATES)?;
+        let found = book
+            .lexical
+            .search_with(&parsed, &extra, LEXICAL_CANDIDATES)?;
         hits_of(book, found.into_iter().map(|f| f.0))
     };
     let rerank = |hits: Vec<Hit>| rerank_hits(hits, |docs| models.rerank(query, docs));
@@ -435,7 +437,10 @@ pub fn run(
     let ranked = hits.as_ref().unwrap_or(&candidates);
     Ok(Outcome {
         top: ids(ranked).into_iter().take(DEPTH).collect(),
-        candidates: ids(&candidates).into_iter().take(RERANK_CANDIDATES).collect(),
+        candidates: ids(&candidates)
+            .into_iter()
+            .take(RERANK_CANDIDATES)
+            .collect(),
         millis: started.elapsed().as_secs_f64() * 1000.0,
     })
 }

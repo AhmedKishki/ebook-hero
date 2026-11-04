@@ -15,7 +15,8 @@ use pdf_oxide::optional_content::decode_pdf_text_string;
 use pdf_oxide::outline::{Destination, OutlineItem};
 
 use super::assign_sections;
-use super::pdf_layout::{LaidParagraph, Line, PageLines, furniture, paragraphs};
+use super::pdf_furniture::furniture;
+use super::pdf_layout::{LaidParagraph, Line, PageLines, paragraphs};
 use crate::document::{
     Block, BlockKind, Document, Locator, Metadata, OutlineEntry, SCHEMA_VERSION, Source, Warning,
 };

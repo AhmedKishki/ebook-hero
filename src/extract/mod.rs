@@ -1,5 +1,6 @@
 pub mod epub;
 pub mod pdf;
+pub mod pdf_furniture;
 pub mod pdf_layout;
 pub mod xhtml;
 

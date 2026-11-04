@@ -1,0 +1,559 @@
+sha12	page	text_sha1	kind	verdict	category
+139142958246	100	c08c0a6b47bde37b	docling-only	furniture	furniture the line missed
+139142958246	102	375ab066280ca868	docling-only	furniture	furniture the line missed
+139142958246	116	8fabe324ee2ff5db	docling-only	furniture	furniture the line missed
+139142958246	117	4c78d874a8988f28	docling-only	furniture	furniture the line missed
+139142958246	163	55e7bb406fb495dc	docling-only	furniture	furniture the line missed
+139142958246	163	68366dc155e69eef	ours-only	text	note, citation or reference line
+139142958246	167	391d7c2087707678	ours-only	text	note, citation or reference line
+139142958246	167	6cd184d2fe417f47	docling-only	furniture	furniture the line missed
+139142958246	171	4bfbe5d8ae31c6b9	docling-only	furniture	furniture the line missed
+139142958246	18	8cb18242b25e0e1f	docling-only	furniture	furniture the line missed
+139142958246	204	f7daca7d740bd60f	docling-only	furniture	furniture the line missed
+139142958246	251	aa456eee2ce56485	ours-only	text	note, citation or reference line
+139142958246	251	d3acf16190e06f26	docling-only	furniture	furniture the line missed
+139142958246	275	17f8d54eb65daa90	docling-only	furniture	furniture the line missed
+139142958246	275	c33ba781e31f8cf9	ours-only	text	note, citation or reference line
+139142958246	285	9d854adcd30e89c1	docling-only	furniture	furniture the line missed
+139142958246	287	b33d366d8f6a3f12	docling-only	furniture	furniture the line missed
+139142958246	341	0f08fb6cfd38c160	docling-only	furniture	furniture the line missed
+139142958246	341	50cc8a5d37fc918f	ours-only	text	note, citation or reference line
+139142958246	341	b4e4984991847f47	ours-only	text	note, citation or reference line
+139142958246	344	b495ec8d073d888c	docling-only	furniture	furniture the line missed
+139142958246	344	d9a7c7895f1afac1	ours-only	text	note, citation or reference line
+139142958246	344	fb1a0e0b7a389186	ours-only	text	note, citation or reference line
+139142958246	358	1b3535903cada812	docling-only	furniture	furniture the line missed
+139142958246	366	10d822a2a79236b1	docling-only	furniture	furniture the line missed
+139142958246	366	18cc81ef5448a307	ours-only	text	note, citation or reference line
+139142958246	366	b50478e3720e1ed4	ours-only	text	note, citation or reference line
+139142958246	373	10f4c4b32d67f9e0	docling-only	furniture	furniture the line missed
+139142958246	373	912f23aeec305cb4	ours-only	text	note, citation or reference line
+139142958246	386	134bfb2fecd48331	ours-only	text	note, citation or reference line
+139142958246	386	425ffc1422dc4f32	ours-only	text	heading or title-page text
+139142958246	386	644aab8707dd7a8a	docling-only	furniture	furniture the line missed
+139142958246	401	588c72ca9434e052	docling-only	furniture	furniture the line missed
+139142958246	401	e003d0cda7ee73d2	ours-only	text	note, citation or reference line
+139142958246	445	9d1b45a282d1ecc4	ours-only	text	index entry
+139142958246	445	bc37ffd674a36d41	ours-only	text	index entry
+139142958246	445	ea15d661be29e478	docling-only	furniture	furniture the line missed
+139142958246	447	21cd1a823b35c4b0	docling-only	furniture	furniture the line missed
+139142958246	447	6be4ca806beb5243	ours-only	text	index entry
+139142958246	451	31cfb2afc62d99d3	docling-only	furniture	furniture the line missed
+139142958246	9	1f530da09da2e4ce	docling-only	furniture	furniture the line missed
+21085dbce2a1	102	99d543933dfac6ba	docling-only	furniture	furniture the line missed
+21085dbce2a1	104	49c56f16ebd35311	docling-only	furniture	furniture the line missed
+21085dbce2a1	106	02cb65d993093d53	ours-only	text	heading or title-page text
+21085dbce2a1	106	07a708f98d202120	ours-only	furniture	chapter-opening citation note
+21085dbce2a1	106	7ba7e2e4d9a0b742	docling-only	furniture	furniture the line missed
+21085dbce2a1	106	930f598cb47b5e1f	ours-only	furniture	chapter-opening citation note
+21085dbce2a1	108	c1c65143da19e06c	docling-only	furniture	furniture the line missed
+21085dbce2a1	112	1aa023368c41fbe3	docling-only	furniture	furniture the line missed
+21085dbce2a1	117	5e7647c76ec67624	docling-only	furniture	furniture the line missed
+21085dbce2a1	119	9499b44708d4de87	docling-only	furniture	furniture the line missed
+21085dbce2a1	128	81a942aa0c2fd7d7	docling-only	furniture	furniture the line missed
+21085dbce2a1	140	9e73b7922f65eed5	docling-only	furniture	furniture the line missed
+21085dbce2a1	148	af2990f21bd1e434	docling-only	furniture	furniture the line missed
+21085dbce2a1	154	5522c1485690c2e3	ours-only	text	note, citation or reference line
+21085dbce2a1	159	c134b425d876bbcc	docling-only	furniture	furniture the line missed
+21085dbce2a1	159	d9b1eac5d6480ed3	ours-only	text	note, citation or reference line
+21085dbce2a1	171	d96b91971e90f128	docling-only	furniture	furniture the line missed
+21085dbce2a1	19	81d103806d7a82c2	docling-only	furniture	furniture the line missed
+21085dbce2a1	3	bf53b511edd9b6cf	ours-only	text	other text
+21085dbce2a1	30	7a99847b88dd1b8c	docling-only	furniture	furniture the line missed
+21085dbce2a1	33	6c9b765d260af7ef	docling-only	furniture	furniture the line missed
+21085dbce2a1	41	220ac70c772e3cec	docling-only	furniture	furniture the line missed
+21085dbce2a1	63	a545b6f3f8f59ca1	docling-only	furniture	furniture the line missed
+21085dbce2a1	68	c0bd47e3ebb6be95	docling-only	furniture	furniture the line missed
+21085dbce2a1	71	9ac6d2930e6017b0	docling-only	furniture	furniture the line missed
+21085dbce2a1	80	3eb6fa73f4e9f462	docling-only	furniture	furniture the line missed
+21085dbce2a1	89	24192b9e89805706	docling-only	furniture	furniture the line missed
+21085dbce2a1	95	036d29596cd9c918	docling-only	furniture	furniture the line missed
+218dda462689	113	1838e0daabcf9645	docling-only	furniture	furniture the line missed
+218dda462689	117	1838e0daabcf9645	docling-only	furniture	furniture the line missed
+218dda462689	122	6f3eb703dcabcb06	docling-only	furniture	furniture the line missed
+218dda462689	132	6f3eb703dcabcb06	docling-only	furniture	furniture the line missed
+218dda462689	135	1838e0daabcf9645	docling-only	furniture	furniture the line missed
+218dda462689	167	6a38a38f03e4ff58	docling-only	furniture	furniture the line missed
+218dda462689	186	5ba5b1902546119c	docling-only	furniture	furniture the line missed
+218dda462689	214	53e7625cf62620cb	ours-only	text	index entry
+218dda462689	214	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+218dda462689	215	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+218dda462689	220	58ea21c36b4069ce	ours-only	text	index entry
+218dda462689	220	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+218dda462689	220	ebd03ab84d84f9e1	ours-only	text	index entry
+218dda462689	43	e933adb3a61ccf13	docling-only	furniture	furniture the line missed
+218dda462689	49	e933adb3a61ccf13	docling-only	furniture	furniture the line missed
+218dda462689	53	e933adb3a61ccf13	docling-only	furniture	furniture the line missed
+218dda462689	54	90f9311419f362c0	ours-only	text	figure label or mark
+218dda462689	54	f32b67c7e26342af	docling-only	furniture	furniture the line missed
+218dda462689	55	e933adb3a61ccf13	docling-only	furniture	furniture the line missed
+218dda462689	60	46a2be36db109593	docling-only	furniture	furniture the line missed
+218dda462689	61	afe011ee68371569	docling-only	furniture	furniture the line missed
+218dda462689	62	46a2be36db109593	docling-only	furniture	furniture the line missed
+218dda462689	78	46a2be36db109593	docling-only	furniture	furniture the line missed
+218dda462689	87	eac39c81d0e68980	docling-only	furniture	furniture the line missed
+360dc93996cf	117	348a27b018669949	docling-only	furniture	furniture the line missed
+360dc93996cf	12	b60013e18892ecf0	ours-only	text	heading or title-page text
+360dc93996cf	123	269aa1a9748d1334	docling-only	furniture	furniture the line missed
+360dc93996cf	127	9310e2ebc65b2731	docling-only	furniture	furniture the line missed
+360dc93996cf	144	f7556c7c8492a271	docling-only	furniture	furniture the line missed
+360dc93996cf	145	0502375d58552f30	docling-only	furniture	furniture the line missed
+360dc93996cf	149	029548ca28cd223c	docling-only	furniture	furniture the line missed
+360dc93996cf	15	5881fe301f841cea	ours-only	furniture	running head, foot or folio
+360dc93996cf	15	db1f4ca6cc934998	ours-only	text	figure label or mark
+360dc93996cf	170	118a8db82f59514e	docling-only	furniture	furniture the line missed
+360dc93996cf	176	a9fb3fe7fcc0e086	docling-only	furniture	furniture the line missed
+360dc93996cf	2	b60013e18892ecf0	ours-only	text	heading or title-page text
+360dc93996cf	211	877152b7bbd6db11	ours-only	furniture	running head, foot or folio
+360dc93996cf	213	7336450af59c6248	ours-only	text	index entry
+360dc93996cf	213	74b0f82904c8eb93	ours-only	furniture	running head, foot or folio
+360dc93996cf	213	a1a1c90d03ce7ef9	ours-only	text	index entry
+360dc93996cf	219	5eb2511f634a2623	docling-only	furniture	furniture the line missed
+360dc93996cf	219	fcbb70ff00219d4c	ours-only	text	index entry
+360dc93996cf	27	bf38995959acc215	docling-only	furniture	furniture the line missed
+360dc93996cf	31	fbb5cb855c7bc85e	docling-only	furniture	furniture the line missed
+360dc93996cf	55	74daa7f0478e00bc	docling-only	furniture	furniture the line missed
+360dc93996cf	82	cfa9dd64aac48772	ours-only	text	heading or title-page text
+360dc93996cf	85	d9e0090a39a27488	docling-only	furniture	furniture the line missed
+360dc93996cf	89	34abf7c79d0db689	docling-only	furniture	furniture the line missed
+360dc93996cf	93	78b242a4ba0bc791	docling-only	furniture	furniture the line missed
+501746c30236	131	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	131	fb49fb4812d31b34	docling-only	furniture	furniture the line missed
+501746c30236	133	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	133	a084bba2d868f8ce	docling-only	furniture	furniture the line missed
+501746c30236	136	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	136	9731425d517bc8ca	docling-only	furniture	furniture the line missed
+501746c30236	145	1838e0daabcf9645	docling-only	text	chapter label or series title
+501746c30236	145	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	158	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	158	938de08abf9f8bf8	docling-only	furniture	furniture the line missed
+501746c30236	160	1e0555f3c1b2279a	docling-only	furniture	furniture the line missed
+501746c30236	160	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	187	69f5abef563ed843	docling-only	furniture	furniture the line missed
+501746c30236	187	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	204	3a0f5f78794aba33	docling-only	furniture	furniture the line missed
+501746c30236	204	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	209	15f7426d1da38259	docling-only	furniture	furniture the line missed
+501746c30236	209	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	209	b4ff9019002ca9ba	ours-only	text	note, citation or reference line
+501746c30236	217	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	217	ab589ad95222d765	docling-only	furniture	furniture the line missed
+501746c30236	225	06100a388325538e	docling-only	furniture	furniture the line missed
+501746c30236	225	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	227	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	227	aa71911954c008af	docling-only	furniture	furniture the line missed
+501746c30236	238	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	238	f41bcc9a838d4bfe	docling-only	text	chapter label or series title
+501746c30236	262	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	262	8cf1e0303e5c3ab2	docling-only	furniture	furniture the line missed
+501746c30236	307	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	307	b2f7f72c814e5ab1	docling-only	furniture	furniture the line missed
+501746c30236	315	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	315	c62844678e7f91d7	docling-only	furniture	furniture the line missed
+501746c30236	327	697675f0a4fe087e	docling-only	text	chapter label or series title
+501746c30236	327	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	328	50202576ac24d84e	docling-only	furniture	furniture the line missed
+501746c30236	328	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	357	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	357	e6b3bfab6d5a7139	docling-only	furniture	furniture the line missed
+501746c30236	365	1a1162ec85b1d212	docling-only	furniture	furniture the line missed
+501746c30236	365	4ea17103afc4b407	ours-only	text	index entry
+501746c30236	365	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	365	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+501746c30236	372	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	372	7edab1f00ca6b31e	ours-only	text	index entry
+501746c30236	372	7fcd80b183b64122	ours-only	furniture	running head, foot or folio
+501746c30236	65	620949cfbc0adb42	ours-only	furniture	running head, foot or folio
+501746c30236	65	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	78	0bae41702c1770fd	docling-only	furniture	furniture the line missed
+501746c30236	78	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	87	207aa202d7f83020	docling-only	furniture	furniture the line missed
+501746c30236	87	71e1d5c543bce342	ours-only	furniture	repository stamp
+501746c30236	97	495ec84f4b989ccb	docling-only	furniture	furniture the line missed
+501746c30236	97	71e1d5c543bce342	ours-only	furniture	repository stamp
+63aa1e6a4d05	102	5c390dd96984cb93	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	104	989756188459297c	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	125	003431e46d0aeeac	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	127	8d8ca01b8ecd9fb0	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	137	bfe88c4be0d0e9f5	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	141	fad7f737de5080ac	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	161	a661358ae0bdc1b3	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	163	b10a667990846818	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	169	388296846a79d466	ours-only	furniture	running head, foot or folio
+63aa1e6a4d05	171	4b512a07efae4b9e	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	172	8fb1a94ced8c3602	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	186	2feca0241fd02319	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	196	23dee68b824af58c	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	2	64806c49bd02fde4	docling-only	text	chapter label or series title
+63aa1e6a4d05	2	bed2fcfb979e93cd	ours-only	text	heading or title-page text
+63aa1e6a4d05	21	bfa722b6ce6f87b2	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	218	866390e03cf3f05c	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	23	0152a7355a39d753	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	237	0b21856f7c611d18	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	258	02cf5526e81202a7	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	301	276526ed512211e4	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	31	597a4b6cfdcdc60d	ours-only	furniture	running head, foot or folio
+63aa1e6a4d05	62	eec1a98bbc1bf120	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	71	c0f40097f9bea650	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	93	580a7a7f234993f8	docling-only	furniture	furniture the line missed
+63aa1e6a4d05	94	ed6b673aa74a050f	docling-only	furniture	furniture the line missed
+65b4edddafe7	11	306db03f88ea6be8	docling-only	furniture	furniture the line missed
+65b4edddafe7	113	6266947fc2840907	docling-only	furniture	furniture the line missed
+65b4edddafe7	114	0abd407338cd3934	docling-only	furniture	furniture the line missed
+65b4edddafe7	126	bed0e942131f43b5	docling-only	furniture	furniture the line missed
+65b4edddafe7	127	c6bde3b3ee513641	docling-only	furniture	furniture the line missed
+65b4edddafe7	140	ca71bede4c3fcc4b	docling-only	furniture	furniture the line missed
+65b4edddafe7	153	867ccf30bf7a2d9a	docling-only	furniture	furniture the line missed
+65b4edddafe7	163	45445f2d04099bfa	docling-only	furniture	furniture the line missed
+65b4edddafe7	214	fb79e750822a3a94	docling-only	furniture	furniture the line missed
+65b4edddafe7	224	6492a3247c4882e3	docling-only	furniture	furniture the line missed
+65b4edddafe7	229	495e656325b1a20a	docling-only	furniture	furniture the line missed
+65b4edddafe7	235	ff0b079018522978	docling-only	furniture	furniture the line missed
+65b4edddafe7	239	7a3e1feec6fb5b50	ours-only	text	other text
+65b4edddafe7	239	bc3e5996f89285ac	docling-only	furniture	furniture the line missed
+65b4edddafe7	246	07ce57d8baf88161	docling-only	furniture	furniture the line missed
+65b4edddafe7	248	c77c6f40e81bc293	docling-only	furniture	furniture the line missed
+65b4edddafe7	250	14100ef59fa30552	docling-only	furniture	furniture the line missed
+65b4edddafe7	271	2b17f28982a0e61e	ours-only	text	note, citation or reference line
+65b4edddafe7	271	929ac99fdd883621	docling-only	furniture	furniture the line missed
+65b4edddafe7	271	c42e7640549aa7d5	ours-only	text	note, citation or reference line
+65b4edddafe7	304	8821ec60ade131e5	docling-only	furniture	furniture the line missed
+65b4edddafe7	309	40bd001563085fc3	ours-only	text	index entry
+65b4edddafe7	309	73d39fac64100aac	docling-only	furniture	furniture the line missed
+65b4edddafe7	43	3520df660fba62a6	docling-only	furniture	furniture the line missed
+65b4edddafe7	67	b9373fa0b6b3c308	docling-only	furniture	furniture the line missed
+65b4edddafe7	79	ba1272c9613999d8	docling-only	furniture	furniture the line missed
+65b4edddafe7	81	c654136d003b3468	docling-only	furniture	furniture the line missed
+65b4edddafe7	99	1f275c937eae6fa1	docling-only	furniture	furniture the line missed
+65b4edddafe7	99	22b451cb879d848b	ours-only	text	other text
+68ccc394ebfe	110	1f3e6507abfa3694	docling-only	furniture	furniture the line missed
+68ccc394ebfe	120	69cd9601aad04ab5	docling-only	furniture	furniture the line missed
+68ccc394ebfe	132	c012753cd579976a	docling-only	furniture	furniture the line missed
+68ccc394ebfe	158	5dba2f3e3b0ffed5	docling-only	furniture	furniture the line missed
+68ccc394ebfe	159	de357ed7f0a61c6f	docling-only	furniture	furniture the line missed
+68ccc394ebfe	182	311e60c8e87f31c6	docling-only	furniture	furniture the line missed
+68ccc394ebfe	24	ef15e50f315ba74f	docling-only	furniture	furniture the line missed
+68ccc394ebfe	258	5cfc66269ba76ca7	docling-only	furniture	furniture the line missed
+68ccc394ebfe	281	cd09e18a9bd74eda	ours-only	text	note, citation or reference line
+68ccc394ebfe	48	cbf4e24755c70130	docling-only	furniture	furniture the line missed
+68ccc394ebfe	64	f8a683f87d4bd03a	docling-only	furniture	furniture the line missed
+68ccc394ebfe	94	1cc09c306cb04a60	docling-only	furniture	furniture the line missed
+7fe8fe383802	107	1284b47d7f535af9	docling-only	furniture	furniture the line missed
+7fe8fe383802	110	6f5474a458d03da9	docling-only	furniture	furniture the line missed
+7fe8fe383802	115	2d9279454da42d1b	docling-only	furniture	furniture the line missed
+7fe8fe383802	116	721a1decf0699e77	docling-only	furniture	furniture the line missed
+7fe8fe383802	137	dc3e5c3208072a5a	docling-only	furniture	furniture the line missed
+7fe8fe383802	167	8174f328c97fc206	docling-only	furniture	furniture the line missed
+7fe8fe383802	206	6d67d8c90de777fb	docling-only	furniture	furniture the line missed
+7fe8fe383802	264	bd9b1a9af0d33bca	docling-only	furniture	furniture the line missed
+7fe8fe383802	270	b8073e1b89cabe80	docling-only	furniture	furniture the line missed
+7fe8fe383802	281	ad2e1f8d91f5b891	docling-only	furniture	furniture the line missed
+7fe8fe383802	292	b37be6294e7c3626	docling-only	furniture	furniture the line missed
+7fe8fe383802	300	a4376c6964dd08f0	docling-only	furniture	furniture the line missed
+7fe8fe383802	380	bf487b1fffd92ae1	docling-only	furniture	furniture the line missed
+7fe8fe383802	383	b9e665b2de2cc82e	docling-only	furniture	furniture the line missed
+7fe8fe383802	385	6c533f307d772b96	docling-only	furniture	furniture the line missed
+7fe8fe383802	403	82b903ed3bc0ee2c	docling-only	furniture	furniture the line missed
+7fe8fe383802	412	0cfe7202853368ba	docling-only	text	chapter label or series title
+7fe8fe383802	414	192a07edb3806a5c	docling-only	furniture	furniture the line missed
+7fe8fe383802	427	dcea8a15dc7cb19e	docling-only	furniture	furniture the line missed
+7fe8fe383802	441	06cb3f00aa09252f	docling-only	furniture	furniture the line missed
+7fe8fe383802	441	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+7fe8fe383802	443	6d0e1050797b03d8	docling-only	furniture	furniture the line missed
+7fe8fe383802	443	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+7fe8fe383802	60	ee3d7bed1d59f21f	docling-only	furniture	furniture the line missed
+7fe8fe383802	62	63c22f7baafeb17b	docling-only	furniture	furniture the line missed
+7fe8fe383802	62	c51048b7325d60e3	ours-only	text	heading or title-page text
+7fe8fe383802	76	ff1f799c422bd9b1	docling-only	furniture	furniture the line missed
+7fe8fe383802	86	3f3f0454fc5dca66	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	105	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	114	cee1f3e3f6e235cc	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	14	8103ab2b3a2c73ee	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	151	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	184	75e5998dc2a4739e	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	184	c50d03f5eb8b38bd	ours-only	text	heading or title-page text
+8664fa3c1c4c	190	75e5998dc2a4739e	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	193	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	218	84b1e0cc2ba45a50	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	244	8741d1a06c2ada71	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	250	8741d1a06c2ada71	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	251	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	280	f91e3b0fde46dac1	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	283	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	29	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	299	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	316	246f1f98552a5d64	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	322	da582d71177a37ba	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	38	89899c0384adb58b	ours-only	text	note, citation or reference line
+8664fa3c1c4c	38	f30547861efd255f	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	54	83a5a48d262c0f85	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	69	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8664fa3c1c4c	73	e53f5f1aff19ed17	docling-only	furniture	furniture the line missed
+8e60a04c7e16	10	356a192b7913b04c	docling-only	furniture	furniture the line missed
+8e60a04c7e16	104	5773c11a0f24f5cc	docling-only	furniture	furniture the line missed
+8e60a04c7e16	124	9a08e10a3f6012bc	docling-only	furniture	furniture the line missed
+8e60a04c7e16	131	93cc2c2ef58e4ce8	ours-only	furniture	blank-page notice
+8e60a04c7e16	138	f7d159aa88902b6b	docling-only	furniture	furniture the line missed
+8e60a04c7e16	151	460c17ff1c36e2eb	docling-only	furniture	furniture the line missed
+8e60a04c7e16	166	460c17ff1c36e2eb	docling-only	furniture	furniture the line missed
+8e60a04c7e16	176	460c17ff1c36e2eb	docling-only	furniture	furniture the line missed
+8e60a04c7e16	190	1ec220732b1983b1	docling-only	furniture	furniture the line missed
+8e60a04c7e16	201	1ec220732b1983b1	docling-only	furniture	furniture the line missed
+8e60a04c7e16	206	6a38a38f03e4ff58	docling-only	furniture	furniture the line missed
+8e60a04c7e16	222	19187dc98dce52fa	docling-only	furniture	furniture the line missed
+8e60a04c7e16	23	26aca7941a99d90e	docling-only	furniture	furniture the line missed
+8e60a04c7e16	24	26aca7941a99d90e	docling-only	furniture	furniture the line missed
+8e60a04c7e16	240	5ba5b1902546119c	docling-only	furniture	furniture the line missed
+8e60a04c7e16	253	3df5419618973a72	docling-only	furniture	furniture the line missed
+8e60a04c7e16	36	26aca7941a99d90e	docling-only	furniture	furniture the line missed
+8e60a04c7e16	38	26aca7941a99d90e	docling-only	furniture	furniture the line missed
+8e60a04c7e16	39	26aca7941a99d90e	docling-only	furniture	furniture the line missed
+8e60a04c7e16	44	26aca7941a99d90e	docling-only	furniture	furniture the line missed
+8e60a04c7e16	46	26aca7941a99d90e	docling-only	furniture	furniture the line missed
+8e60a04c7e16	65	c83c6522843c1e44	docling-only	furniture	furniture the line missed
+8e60a04c7e16	73	c83c6522843c1e44	docling-only	furniture	furniture the line missed
+8e60a04c7e16	74	c83c6522843c1e44	docling-only	furniture	furniture the line missed
+96cd05e71b54	112	68ae065047696a70	docling-only	furniture	furniture the line missed
+96cd05e71b54	134	ef3997e4cb6b4677	docling-only	furniture	furniture the line missed
+96cd05e71b54	192	d77e4d6871f94b16	docling-only	furniture	furniture the line missed
+96cd05e71b54	204	f7de92bf7d4d0520	docling-only	furniture	furniture the line missed
+96cd05e71b54	208	c5b71f8e35bcc9a0	docling-only	furniture	furniture the line missed
+96cd05e71b54	209	3242a1328c51ad46	docling-only	furniture	furniture the line missed
+96cd05e71b54	233	d4b0c70b8f204b30	docling-only	furniture	furniture the line missed
+96cd05e71b54	234	e47f2106e5a5adff	docling-only	furniture	furniture the line missed
+96cd05e71b54	241	c4477d7c8c9abd7c	docling-only	furniture	furniture the line missed
+96cd05e71b54	249	8121f372306af652	docling-only	furniture	furniture the line missed
+96cd05e71b54	258	3bf3ac1092c4a90e	docling-only	furniture	furniture the line missed
+96cd05e71b54	260	417709af9aa21936	ours-only	text	note, citation or reference line
+96cd05e71b54	260	a58a095fcfb4ad3a	docling-only	furniture	furniture the line missed
+96cd05e71b54	271	cde2d3074a311981	docling-only	furniture	furniture the line missed
+96cd05e71b54	301	fcb4a52a1f2ed73f	docling-only	furniture	furniture the line missed
+96cd05e71b54	310	885bc4491050dd61	docling-only	furniture	furniture the line missed
+96cd05e71b54	314	73d39fac64100aac	docling-only	furniture	furniture the line missed
+96cd05e71b54	39	8fe8bdb35cda0742	docling-only	furniture	furniture the line missed
+96cd05e71b54	41	4f9f38ce793e2adf	docling-only	furniture	furniture the line missed
+96cd05e71b54	49	256e360556361079	docling-only	furniture	furniture the line missed
+96cd05e71b54	55	718a9513ed489cc7	docling-only	furniture	furniture the line missed
+96cd05e71b54	64	ddca5fee24812ec6	docling-only	furniture	furniture the line missed
+96cd05e71b54	70	0c3d5c2f7a0eecbe	docling-only	furniture	furniture the line missed
+96cd05e71b54	76	9c22ae39a4cce89b	docling-only	furniture	furniture the line missed
+96cd05e71b54	79	bfea9418f6048778	docling-only	furniture	furniture the line missed
+96cd05e71b54	99	9857bfbbcf02cebb	docling-only	furniture	furniture the line missed
+9b21300447e2	20	3d32406d2b3cb9ea	docling-only	furniture	furniture the line missed
+9b21300447e2	262	a536f92628762f8c	docling-only	furniture	furniture the line missed
+9b21300447e2	308	2b9994d73d4b59ed	docling-only	furniture	furniture the line missed
+9b21300447e2	317	79816ecb0a75e0b2	ours-only	furniture	running head, foot or folio
+9b21300447e2	317	b1d447760e12c7ef	ours-only	text	note, citation or reference line
+9b21300447e2	317	f4c9a69f715c3c60	ours-only	furniture	running head, foot or folio
+9b21300447e2	341	49b450b043dc8531	ours-only	text	index entry
+9b21300447e2	44	3d32406d2b3cb9ea	docling-only	furniture	furniture the line missed
+9b21300447e2	48	3d32406d2b3cb9ea	docling-only	furniture	furniture the line missed
+9b21300447e2	54	3d32406d2b3cb9ea	docling-only	furniture	furniture the line missed
+9b21300447e2	66	3d32406d2b3cb9ea	docling-only	furniture	furniture the line missed
+9b21300447e2	74	3d32406d2b3cb9ea	docling-only	furniture	furniture the line missed
+9b21300447e2	80	71f4a33d62bd4ab8	docling-only	furniture	furniture the line missed
+9b21300447e2	94	71f4a33d62bd4ab8	docling-only	furniture	furniture the line missed
+9c1c1f161a99	104	985cd9eabb05c478	docling-only	furniture	furniture the line missed
+9c1c1f161a99	115	b7232266d64ad331	docling-only	furniture	furniture the line missed
+9c1c1f161a99	133	1c4fab0e522069bc	docling-only	furniture	furniture the line missed
+9c1c1f161a99	137	915f5a63c0e6af51	docling-only	furniture	furniture the line missed
+9c1c1f161a99	152	fb31be12d6a81e35	docling-only	furniture	furniture the line missed
+9c1c1f161a99	159	2d744f9d0bf8bdb3	docling-only	furniture	furniture the line missed
+9c1c1f161a99	173	2a5af72802a66257	docling-only	furniture	furniture the line missed
+9c1c1f161a99	175	07915fd31cefbdab	docling-only	furniture	furniture the line missed
+9c1c1f161a99	178	4d6b0f7a595b3e75	docling-only	furniture	furniture the line missed
+9c1c1f161a99	202	957f23a9ed0eb0fb	docling-only	furniture	furniture the line missed
+9c1c1f161a99	206	957f23a9ed0eb0fb	docling-only	furniture	furniture the line missed
+9c1c1f161a99	208	957f23a9ed0eb0fb	docling-only	furniture	furniture the line missed
+9c1c1f161a99	210	957f23a9ed0eb0fb	docling-only	furniture	furniture the line missed
+9c1c1f161a99	219	f4735499baefa22f	docling-only	furniture	furniture the line missed
+9c1c1f161a99	238	1ae4695ecdbff13f	docling-only	furniture	furniture the line missed
+9c1c1f161a99	244	3f1bb23e7bedef0e	docling-only	furniture	furniture the line missed
+9c1c1f161a99	244	b1d447760e12c7ef	ours-only	text	note, citation or reference line
+9c1c1f161a99	258	526b11e744a27d8a	docling-only	furniture	furniture the line missed
+9c1c1f161a99	29	26f81dd943192210	docling-only	furniture	furniture the line missed
+9c1c1f161a99	37	77cba0972abc23b6	docling-only	furniture	furniture the line missed
+9c1c1f161a99	40	c879487986f05648	docling-only	furniture	furniture the line missed
+9c1c1f161a99	65	ba456d802ba2b3ca	docling-only	furniture	furniture the line missed
+9c1c1f161a99	66	911b3727d384f898	docling-only	furniture	furniture the line missed
+9c1c1f161a99	70	911b3727d384f898	docling-only	furniture	furniture the line missed
+9c1c1f161a99	84	29e2615a260923b1	docling-only	furniture	furniture the line missed
+a4047962cb10	114	e7bd982b040cd0f5	docling-only	furniture	furniture the line missed
+a4047962cb10	117	ea9aed9c3bca782a	docling-only	furniture	furniture the line missed
+a4047962cb10	15	26aca7941a99d90e	docling-only	furniture	furniture the line missed
+a4047962cb10	15	ac3478d69a3c81fa	docling-only	furniture	furniture the line missed
+a4047962cb10	154	c984adc4c7935ec6	ours-only	text	note, citation or reference line
+a4047962cb10	154	d4972b0c25f3dddb	docling-only	furniture	furniture the line missed
+a4047962cb10	160	d4972b0c25f3dddb	docling-only	furniture	furniture the line missed
+a4047962cb10	163	5b00bd03785742cd	docling-only	furniture	furniture the line missed
+a4047962cb10	163	a6f16ab483da9847	docling-only	furniture	furniture the line missed
+a4047962cb10	196	f3fa5bfaa62f59f2	docling-only	furniture	furniture the line missed
+a4047962cb10	223	f1c119f209685f26	docling-only	furniture	furniture the line missed
+a4047962cb10	229	32570df778fcc1aa	docling-only	furniture	furniture the line missed
+a4047962cb10	233	cb062a72a63ca2bf	docling-only	furniture	furniture the line missed
+a4047962cb10	240	f3fa5bfaa62f59f2	docling-only	furniture	furniture the line missed
+a4047962cb10	269	5f573b82f1da8677	docling-only	furniture	furniture the line missed
+a4047962cb10	269	9040ecfa5e0447d1	docling-only	furniture	furniture the line missed
+a4047962cb10	275	8b4111e60ef3c1b9	docling-only	furniture	furniture the line missed
+a4047962cb10	292	d1ce7a2cbdadd2f5	docling-only	furniture	furniture the line missed
+a4047962cb10	33	db656b1163b4b494	docling-only	furniture	furniture the line missed
+a4047962cb10	335	aa85569bc2e16d7f	docling-only	furniture	furniture the line missed
+a4047962cb10	359	3341b16b2e02679e	docling-only	furniture	furniture the line missed
+a4047962cb10	359	f4c9a69f715c3c60	docling-only	furniture	furniture the line missed
+a4047962cb10	383	a5133248b1b55f7b	docling-only	furniture	furniture the line missed
+a4047962cb10	383	f4c9a69f715c3c60	docling-only	furniture	furniture the line missed
+a4047962cb10	42	2f46bcfa3e724ef1	docling-only	furniture	furniture the line missed
+a4047962cb10	6	4a756ca07e9487f4	docling-only	furniture	furniture the line missed
+a4047962cb10	6	833da188871dde4c	docling-only	furniture	furniture the line missed
+a4047962cb10	66	6f3bcb202ea09fc6	docling-only	furniture	furniture the line missed
+a4047962cb10	74	6f3bcb202ea09fc6	docling-only	furniture	furniture the line missed
+a4047962cb10	91	e68536a5cc25a2fc	docling-only	furniture	furniture the line missed
+a4047962cb10	94	e7bd982b040cd0f5	docling-only	furniture	furniture the line missed
+b8540295df3b	118	6c14dd1a8a3b36a1	docling-only	furniture	furniture the line missed
+b8540295df3b	126	6c14dd1a8a3b36a1	docling-only	furniture	furniture the line missed
+b8540295df3b	138	6c14dd1a8a3b36a1	docling-only	furniture	furniture the line missed
+b8540295df3b	16	614fa5d60cd3a79f	docling-only	furniture	furniture the line missed
+b8540295df3b	178	0d77ce63a685591f	docling-only	furniture	furniture the line missed
+b8540295df3b	194	f6d028787098e7c8	docling-only	furniture	furniture the line missed
+b8540295df3b	221	b4cd7797f52df078	docling-only	furniture	furniture the line missed
+b8540295df3b	224	b4cd7797f52df078	docling-only	furniture	furniture the line missed
+b8540295df3b	230	b4cd7797f52df078	docling-only	furniture	furniture the line missed
+b8540295df3b	24	614fa5d60cd3a79f	docling-only	furniture	furniture the line missed
+b8540295df3b	24	9007dc5bf7f6df55	ours-only	text	note, citation or reference line
+b8540295df3b	241	b4cd7797f52df078	docling-only	furniture	furniture the line missed
+b8540295df3b	243	0fb02beff0f9d46c	docling-only	furniture	furniture the line missed
+b8540295df3b	255	0fb02beff0f9d46c	docling-only	furniture	furniture the line missed
+b8540295df3b	261	0fb02beff0f9d46c	docling-only	furniture	furniture the line missed
+b8540295df3b	265	0fb02beff0f9d46c	docling-only	furniture	furniture the line missed
+b8540295df3b	28	614fa5d60cd3a79f	docling-only	furniture	furniture the line missed
+b8540295df3b	28	84a516841ba77a5b	ours-only	text	figure label or mark
+b8540295df3b	280	0fb02beff0f9d46c	docling-only	furniture	furniture the line missed
+b8540295df3b	287	0fb02beff0f9d46c	docling-only	furniture	furniture the line missed
+b8540295df3b	292	0fb02beff0f9d46c	docling-only	furniture	furniture the line missed
+b8540295df3b	306	1901e2f36fbcbf4e	docling-only	furniture	furniture the line missed
+b8540295df3b	313	0c7e4dc85a71e987	ours-only	text	equation line
+b8540295df3b	313	1901e2f36fbcbf4e	docling-only	furniture	furniture the line missed
+b8540295df3b	313	8ed0407d47d90a39	ours-only	text	equation line
+b8540295df3b	313	b0f931c2e290887a	ours-only	text	equation line
+b8540295df3b	313	cdf20c5357962afa	ours-only	text	equation line
+b8540295df3b	313	fe7880853c6d9de0	ours-only	text	equation line
+b8540295df3b	320	1901e2f36fbcbf4e	docling-only	furniture	furniture the line missed
+b8540295df3b	56	7a0b2ac421d30dac	docling-only	furniture	furniture the line missed
+b8540295df3b	57	7a0b2ac421d30dac	docling-only	furniture	furniture the line missed
+b8540295df3b	66	ac1dc68054be6673	docling-only	furniture	furniture the line missed
+c36d563eef87	118	04962614886838d8	docling-only	furniture	furniture the line missed
+c36d563eef87	169	b1a98ed1ce21dda1	docling-only	furniture	furniture the line missed
+c36d563eef87	177	246ddaef55374aee	ours-only	text	note, citation or reference line
+c36d563eef87	177	b1a98ed1ce21dda1	docling-only	furniture	furniture the line missed
+c36d563eef87	238	54f0b73aac4c8466	docling-only	furniture	furniture the line missed
+c36d563eef87	238	969b50ba4a71613b	ours-only	text	note, citation or reference line
+c36d563eef87	347	4e86d8c0a0eb12d7	ours-only	text	other text
+c36d563eef87	347	969b50ba4a71613b	ours-only	text	note, citation or reference line
+c36d563eef87	347	ff7606d26246ed3f	docling-only	furniture	furniture the line missed
+c36d563eef87	354	965e60169100c394	docling-only	furniture	furniture the line missed
+c36d563eef87	377	c650a0d547d0b5b9	docling-only	furniture	furniture the line missed
+c36d563eef87	407	c650a0d547d0b5b9	docling-only	furniture	furniture the line missed
+c36d563eef87	464	a3a84de3d75d65a8	docling-only	furniture	furniture the line missed
+c36d563eef87	491	c650a0d547d0b5b9	docling-only	furniture	furniture the line missed
+c36d563eef87	51	1c16f4498e4361ac	docling-only	furniture	furniture the line missed
+c36d563eef87	524	03a3f9b139d5a4fd	docling-only	furniture	furniture the line missed
+c36d563eef87	524	170b08965b6a94a1	ours-only	text	note, citation or reference line
+c36d563eef87	54	6615c32ee4775164	docling-only	furniture	furniture the line missed
+c36d563eef87	6	9b916a5226763948	ours-only	text	heading or title-page text
+c36d563eef87	633	35617a0a428075f5	docling-only	furniture	furniture the line missed
+c36d563eef87	663	2cd4f0728aa602b9	ours-only	text	note, citation or reference line
+c36d563eef87	663	c80f147d839dae05	docling-only	furniture	furniture the line missed
+c36d563eef87	663	fc243cc26655e258	ours-only	text	note, citation or reference line
+c36d563eef87	683	556d651eca09e8a2	docling-only	furniture	furniture the line missed
+c36d563eef87	697	556d651eca09e8a2	docling-only	furniture	furniture the line missed
+c36d563eef87	772	3810c21e17e7c5e0	docling-only	furniture	furniture the line missed
+c36d563eef87	788	4d25c7297b5b8726	docling-only	furniture	furniture the line missed
+c36d563eef87	788	ccd04939f25266ed	docling-only	furniture	furniture the line missed
+c36d563eef87	844	77de68daecd823ba	ours-only	text	other text
+c36d563eef87	844	9e5fba562edaae03	docling-only	furniture	furniture the line missed
+c36d563eef87	901	f35f0e2075ac6e04	docling-only	furniture	furniture the line missed
+c36d563eef87	962	f7d75c83c17e278c	docling-only	furniture	furniture the line missed
+c36d563eef87	979	ca40387eddd74d0e	docling-only	furniture	furniture the line missed
+c36d563eef87	998	f7d75c83c17e278c	docling-only	furniture	furniture the line missed
+cece37879166	110	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	110	8e63fd3e77796b10	docling-only	furniture	furniture the line missed
+cece37879166	115	5fc75e23eccea3a7	docling-only	furniture	furniture the line missed
+cece37879166	115	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	117	69af4d1e75aa8ff9	docling-only	furniture	furniture the line missed
+cece37879166	117	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	129	00915c91e3fa8562	docling-only	furniture	furniture the line missed
+cece37879166	129	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	133	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	133	a6248bd46c74d446	docling-only	furniture	furniture the line missed
+cece37879166	135	86674c627928e2c3	docling-only	furniture	furniture the line missed
+cece37879166	135	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	136	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	136	62046bc69cb74b6c	docling-only	furniture	furniture the line missed
+cece37879166	138	2a059774e3c5170b	docling-only	furniture	furniture the line missed
+cece37879166	138	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	14	7a38d8cbd20d9932	ours-only	text	other text
+cece37879166	140	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	140	98d0456631c09890	docling-only	furniture	furniture the line missed
+cece37879166	145	63ee74afc25e45fa	docling-only	furniture	furniture the line missed
+cece37879166	145	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	149	868cb426692f635a	docling-only	furniture	furniture the line missed
+cece37879166	149	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	23	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	23	fe5dbbcea5ce7e29	docling-only	furniture	furniture the line missed
+cece37879166	37	12c6fc06c99a4623	docling-only	furniture	furniture the line missed
+cece37879166	37	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	54	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	54	ca3512f4dfa95a03	docling-only	furniture	furniture the line missed
+cece37879166	59	98fbc42faedc0249	docling-only	furniture	furniture the line missed
+cece37879166	59	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	74	5a5b0f9b7d3f8fc8	docling-only	furniture	furniture the line missed
+cece37879166	77	511a418e72591eb7	docling-only	furniture	furniture the line missed
+cece37879166	77	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	78	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	78	a17554a0d2b15a66	docling-only	furniture	furniture the line missed
+cece37879166	83	a3dd145b82074018	docling-only	furniture	furniture the line missed
+cece37879166	83	b4c96d80854dd27e	docling-only	furniture	furniture the line missed
+cece37879166	86	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	86	afecf4d81c3ad43a	docling-only	furniture	furniture the line missed
+cece37879166	94	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	94	b74f5ee9461495ba	docling-only	furniture	furniture the line missed
+cece37879166	96	411cd345ed8f9cf8	docling-only	furniture	furniture the line missed
+cece37879166	96	4c86a7e881779931	docling-only	furniture	furniture the line missed
+df8b6aae16c0	12	12bd9668440a8a86	ours-only	text	other text
+df8b6aae16c0	120	413e8573e4d8b1d4	docling-only	furniture	furniture the line missed
+df8b6aae16c0	122	413e8573e4d8b1d4	docling-only	furniture	furniture the line missed
+df8b6aae16c0	127	91e48256aa6c2b37	docling-only	furniture	furniture the line missed
+df8b6aae16c0	134	413e8573e4d8b1d4	docling-only	furniture	furniture the line missed
+df8b6aae16c0	141	1b6453892473a467	docling-only	text	chapter number
+df8b6aae16c0	141	e74b682aeff274ab	ours-only	text	heading or title-page text
+df8b6aae16c0	142	72b9402ec74de63c	ours-only	furniture	running head, foot or folio
+df8b6aae16c0	163	e74b682aeff274ab	docling-only	furniture	furniture the line missed
+df8b6aae16c0	169	e74b682aeff274ab	docling-only	furniture	furniture the line missed
+df8b6aae16c0	179	e74b682aeff274ab	docling-only	furniture	furniture the line missed
+df8b6aae16c0	203	92ae762359c9709b	docling-only	furniture	furniture the line missed
+df8b6aae16c0	222	da39a3ee5e6b4b0d	ours-only	text	other text
+df8b6aae16c0	24	6a203171572969b4	docling-only	furniture	furniture the line missed
+df8b6aae16c0	248	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+df8b6aae16c0	249	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+df8b6aae16c0	253	1cc641954099c249	ours-only	text	index entry
+df8b6aae16c0	253	e540cdd1328b2b21	docling-only	furniture	furniture the line missed
+df8b6aae16c0	36	ddbeb85d0181693f	docling-only	furniture	furniture the line missed
+df8b6aae16c0	54	609aa423b1acdb0e	ours-only	furniture	running head, foot or folio
+df8b6aae16c0	58	da4b9237bacccdf1	docling-only	text	chapter number
+df8b6aae16c0	61	11f6ad8ec52a2984	ours-only	text	figure label or mark
+df8b6aae16c0	61	23e591e8c36dda98	ours-only	text	figure label or mark
+df8b6aae16c0	63	b829e610af0854f9	docling-only	furniture	furniture the line missed
+df8b6aae16c0	68	358f62f8a89ea24f	ours-only	furniture	running head, foot or folio
+df8b6aae16c0	97	91e48256aa6c2b37	docling-only	furniture	furniture the line missed
+f369d5ab18e5	128	e30d050104a2baec	docling-only	furniture	furniture the line missed
+f369d5ab18e5	191	da4b9237bacccdf1	ours-only	text	other text
+f369d5ab18e5	205	93cc2c2ef58e4ce8	ours-only	furniture	blank-page notice
+f369d5ab18e5	226	fa35e192121eabf3	ours-only	text	heading or title-page text
+f369d5ab18e5	241	744d2265a2856d00	ours-only	text	figure label or mark
+f369d5ab18e5	40	82a4a4b8b65f9787	ours-only	text	heading or title-page text
+f369d5ab18e5	5	05b5c820fbbb04f3	ours-only	text	heading or title-page text
+f369d5ab18e5	5	74ada0f673198fdb	ours-only	text	heading or title-page text
+f369d5ab18e5	95	130d6085c741e53a	ours-only	text	note, citation or reference line
+f369d5ab18e5	95	2a969ff55b401b5e	ours-only	text	note, citation or reference line
+f369d5ab18e5	95	984a9cc32ddf1e56	ours-only	text	note, citation or reference line
+f369d5ab18e5	95	b93fa88a6d4083d1	ours-only	text	note, citation or reference line

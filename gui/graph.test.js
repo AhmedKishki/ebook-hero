@@ -11,7 +11,7 @@ function graphOf(concepts, links) {
   return {
     passages: 30,
     topics: 5,
-    concepts: concepts.map((label, id) => ({ id, label, passages: [id], community: 0 })),
+    concepts: concepts.map((label, id) => ({ id, label, passage_count: 1, passages: [id], community: 0 })),
     links: links.map(([a, b, npmi]) => ({ a, b, npmi, passages: [a] })),
     communities: [{ id: 0, concepts: concepts.map((_, id) => id) }],
   };
@@ -37,7 +37,7 @@ test('layout keeps a lone concept on the page', () => {
   assert.ok(Number.isFinite(only.x) && Number.isFinite(only.y));
 });
 
-test('open runs graph --json on the absolute path once for an unchanged file', async () => {
+test('open runs graph --json --full on the absolute path once for an unchanged file', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'graph-'));
   const book = path.join(dir, 'book.epub');
   fs.writeFileSync(book, 'x');
@@ -51,6 +51,29 @@ test('open runs graph --json on the absolute path once for an unchanged file', a
   await graphs.open({ path: book });
   assert.ok(first.ok);
   assert.equal(first.positions.length, 2);
-  assert.deepEqual(calls, [['graph', '--json', '--', book]]);
+  assert.deepEqual(calls, [['graph', '--json', '--full', '--', book]]);
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('layout keeps linked concepts spread when one concept has no links', () => {
+  const labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'lone'];
+  const ring = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => [i, (i + 1) % 8, 0.5]);
+  const linked = layout(graphOf(labels, ring)).slice(0, 8);
+  const span = (values) => Math.max(...values) - Math.min(...values);
+  assert.ok(span(linked.map((p) => p.x)) > 0.5, JSON.stringify(linked));
+  assert.ok(span(linked.map((p) => p.y)) > 0.5, JSON.stringify(linked));
+});
+
+test('an older binary without the graph command is named, with how to update it', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'graph-'));
+  const book = path.join(dir, 'book.epub');
+  fs.writeFileSync(book, 'x');
+  const exec = async () => ({
+    ok: false, stdout: '', stderr: "error: unrecognized subcommand 'graph'\n", binary: '/old/ebook-hero',
+  });
+  const reply = await createGraphs(exec).open({ path: book });
+  assert.equal(reply.ok, false);
+  assert.match(reply.stderr, /\/old\/ebook-hero has no graph command/);
+  assert.match(reply.stderr, /cargo build --release|EBOOK_HERO_BIN/);
   fs.rmSync(dir, { recursive: true });
 });

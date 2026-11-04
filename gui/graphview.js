@@ -17,6 +17,7 @@ const graphView = (() => {
   const drawing = document.getElementById('graph-svg');
   const legend = document.getElementById('graph-legend');
   const title = document.getElementById('graph-concept');
+  const note = document.getElementById('graph-note');
   const strip = document.getElementById('graph-strip');
   const list = document.getElementById('graph-passages');
   let graph = null;
@@ -130,11 +131,13 @@ const graphView = (() => {
     if (i === null) {
       title.textContent = graph.concepts.length
         ? 'Click a concept to see its passages.'
-        : 'No concept occurs in 3 or more passages of this book.';
+        : 'No phrase of this book occurs in at least 3 passages and in at most 30% of them, so it has no concepts.';
+      note.textContent = '';
       return;
     }
     const concept = graph.concepts[i];
-    title.textContent = `${concept.label} · ${concept.passages.length} passages · community ${concept.community + 1}`;
+    title.textContent = `${concept.label} · ${concept.passage_count} passages · community ${concept.community + 1}`;
+    note.textContent = `The passages where “${concept.label}” stands as a phrase of its own. find lists every mention.`;
     strip.setAttribute('viewBox', `0 0 ${STRIP_WIDTH} 30`);
     strip.setAttribute('preserveAspectRatio', 'none');
     element('line', { x1: 0, x2: STRIP_WIDTH, y1: 15, y2: 15, class: 'axis' }, strip);

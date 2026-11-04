@@ -13,6 +13,10 @@ const START_TEMPERATURE = 0.1;
 // The ideal distance between concepts is this over the square root of their
 // number, as in the spike's networkx layout: wide enough for their labels.
 const SPREAD = 1.6;
+// Each concept is also pulled toward the middle of all of them, this hard per
+// unit of distance, so a concept without links stays near the rest instead of
+// drifting off and leaving them in a corner once the drawing is scaled to fit.
+const GRAVITY = 1;
 
 class GraphError extends Error {}
 
@@ -30,7 +34,7 @@ function parseGraph(text) {
   };
   need(Number.isInteger(graph?.passages), 'passages');
   for (const list of ['concepts', 'links', 'communities']) need(Array.isArray(graph[list]), list);
-  for (const c of graph.concepts) for (const f of ['id', 'label', 'passages', 'community']) need(c[f] !== undefined, `concepts[].${f}`);
+  for (const c of graph.concepts) for (const f of ['id', 'label', 'passage_count', 'passages', 'community']) need(c[f] !== undefined, `concepts[].${f}`);
   for (const l of graph.links) for (const f of ['a', 'b', 'npmi', 'passages']) need(l[f] !== undefined, `links[].${f}`);
   for (const c of graph.communities) for (const f of ['id', 'concepts']) need(c[f] !== undefined, `communities[].${f}`);
   return graph;
@@ -39,11 +43,11 @@ function parseGraph(text) {
 /**
  * Where to draw each concept: `{ x, y }` in [0, 1]², by Fruchterman and
  * Reingold's spring layout. Linked concepts pull together, harder the higher
- * their NPMI, and every concept pushes every other away. Nothing holds the
- * concepts inside a frame while they settle, as nothing does in networkx's
- * version; the result is scaled to fit afterwards, so no concept is pinned to
- * an edge. The start comes from `seed`, so the same graph is always drawn the
- * same way.
+ * their NPMI, every concept pushes every other away, and a weak pull toward
+ * the middle keeps unlinked concepts close. Nothing holds the concepts inside a
+ * frame while they settle, as nothing does in networkx's version; the result
+ * is scaled to fit afterwards, so no concept is pinned to an edge. The start
+ * comes from `seed`, so the same graph is always drawn the same way.
  */
 function layout(graph, { seed = 1, iterations = 300 } = {}) {
   const n = graph.concepts.length;
@@ -70,6 +74,14 @@ function layout(graph, { seed = 1, iterations = 300 } = {}) {
       const pull = ((d * d) / k) * npmi;
       move[a].x -= (dx / d) * pull; move[a].y -= (dy / d) * pull;
       move[b].x += (dx / d) * pull; move[b].y += (dy / d) * pull;
+    }
+    const middle = {
+      x: pos.reduce((sum, p) => sum + p.x, 0) / n,
+      y: pos.reduce((sum, p) => sum + p.y, 0) / n,
+    };
+    for (let i = 0; i < n; i++) {
+      move[i].x -= GRAVITY * (pos[i].x - middle.x);
+      move[i].y -= GRAVITY * (pos[i].y - middle.y);
     }
     const temperature = START_TEMPERATURE * (1 - step / iterations);
     for (let i = 0; i < n; i++) {
@@ -107,6 +119,19 @@ function mulberry32(seed) {
 }
 
 /**
+ * The failure to show for a binary from before the graph, or before its
+ * `--full` flag, whose own message names neither the cause nor a remedy.
+ */
+function olderBinary(result) {
+  if (!/unrecognized subcommand 'graph'|unexpected argument '--full'/.test(result.stderr ?? '')) return null;
+  const binary = result.binary ?? 'this ebook-hero';
+  return failure(
+    `error: ${binary} has no graph command, or an older one; run "cargo build --release" in the repository root, `
+      + 'or set EBOOK_HERO_BIN to an ebook-hero of the same version as this window',
+  );
+}
+
+/**
  * Loads concept graphs through `exec`, keeping the last few, each with its
  * layout. `open({ path })` resolves to `{ ok, key, absolute, graph, positions }`
  * or to a failure `{ ok: false, stderr }`.
@@ -119,8 +144,8 @@ function createGraphs(exec = execBinary) {
     if (!where.ok) return where;
     const { absolute, key } = where;
     if (!graphs.has(key)) {
-      const result = await exec(['graph', '--json', '--', absolute]);
-      if (!result.ok) return result;
+      const result = await exec(['graph', '--json', '--full', '--', absolute]);
+      if (!result.ok) return olderBinary(result) ?? result;
       let graph;
       try {
         graph = parseGraph(result.stdout);

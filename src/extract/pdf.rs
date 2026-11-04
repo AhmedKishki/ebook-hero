@@ -164,7 +164,7 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
     });
     let label_of = |page: u32| page_label(&labels, page);
 
-    let skip = furniture(&pages);
+    let skip = super::furniture_mdl::furniture(&pages);
     let laid = paragraphs(&pages, &skip);
     let page_count = metadata.page_count.unwrap_or_default() as usize;
     let entries = outline_entries(items.as_deref().unwrap_or_default(), page_count);

@@ -28,3 +28,6 @@ pub const ANALYZERS_VERSION: u32 = 2;
 pub const GRAPH_PHRASE_MAX_WORDS: usize = 3;
 pub const GRAPH_CANDIDATE_MIN_PASSAGES: usize = 3;
 pub const GRAPH_CANDIDATE_MAX_SHARE: f64 = 0.3;
+pub const NMF_MAX_ITERATIONS: usize = 500;
+pub const NMF_TOLERANCE: f64 = 1e-4;
+pub const NMF_SEED: u64 = 1;

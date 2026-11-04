@@ -2,3 +2,4 @@
 //! share passages more often than chance, and the communities they form.
 
 pub mod phrases;
+pub mod topics;

@@ -4,11 +4,11 @@ A printed page carries text that belongs to the page rather than to the book's a
 
 ebook-hero removes furniture from PDFs with a measure instead of rules. Every line is described in three ways, each description has a length in bits, and the shortest description decides what the line is. The parameters of the descriptions are fitted to the book being read. No threshold, pattern list or trained model is involved.
 
-The code is in `src/extract/pdf_furniture.rs`. EPUB files have no pages and no furniture, so only the PDF reader uses it.
+The code is the [furniture-detection](https://crates.io/crates/furniture-detection) crate, which the PDF reader calls; [its documentation](https://github.com/AhmedKishki/furniture-detection/blob/main/docs/furniture-detection.md) explains the measure from the basics. EPUB files have no pages and no furniture, so only the PDF reader uses it.
 
 ## Where it sits in the PDF reader
 
-The PDF reader (`src/extract/pdf.rs`) turns each page into positioned text lines. Furniture detection reads all pages at once, because it works by comparing pages, and returns the lines that are furniture. Paragraph rebuilding (`paragraphs` in `src/extract/pdf_layout.rs`) skips those lines, and the reader keeps them apart in `Document.furniture`, each with its page and box.
+The PDF reader (`src/extract/pdf.rs`) turns each page into positioned text lines. It hands the crate every page with text, each line as its text and box, all at once, because the measure works by comparing pages, and the crate returns the lines that are furniture. Paragraph rebuilding (`paragraphs` in `src/extract/pdf_layout.rs`) skips those lines, and the reader keeps them apart in `Document.furniture`, each with its page and box.
 
 ```mermaid
 flowchart LR

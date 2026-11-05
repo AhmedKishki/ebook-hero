@@ -14,7 +14,7 @@ The MCP tool `concept_graph` takes `path` and an optional `full`, false by defau
 
 ## The pipeline
 
-`build` in `src/graph/mod.rs` turns the book's passages into a graph in five steps.
+The [concept-map](https://crates.io/crates/concept-map) crate builds the graph from the book's passages: `build` in `src/graph/mod.rs` hands it their texts and turns its result into the `GraphResult` described under [Output](#output). [concept-map's documentation](https://github.com/AhmedKishki/concept-map/blob/main/docs/concept-map.md) explains each step from the basics, with worked examples on `alice.epub`.
 
 ```mermaid
 flowchart TD
@@ -31,99 +31,13 @@ The passages are the ones search ranks (`build_passages` in `src/passages.rs`): 
 
 Below, n is the number of passages. `build` refuses a book with fewer than `GRAPH_MIN_BOOK_PASSAGES` = 20 passages, with an error such as "the book has 19 passages; a concept graph needs at least 20, so use search or find on a book this short".
 
-### Step 1: candidate phrases
+The five steps, in short:
 
-`candidates` in `src/graph/phrases.rs` finds candidates as RAKE does: a candidate is a run of words between stopwords and punctuation. The text is lowercased and read word by word.
-
-- A word is a run of letters that may hold `-`, `'` or `’` between two letters, so "labor-power" and "naïve" stay whole.
-- A final possessive `'s` or `’s` is dropped, so "Kant’s" becomes "kant".
-- A word that still holds an apostrophe, a contraction such as "doesn't", cuts the run.
-- Any other character that is neither a letter nor whitespace cuts the run: punctuation, digits and symbols. Whitespace, line breaks included, only separates words.
-- A word cuts the run when it is one of the 571 SMART stopwords in `src/graph/smart_stopwords.txt` or has fewer than `MIN_WORD_LETTERS` = 3 letters.
-
-The words that do not cut are content words. A run of 1 to `GRAPH_PHRASE_MAX_WORDS` = 3 content words is a phrase. A longer run is dropped whole, not split. The unit tests pin examples. "The transcendental realism of science, in 1975, rejects positivism." gives "transcendental realism", "science" and "rejects positivism". "Kant’s critique doesn't answer Hume's problem" gives "kant critique" and "answer hume problem". "red green blue yellow" gives nothing.
-
-A phrase is keyed by its words stemmed with the search index's English stemmer (`stem_word` in `src/analysis.rs`, which stems a hyphenated word part by part), so "head" and "heads" share a key. Its label is the lowercased form it most often has, ties going to the form seen first.
-
-A phrase becomes a candidate when it stands in at least `GRAPH_CANDIDATE_MIN_PASSAGES` = 3 passages and in at most `GRAPH_CANDIDATE_MAX_SHARE` = 0.3 of them. Both limits count passages, not occurrences. In the unit test with 10 passages, "mock turtle" stands in 3 and is kept, "gryphon" stands in 2 and is too rare, and "queen" stands in 4 and is too common.
-
-A phrase stands in a passage only as a run of its own. "turtle" inside "mock turtle" does not count for a phrase "turtle". This is why `find` can list more mentions of a concept's words than the concept has passages.
-
-RAKE goes on to score each candidate by the degree and frequency of its words. ebook-hero takes only RAKE's way of cutting candidates and chooses among them in step 3.
-
-### Step 2: topics
-
-`passage_topics` in `src/graph/topics.rs` sorts the passages into topics by non-negative matrix factorization (NMF). The output does not list the topics, only their number; step 3 uses them to choose concepts.
-
-The number of topics k is `topic_count(n)`: the square root of n, rounded, and at least 2. The 166 passages of `tests/fixtures/alice.epub` give 13 topics.
-
-The matrix X has a row per passage and a column per word. Its words are the `STEMMED` tokens of the search index (`src/analysis.rs`): lowercased and stemmed, without tantivy's English stopwords, question words such as "how" and "why", or tokens of 40 bytes or more. The SMART list of step 1 plays no part here. A word gets a column when it is in at least `MIN_PASSAGES` = 2 passages and in at most `MAX_SHARE` = 0.5 of them; a word in more passages is, as the code's comment puts it, in every topic. Columns are in alphabetical order, so the same book always gets the same matrix. A cell holds
-
-$$x = (1 + \ln \mathrm{tf}) \cdot \left( \ln \frac{1 + n}{1 + \mathrm{df}} + 1 \right)$$
-
-where tf is how often the word occurs in the passage and df is how many passages hold it. Each row is then scaled to unit length.
-
-NMF approximates X by WH, where W is n × k, H is k × (number of words), and both are non-negative. The rank of the factorization is the number of topics. `nmf` lowers the squared error ‖X − WH‖² by Lee and Seung's multiplicative updates, H first and then W in each iteration:
-
-$$H \leftarrow H \circ \frac{W^\top X}{W^\top W H + \epsilon} \qquad W \leftarrow W \circ \frac{X H^\top}{W H H^\top + \epsilon}$$
-
-The product and the division are taken entry by entry, and `EPSILON` = 1e-10 prevents division by zero. Each factor is non-negative, so W and H stay non-negative without any clipping, and Lee and Seung (2001) prove that these updates never increase the error.
-
-The starting values come from a SplitMix64 generator seeded with `NMF_SEED` = 1. Each entry of W and H is uniform on [0, 2√(x̄/k)), where x̄ is the mean cell of X with zeros included, so that WH starts with the same mean as X. A fixed seed gives the same start on every machine.
-
-The loop runs at most `NMF_MAX_ITERATIONS` = 500 times. Every `CHECK_EVERY` = 10 iterations it computes the error, without forming WH, and it stops when the error fell by less than `NMF_TOLERANCE` = 1e-4 of its value at the previous check. The earliest stop is therefore after 20 iterations.
-
-A passage's topic is the column of its row of W with the largest value, ties going to the lower topic. When no word passes the column limits, every passage is in topic 0.
-
-### Step 3: choosing concepts
-
-`select` in `src/graph/mod.rs` keeps the candidates that best predict a passage's topic. For a candidate, let G say whether a passage holds it and T be the passage's topic. The candidate's score is their mutual information in nats:
-
-$$I(T;G) = \sum_{t} \sum_{g \in \{0,1\}} p(t,g) \ln \frac{p(t,g)}{p(t)\,p(g)}$$
-
-Every probability is a share of the n passages: p(t) is the share in topic t, p(g = 1) the share that hold the phrase, p(t, 1) the share that are in topic t and hold it, and p(t, 0) the share in topic t that do not. A term without passages counts as 0. The unit test pins hand values: with four passages in topics 0, 0, 1, 1, a phrase in the first two scores ln 2 and a phrase in the first and the third scores 0.
-
-The score is high for a phrase whose passages fall in few topics. It can never exceed the entropy of G, so a phrase in only 3 passages scores low however concentrated it is.
-
-The `GRAPH_CONCEPTS` = 60 highest scores become the concepts, ties going to the phrase in more passages, then to the lower key. The concepts are then sorted by their first passage, ties by label, and numbered from 0 in that order.
-
-### Step 4: links
-
-`links` in `src/graph/mod.rs` scores each pair of concepts by normalized pointwise mutual information (NPMI). With $d_a$ and $d_b$ the numbers of passages each concept stands in and $s$ the number both stand in, `npmi` computes
-
-$$\mathrm{npmi}(a,b) = \frac{\ln \dfrac{s\,n}{d_a\,d_b}}{-\ln \dfrac{s}{n}}$$
-
-This is $\ln \frac{p(a,b)}{p(a)\,p(b)}$ divided by $-\ln p(a,b)$, with each probability a share of passages. It is 1 when the two only ever stand together ($s = d_a = d_b$), 0 when they share as many passages as independence predicts ($s = d_a d_b / n$), and negative when they share fewer. The unit test pins both values: `npmi(2, 2, 2, 10)` is 1 and `npmi(4, 5, 2, 10)` is 0.
-
-In `alice.epub`, "hatter" stands in 18 passages, "march hare" in 17, and they share 16 of the 166:
-
-$$\frac{\ln (16 \cdot 166 / (18 \cdot 17))}{\ln (166 / 16)} = \frac{\ln 8.68}{\ln 10.38} = \frac{2.161}{2.339} = 0.924$$
-
-Each concept keeps up to `GRAPH_PARTNERS` = 3 partners. The partners it can keep are the concepts that share at least `GRAPH_MIN_SHARED` = 2 passages with it and have an NPMI above `GRAPH_NPMI_FLOOR` = 0.1; it keeps those with the highest NPMI, ties going to the lower id. A link exists when either concept keeps the other. A concept that many others keep can therefore have more than three links ("king" in `alice.epub` has eight), and a concept that keeps no partner and is kept by none has no link.
-
-The share limit of step 1 keeps the formula defined. Both concepts stand in at most 0.3n passages, so s is at most 0.3n and the denominator is at least ln(1/0.3) ≈ 1.20, never 0. The minimum of 2 shared passages keeps the logarithms finite.
-
-The output rounds NPMI to three decimals. Step 5 uses the unrounded value.
-
-### Step 5: communities
-
-`louvain` in `src/graph/communities.rs` finds communities by the Louvain method of Blondel, Guillaume, Lambiotte and Lefebvre. Its graph has the concepts as nodes and the links as undirected edges weighted by their NPMI. The method looks for the division into communities with the highest modularity:
-
-$$Q = \frac{1}{2m} \sum_{i,j} \left( A_{ij} - \frac{k_i k_j}{2m} \right) \delta(c_i, c_j)$$
-
-Here $A_{ij}$ is the weight between i and j, $k_i$ is the sum of i's weights, m is the sum of all edge weights, and $\delta(c_i, c_j)$ is 1 when i and j are in one community and 0 otherwise. Q compares the weight inside the communities with the weight a random graph with the same weighted degrees would put there.
-
-The method alternates two phases. In the first, `move_nodes`, every node starts in a community of its own. The nodes are visited in index order, which at the first level is the order in which the book first mentions the concepts. A node i is taken out of its community. For that community and for each community C that i has a link into, the gain in modularity from putting i into C is
-
-$$\Delta Q = \frac{k_{i,C}}{m} - \frac{\Sigma_C \, k_i}{2m^2}$$
-
-where $k_{i,C}$ is the weight of i's links into C and $\Sigma_C$ is the sum of the degrees of the nodes in C, i excluded. The node joins the community with the largest gain. Its own community is the first best, and another replaces the best so far only when its gain is larger by more than `MIN_GAIN` = 1e-7, so that rounding cannot make a node move back and forth. Sweeps over all nodes repeat until a sweep moves no node.
-
-In the second phase, `aggregate`, each community becomes one node. The links between two communities add up to one link, and the links inside a community become a self-loop holding twice their weight, as the adjacency matrix would. The first phase then runs on this smaller graph, and the two phases repeat until a first phase moves no node.
-
-There is no resolution parameter, so the gains are those of the plain modularity above, and there is no limit on the number of passes. A concept without links stays a community of its own, and a graph without links has one community per concept.
-
-`build` orders the communities largest first, ties going to the community whose first concept the book mentions earlier, and numbers them in that order. The integration test in `tests/graph.rs` pins two results for `alice.epub`: "mock turtle" and "gryphon" are in one community, and so are "hatter" and "march hare".
+1. **Candidate phrases.** As RAKE cuts keywords, a phrase is a run of one to three content words between stopwords (the 571 of the SMART list), punctuation, digits and words of fewer than three letters. Its words are stemmed, so "head" and "heads" are one phrase, and it becomes a candidate when it stands on its own in at least 3 passages and in at most 30% of them. "turtle" inside "mock turtle" does not count for a phrase "turtle", which is why `find` can list more mentions of a concept's words than the concept has passages.
+2. **Topics.** The passages are sorted into round(√n) topics, at least 2, by non-negative matrix factorization (NMF) of their TF-IDF weights, started from a fixed seed. The 166 passages of `tests/fixtures/alice.epub` give 13 topics. The output gives only their number.
+3. **Concepts.** The 60 candidates with the most mutual information with the topics, the phrases whose passages fall in few topics, become the concepts. They are numbered in the order the book first mentions them.
+4. **Links.** Each concept keeps up to three partners among the concepts that share at least 2 passages with it and have a normalized pointwise mutual information (NPMI) above 0.1, and a link exists when either concept keeps the other. NPMI is 1 for two concepts that only ever stand together and 0 for two that share passages as often as chance predicts. In `alice.epub`, "hatter" and "march hare" stand in 18 and 17 passages, share 16, and score 0.924. The output rounds NPMI to three decimals.
+5. **Communities.** The Louvain method divides the linked concepts into communities that are more linked to each other than to the rest, by modularity, visiting the concepts in a fixed order, and the communities are numbered largest first. The integration test in `tests/graph.rs` pins two results for `alice.epub`: "mock turtle" and "gryphon" are in one community, and so are "hatter" and "march hare".
 
 ### What the graph leaves out
 
@@ -171,6 +85,8 @@ The Graph tab of the desktop window runs `ebook-hero graph --json --full` and re
 
 `Book::graph` in `src/index/book.rs` builds the graph on the first call and writes it to `graph.json` in the book's cache directory, beside `manifest.json`, `passages.json` and the lexical index. The file holds the full graph and the `GRAPH_VERSION` that made it, now 2. Later calls on the open book use the copy in memory. Any other call, in this process or another, reads the file when its version matches. A file from another version, or one that does not parse, is rebuilt, and a warning on stderr says why. Reading and building happen under the book's build lock, so two processes never build the same graph at once.
 
+The graphs also depend on the concept-map crate, so moving to a version of it whose graphs differ bumps `GRAPH_VERSION`.
+
 When the index itself is stale because a reader, the passage packing, an analyzer, the document schema or the tool version changed, the whole cache directory is rebuilt and `graph.json` goes with it. A cache directory deleted after the book was opened, for example by `ebook-hero cache clear`, gives an error that asks for another call, which builds it again.
 
 ## Why it works this way
@@ -203,7 +119,7 @@ Determinism. The same book gives the same graph on every machine. The NMF start 
 ## References
 
 - Stuart Rose, Dave Engel, Nick Cramer and Wendy Cowley. "Automatic Keyword Extraction from Individual Documents". In Michael W. Berry and Jacob Kogan (eds.), *Text Mining: Applications and Theory*, John Wiley & Sons, 2010, pp. 1–20. RAKE, whose candidate step is step 1.
-- David D. Lewis, Yiming Yang, Tony G. Rose and Fan Li. "RCV1: A New Benchmark Collection for Text Categorization Research". *Journal of Machine Learning Research* 5 (2004), pp. 361–397. Its Appendix 11 republishes the SMART stopword list in `src/graph/smart_stopwords.txt`.
+- David D. Lewis, Yiming Yang, Tony G. Rose and Fan Li. "RCV1: A New Benchmark Collection for Text Categorization Research". *Journal of Machine Learning Research* 5 (2004), pp. 361–397. Its Appendix 11 republishes the SMART stopword list that concept-map cuts phrases at.
 - Daniel D. Lee and H. Sebastian Seung. "Learning the parts of objects by non-negative matrix factorization". *Nature* 401 (1999), pp. 788–791. NMF, applied there to images and to text.
 - Daniel D. Lee and H. Sebastian Seung. "Algorithms for Non-negative Matrix Factorization". In *Advances in Neural Information Processing Systems 13* (NIPS 2000), MIT Press, 2001, pp. 556–562. The multiplicative updates for the squared error used in step 2.
 - Guy L. Steele Jr., Doug Lea and Christine H. Flood. "Fast Splittable Pseudorandom Number Generators". In *Proceedings of the 2014 ACM International Conference on Object Oriented Programming Systems Languages & Applications* (OOPSLA 2014), ACM, 2014. SplitMix64, the generator that seeds NMF.

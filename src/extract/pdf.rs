@@ -15,7 +15,6 @@ use pdf_oxide::optional_content::decode_pdf_text_string;
 use pdf_oxide::outline::{Destination, OutlineItem};
 
 use super::assign_sections;
-use super::pdf_furniture::furniture;
 use super::pdf_layout::{LaidParagraph, Line, PageLines, paragraphs};
 use crate::document::{
     Block, BlockKind, Document, Locator, Metadata, OutlineEntry, SCHEMA_VERSION, Source, Warning,
@@ -165,7 +164,7 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
     });
     let label_of = |page: u32| page_label(&labels, page);
 
-    let skip = furniture(&pages);
+    let skip = furniture_detection::furniture(&furniture_pages(&pages));
     let laid = paragraphs(&pages, &skip);
     let page_count = metadata.page_count.unwrap_or_default() as usize;
     let entries = outline_entries(items.as_deref().unwrap_or_default(), page_count);
@@ -204,6 +203,28 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
         furniture: furniture_blocks,
         warnings,
     })
+}
+
+/// The pages as the furniture-detection crate takes them: each line's text
+/// and box.
+fn furniture_pages(pages: &[PageLines]) -> Vec<furniture_detection::Page> {
+    pages
+        .iter()
+        .map(|page| furniture_detection::Page {
+            page: page.page,
+            lines: page
+                .lines
+                .iter()
+                .map(|line| furniture_detection::Line {
+                    text: line.text.clone(),
+                    left: line.left,
+                    top: line.top,
+                    right: line.right,
+                    bottom: line.bottom,
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 fn unreadable(path: &Path, reason: impl Display) -> Error {

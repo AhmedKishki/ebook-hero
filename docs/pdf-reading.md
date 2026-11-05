@@ -56,7 +56,7 @@ flowchart TD
     E -- yes --> F["whole_line<br/>pdf_oxide's own line text"]
     F --> G
     G --> H["5. build_document<br/>pages without text, failed pages,<br/>page labels, outline"]
-    H --> I["6. furniture<br/>src/extract/pdf_furniture.rs"]
+    H --> I["6. furniture<br/>furniture-detection crate"]
     I --> J["Document.furniture"]
     I --> K["7-11. paragraphs<br/>reading order, notes, breaks,<br/>run-on, hyphens"]
     K --> L["12. normalize"]
@@ -132,7 +132,7 @@ An error while reading the page labels or the outline becomes an `UnreadablePart
 
 ### 6. Furniture
 
-`furniture` in `src/extract/pdf_furniture.rs` takes the pages with text and returns the `(page, line index)` pairs of the lines that other pages predict, such as running heads and page numbers (folios). [Furniture detection](furniture-detection.md) explains how it decides. `paragraphs` leaves these lines out of the text, which matters for step 10: the run-on rule reads the first body line of a page, and a running head left in place would be that line.
+`furniture` from the furniture-detection crate takes the pages with text, each line as its text and box, and returns the `(page, line index)` pairs of the lines that other pages predict, such as running heads and page numbers (folios). [Furniture detection](furniture-detection.md) explains how it decides. `paragraphs` leaves these lines out of the text, which matters for step 10: the run-on rule reads the first body line of a page, and a running head left in place would be that line.
 
 The reader keeps each furniture line in `Document.furniture` as a `paragraph` block with its normalized text and a locator holding its page, its page label and the line's box. Furniture blocks come in page and line order, numbered from 0 separately from the ids of `blocks`.
 

@@ -237,7 +237,7 @@ The `outline` tool lists these entries. Reading by outline entry starts at the e
 
 ### Furniture
 
-`furniture` holds the lines the reader took out of the reading text. Only the PDF reader fills it. `furniture` in `src/extract/pdf_furniture.rs` picks the lines that other pages predict, such as running heads and page numbers ([furniture-detection.md](furniture-detection.md)), and `build_document` in `src/extract/pdf.rs` makes each into a block:
+`furniture` holds the lines the reader took out of the reading text. Only the PDF reader fills it. `furniture` from the furniture-detection crate picks the lines that other pages predict, such as running heads and page numbers ([furniture-detection.md](furniture-detection.md)), and `build_document` in `src/extract/pdf.rs` makes each into a block:
 
 - kind `Paragraph`, text normalized, lines whose text is empty left out;
 - `section` empty;

@@ -13,9 +13,11 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
+concept-map = "0.1"
 dirs = "7"
 fastembed = { version = "7.5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 fs4 = "1.1"
+furniture-detection = "0.1"
 libc = "0.2"
 pdf_oxide = "=0.3.78"
 rbook = "0.7.12"

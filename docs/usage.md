@@ -708,7 +708,21 @@ Each call runs on its own thread, so a search that waits for embedding does not 
 {"jsonrpc":"2.0","method":"notifications/progress","params":{"message":"embedding passages","progress":8.0,"progressToken":"t1","total":166.0}}
 ```
 
+A client that cancels a request, with `notifications/cancelled`, also stops the call; see [Tasks and cancelling](#tasks-and-cancelling).
+
 The two models take about 0.6 GB once loaded. The server drops them after `EBOOK_HERO_MODEL_IDLE` seconds without a search, 300 by default, and the next search loads them again, in about a second.
+
+### Tasks and cancelling
+
+A call can take minutes: the first one on a book builds its index, and the first semantic or hybrid `search` embeds all its passages. The server therefore supports the MCP tasks extension (`io.modelcontextprotocol/tasks`, SEP-2663) for all seven tools.
+
+- A client that declares the extension when it connects gets a task handle back at once, with `resultType` `"task"` and a `taskId`. It polls `tasks/get` until `status` is `completed`, `failed` or `cancelled`. A `completed` task holds the result the tool would have returned, in `result`, including a tool error with `isError` set. While a `search` embeds, `statusMessage` says how far it is, as in `embedding passages 8 of 166`.
+- A client that does not declare the extension waits for the result, as before. Such a client may still send `notifications/progress` tokens, which only `search` answers.
+- `tasks/cancel` asks the task to stop. The call stops at the two points where it can without leaving anything half written: while it waits for another process's build lock, and between two batches of passages it embeds. The embeddings made so far are dropped, nothing is cached, and the task ends `cancelled`; the next `search` embeds the book again. A stage-1 index build that already holds the lock runs to its end, and so does a call that is past those points, so a cancelled task can still end `completed`.
+- A task is kept for one hour (`TASK_TTL`) after it starts, and again after it ends so that the client can read the result. One that runs longer ends `failed` and its call is cancelled.
+- A request cancelled with `notifications/cancelled` stops the same way. Its call ends with the tool error `cancelled before it finished; call again to retry`, which a client that has already given up on the request does not see.
+
+Tasks are held in memory, so they end with the server process.
 
 ### book_info
 
@@ -942,6 +956,7 @@ Every method that takes a `path` accepts the same paths as the command line. A m
 | `verify(&self, path: &str, quote: &str, passage_id: Option<u32>)` | `VerifyResult` | `verify_quote` |
 | `graph(&self, path: &str, full: bool)` | `GraphResult` | `concept_graph` |
 | `index(&self, path: &str, progress: &dyn Fn(usize, usize))` | `BookInfo` | none; the command `index` |
+| `cancellable(&self, cancel: Cancel)` | `Session` | none |
 | `book(&self, path: &str)` | `Arc<Book>` | none |
 | `models(&self)` | `&Models` | none |
 
@@ -951,6 +966,8 @@ The parameters that are not plain values are two structs:
 - `ReadParams { at: ReadAt, before: u32, after: u32, cursor: Option<u32> }`, with `ReadAt::Passage(id)`, `ReadAt::Page(page)` or `ReadAt::Outline(id)`, from `ebook_hero::read`.
 
 `search` and `index` call `progress(done, total)` after each batch of passages they embed, which happens on the first semantic or hybrid search of a book. Lexical search never calls it, so `&|_, _| {}` serves there.
+
+`cancellable` returns a session that shares this one's open books and models and whose calls end with `Error::Cancelled` once `cancel`, an `ebook_hero::cancel::Cancel`, is set from another thread: `let cancel = Cancel::new(); let session = session.cancellable(cancel.clone());`. A call stops while it waits for another process's build lock, and between two batches of passages it embeds, and nothing is cached from a cancelled embedding. A call that holds the lock for a stage-1 build runs to its end. The MCP server uses it for tasks.
 
 `book` opens the book and returns its `Book`, with the extracted `document` and the `passages`; the other methods call it first. `models` gives the session's `Models`, whose `release_idle(idle)` drops the models when they have gone unused for `idle`.
 
@@ -969,6 +986,7 @@ Every error is an `ebook_hero::Error`, whose `Display` is the message the comman
 | `InvalidArgument(message)` | `path` starts with `~` and no home directory is known. |
 | `Index(message)` | The cache root is not private, or the index cannot be written. |
 | `LockTimeout { sha256, pid, waited_secs }` | Another process was still building the same book's index after 900 seconds. |
+| `Cancelled` | The session came from `cancellable` and its `Cancel` was set before the call finished. |
 | `Io(error)` | Any other input or output error. |
 
 The methods add these:

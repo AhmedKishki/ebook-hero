@@ -394,3 +394,43 @@ fn a_limit_of_zero_embeds_nothing_and_needs_no_model() {
         "the book was not embedded"
     );
 }
+
+#[test]
+#[ignore = "needs the embedding model"]
+fn a_cancelled_embedding_stops_between_batches_and_writes_nothing() {
+    let texts: Vec<String> = (0..EMBED_BATCH * 3)
+        .map(|i| format!("Passage number {i} is about subject {i} and nothing else."))
+        .collect();
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let fixture = Fixture::new(&refs, Models::default_cache_dir());
+    let cancel = ebook_hero::cancel::Cancel::new();
+    let cancellable = fixture.session.cancellable(cancel.clone());
+    let book = cancellable.book(&fixture.path).unwrap();
+    let batches = AtomicUsize::new(0);
+
+    let result = book.vectors_cancellable(
+        cancellable.models(),
+        &|_, _| {
+            batches.fetch_add(1, Ordering::SeqCst);
+            cancel.cancel();
+        },
+        &cancel,
+    );
+
+    assert!(
+        matches!(result, Err(Error::Cancelled)),
+        "{:?}",
+        result.err()
+    );
+    assert_eq!(
+        batches.load(Ordering::SeqCst),
+        1,
+        "it stopped after one batch"
+    );
+    assert!(!book.vectors_ready(), "a cancelled embedding is not cached");
+    assert!(!book.dir.join("vectors.f32").exists());
+
+    // The session it came from embeds the book as if nothing had happened.
+    let vectors = book.vectors(fixture.session.models(), &|_, _| {}).unwrap();
+    assert_eq!(vectors.rows(), book.passages.len());
+}

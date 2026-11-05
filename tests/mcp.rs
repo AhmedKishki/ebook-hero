@@ -12,7 +12,10 @@ use std::time::Duration;
 use assert_cmd::Command;
 use common::{EpubBuilder, EpubVersion, private_tempdir};
 use ebook_hero::embed::Models;
-use rmcp::model::{CallToolRequestParams, CallToolResult, ProgressNotificationParam};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
+    ClientConfig, GetTaskParams, ProgressNotificationParam, TaskPayload, TaskStatus,
+};
 use rmcp::service::{NotificationContext, RunningService};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
@@ -35,9 +38,19 @@ const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per ca
 #[derive(Clone, Default)]
 struct Recorder {
     progress: Arc<Mutex<Vec<ProgressNotificationParam>>>,
+    /// Whether the client declares the tasks extension when it connects.
+    tasks: bool,
 }
 
 impl ClientHandler for Recorder {
+    fn get_info(&self) -> ClientConfig {
+        let mut config = ClientConfig::default();
+        if self.tasks {
+            config.capabilities = ClientCapabilities::builder().enable_tasks().build();
+        }
+        config
+    }
+
     async fn on_progress(
         &self,
         params: ProgressNotificationParam,
@@ -69,6 +82,24 @@ impl Server {
     }
 
     async fn start_with_models(models: &Path, patience: Duration) -> Server {
+        Server::start_with(models, patience, false).await
+    }
+
+    /// A server whose client declares the tasks extension, so that its tool
+    /// calls come back as tasks.
+    async fn start_with_tasks() -> Server {
+        let models = private_tempdir();
+        let mut server = Server::start_with(models.path(), PATIENCE, true).await;
+        server._models = Some(models);
+        server
+    }
+
+    /// The directory the server keeps its indexes in.
+    fn indexes(&self) -> &Path {
+        self._tmp.path()
+    }
+
+    async fn start_with(models: &Path, patience: Duration, tasks: bool) -> Server {
         let tmp = private_tempdir();
         let command =
             tokio::process::Command::new(env!("CARGO_BIN_EXE_ebook-hero")).configure(|command| {
@@ -90,7 +121,10 @@ impl Server {
             let _ = stderr.read_to_string(&mut log).await;
             log
         });
-        let recorder = Recorder::default();
+        let recorder = Recorder {
+            tasks,
+            ..Recorder::default()
+        };
         let progress = Arc::clone(&recorder.progress);
         let client = tokio::time::timeout(patience, recorder.serve(transport))
             .await
@@ -116,6 +150,44 @@ impl Server {
             .await
             .unwrap_or_else(|_| panic!("{tool} did not answer"))
             .unwrap_or_else(|e| panic!("{tool} failed as a protocol error: {e}"))
+    }
+
+    /// Starts a tool as a task: its id.
+    async fn start_task(&self, tool: &'static str, arguments: Value) -> String {
+        let Value::Object(arguments) = arguments else {
+            panic!("the arguments of {tool} must be a JSON object");
+        };
+        let request = CallToolRequestParams::new(tool).with_arguments(arguments);
+        let response = tokio::time::timeout(self.patience, self.client.call_tool_once(request))
+            .await
+            .unwrap_or_else(|_| panic!("{tool} did not answer"))
+            .unwrap_or_else(|e| panic!("{tool} failed as a protocol error: {e}"));
+        match response {
+            CallToolResponse::Task(created) => created.task.task_id,
+            other => panic!("{tool} was not made a task: {other:?}"),
+        }
+    }
+
+    /// Polls a task until it has ended, or `within` has passed.
+    async fn task_ends(&self, id: &str, within: Duration) -> rmcp::model::DetailedTask {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            let state = self
+                .client
+                .get_task(GetTaskParams::new(id))
+                .await
+                .unwrap()
+                .task;
+            if state.task.status.is_terminal() {
+                return state;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the task was still {:?} after {within:?}",
+                state.task.status
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Closes the connection, waits for the server to exit, and returns what
@@ -841,4 +913,199 @@ fn an_idle_server_releases_its_models_and_loads_them_again() {
         json!({ "path": ALICE_EPUB, "query": ALICE_QUERIES[1] }),
     );
     assert!(server.resident_mib() > idle, "the models loaded again");
+}
+
+#[tokio::test]
+async fn a_client_that_declares_tasks_gets_a_task_for_every_tool() {
+    let server = Server::start_with_tasks().await;
+    let info = server.client.peer_info().expect("initialized");
+    assert!(info.capabilities.supports_tasks());
+    let calls = [
+        ("book_info", json!({ "path": SAMPLE_PDF })),
+        ("outline", json!({ "path": SAMPLE_PDF })),
+        (
+            "search",
+            json!({ "path": SAMPLE_PDF, "query": "entropy", "mode": "lexical" }),
+        ),
+        ("find", json!({ "path": SAMPLE_PDF, "phrase": "entropy" })),
+        ("read", json!({ "path": SAMPLE_PDF, "passage_id": 0 })),
+        (
+            "verify_quote",
+            json!({ "path": SAMPLE_PDF, "quote": "entropy" }),
+        ),
+        ("concept_graph", json!({ "path": ALICE_EPUB })),
+    ];
+
+    for (tool, arguments) in calls {
+        let id = server.start_task(tool, arguments).await;
+        let ended = server.task_ends(&id, PATIENCE).await;
+        assert_eq!(ended.task.status, TaskStatus::Completed, "{tool}");
+        let TaskPayload::Completed { result } = ended.payload else {
+            panic!("{tool} did not complete");
+        };
+        assert!(
+            result.contains_key("structuredContent"),
+            "{tool}: {result:?}"
+        );
+        assert_ne!(result.get("isError"), Some(&json!(true)), "{tool}");
+    }
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn a_task_holds_a_tool_error_as_its_result() {
+    let server = Server::start_with_tasks().await;
+
+    let id = server
+        .start_task("book_info", json!({ "path": "/no/such/book.epub" }))
+        .await;
+
+    let ended = server.task_ends(&id, PATIENCE).await;
+    assert_eq!(ended.task.status, TaskStatus::Completed);
+    let TaskPayload::Completed { result } = ended.payload else {
+        panic!("the task did not complete");
+    };
+    assert_eq!(result.get("isError"), Some(&json!(true)), "{result:?}");
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn cancelling_a_task_that_waits_for_the_index_ends_it_cancelled() {
+    use ebook_hero::index::cache::{sha256_file, with_lock};
+
+    let server = Server::start_with_tasks().await;
+    let sha = sha256_file(Path::new(ALICE_EPUB)).unwrap();
+    // This process holds the book's build lock, so the server's call waits.
+    let root = server.indexes().to_path_buf();
+    let (locked, release) = std::sync::mpsc::channel::<()>();
+    let (held, holding) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        with_lock(&root, &sha, Duration::from_secs(5), || {
+            held.send(()).unwrap();
+            let _ = release.recv();
+            Ok(())
+        })
+        .unwrap();
+    });
+    holding.recv().unwrap();
+
+    let id = server
+        .start_task("book_info", json!({ "path": ALICE_EPUB }))
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let waiting = server
+        .client
+        .get_task(GetTaskParams::new(&id))
+        .await
+        .unwrap()
+        .task;
+    assert_eq!(waiting.task.status, TaskStatus::Working);
+
+    server
+        .client
+        .cancel_task(CancelTaskParams::new(&id))
+        .await
+        .unwrap();
+
+    let ended = server.task_ends(&id, Duration::from_secs(10)).await;
+    assert_eq!(ended.task.status, TaskStatus::Cancelled);
+    locked.send(()).unwrap();
+    holder.join().unwrap();
+
+    // The lock was never taken by the cancelled call, so a new call works.
+    let again = server
+        .start_task("book_info", json!({ "path": ALICE_EPUB }))
+        .await;
+    let done = server.task_ends(&again, PATIENCE).await;
+    assert_eq!(done.task.status, TaskStatus::Completed);
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn an_unknown_task_is_a_protocol_error() {
+    let server = Server::start_with_tasks().await;
+
+    let result = server
+        .client
+        .get_task(GetTaskParams::new("no-such-task"))
+        .await;
+
+    assert!(result.is_err(), "{result:?}");
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn a_client_without_tasks_still_gets_the_result_itself() {
+    let server = Server::start().await;
+    let info = server.client.peer_info().expect("initialized");
+    assert!(info.capabilities.supports_tasks());
+
+    let result = server.call("outline", json!({ "path": SAMPLE_PDF })).await;
+
+    assert!(!is_error(&result), "{result:?}");
+    assert!(result.structured_content.is_some());
+    server.finish().await;
+}
+
+/// A task that embeds a book reports how far it is in its status message, and
+/// cancelling it stops the embedding, so the book is embedded again by the
+/// next search and nothing half written is left in the cache.
+#[tokio::test]
+#[ignore = "needs the embedding and reranker models"]
+async fn cancelling_a_search_task_stops_the_embedding() {
+    let books = TempDir::new().unwrap();
+    let texts: Vec<String> = (0..400)
+        .map(|i| {
+            format!("Passage {i} describes the harbour, its tides and the moon, in detail {i}.")
+        })
+        .collect();
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let book = epub(books.path(), &refs);
+    let server = Server::start_with(&Models::default_cache_dir(), PATIENCE_WITH_MODELS, true).await;
+
+    let id = server
+        .start_task(
+            "search",
+            json!({ "path": book, "query": "tides and the moon" }),
+        )
+        .await;
+    let mut message = None;
+    for _ in 0..600 {
+        let state = server
+            .client
+            .get_task(GetTaskParams::new(&id))
+            .await
+            .unwrap()
+            .task;
+        assert_eq!(state.task.status, TaskStatus::Working, "it ended too soon");
+        if let Some(text) = state
+            .task
+            .status_message
+            .filter(|m| m.starts_with("embedding passages "))
+        {
+            message = Some(text);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let message = message.expect("the task never said it was embedding");
+    assert!(message.contains(" of 400"), "{message}");
+
+    server
+        .client
+        .cancel_task(CancelTaskParams::new(&id))
+        .await
+        .unwrap();
+
+    let ended = server.task_ends(&id, Duration::from_secs(60)).await;
+    assert_eq!(ended.task.status, TaskStatus::Cancelled);
+    let again = server
+        .start_task(
+            "search",
+            json!({ "path": book, "query": "tides and the moon" }),
+        )
+        .await;
+    let done = server.task_ends(&again, PATIENCE_WITH_MODELS).await;
+    assert_eq!(done.task.status, TaskStatus::Completed);
+    server.finish().await;
 }

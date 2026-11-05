@@ -49,6 +49,7 @@
 #![warn(missing_docs)]
 
 pub mod analysis;
+pub mod cancel;
 pub mod cli;
 pub mod document;
 pub mod embed;

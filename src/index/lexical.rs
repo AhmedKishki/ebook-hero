@@ -64,6 +64,7 @@ impl LexicalIndex {
         writer.wait_merging_threads().map_err(fail)
     }
 
+    /// Opens the index that [`LexicalIndex::build`] wrote in `dir`.
     pub fn open(dir: &Path) -> Result<LexicalIndex> {
         let context = format!("open index in {}", dir.display());
         let fail = |e: tantivy::TantivyError| index_error(&context, e);

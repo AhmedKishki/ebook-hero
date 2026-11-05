@@ -40,9 +40,13 @@ pub enum Verdict {
 /// that was not found. Words are compared as lowercase tokens.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Closest {
+    /// The passage's id.
     pub passage_id: u32,
+    /// Where it is in the book.
     pub locator: PassageLocator,
+    /// How many words long the shared run is.
     pub matched_words: usize,
+    /// How many words the quote has.
     pub quote_words: usize,
     /// The word of the quote right after the shared run; `None` when the run
     /// reaches the end of the quote.
@@ -52,8 +56,11 @@ pub struct Closest {
 /// Where a quote was found when it is not in the passage that was asked about.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Elsewhere {
+    /// The passage the quote starts in.
     pub passage_id: u32,
+    /// Where that passage is in the book.
     pub locator: PassageLocator,
+    /// How the quote matched there: `exact` or `equivalent`.
     pub verdict: Verdict,
 }
 
@@ -67,11 +74,19 @@ pub struct Elsewhere {
 /// nearest. `closest` is empty when no passage shares a word with the quote.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct VerifyResult {
+    /// Whether the quote occurs, and how closely.
     pub verdict: Verdict,
+    /// The passage the quote starts in, or with `none` the passage that was
+    /// asked about.
     pub passage_id: Option<u32>,
+    /// Where that passage is in the book.
     pub locator: Option<PassageLocator>,
+    /// The matched range of that passage's text; `None` with `none`.
     pub matched: Option<[usize; 2]>,
+    /// With `none` and the quote nowhere in the book, the passage that comes
+    /// nearest.
     pub closest: Option<Closest>,
+    /// With `none` and a passage asked about, where the quote is instead.
     pub found_elsewhere: Option<Elsewhere>,
 }
 

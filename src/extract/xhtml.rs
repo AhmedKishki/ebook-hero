@@ -9,7 +9,9 @@ use crate::normalize::normalize;
 /// a section path and a locator.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawBlock {
+    /// What kind of block it is.
     pub kind: BlockKind,
+    /// Its text, normalized.
     pub text: String,
     /// The last element id met at or before the start of the block.
     pub anchor: Option<String>,

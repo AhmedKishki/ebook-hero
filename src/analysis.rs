@@ -29,9 +29,14 @@ pub const EXACT: &str = "ebook_hero_en_exact";
 /// leave a gap in `position`, so adjacent tokens can still be apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tok {
+    /// The token as the analyzer emits it: lowercased, and stemmed by
+    /// `STEMMED`.
     pub text: String,
+    /// The byte where the source word starts in the analyzed text.
     pub start: usize,
+    /// The byte after the source word ends.
     pub end: usize,
+    /// The token's slot, counting the tokens the analyzer dropped.
     pub position: usize,
 }
 

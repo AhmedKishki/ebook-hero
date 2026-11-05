@@ -19,12 +19,20 @@ use crate::passages::{Passage, build_passages};
 use crate::settings::{EMBEDDING_DIM, EMBEDDING_MODEL, GRAPH_VERSION, LOCK_WAIT};
 use crate::{Error, Result};
 
+/// A book with its index open: what every operation of a
+/// [`Session`](crate::session::Session) works on.
 pub struct Book {
+    /// The file the book was opened from, resolved.
     pub path: PathBuf,
+    /// The SHA-256 of the file's bytes, which names its cache directory.
     pub sha256: String,
+    /// The book's directory in the cache.
     pub dir: PathBuf,
+    /// The book as its reader extracted it.
     pub document: Document,
+    /// The book's passages, in reading order; a passage's id is its index.
     pub passages: Vec<Passage>,
+    /// The tantivy index of the passages.
     pub lexical: LexicalIndex,
     /// Stage 2 of the index, loaded or built the first time it is needed.
     vectors: OnceLock<Vectors>,

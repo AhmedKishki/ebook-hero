@@ -1,3 +1,6 @@
+//! The readers, which turn a PDF or an EPUB into a [`Document`].
+//! [`extract`] picks the reader from the file's content.
+
 pub mod epub;
 pub mod pdf;
 pub mod pdf_layout;

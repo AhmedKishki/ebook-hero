@@ -29,12 +29,14 @@ use crate::{Error, Result};
 /// `semantic` ranks by embedding similarity only.
 //
 // The variants carry no doc comments: schemars would turn them into a `oneOf`
-// of constants, and an MCP client expects a plain string enum. The schema is
-// inlined so that an optional `mode` argument is that enum and not a
+// of constants, and an MCP client expects a plain string enum. The paragraph
+// above documents them instead, so `missing_docs` is allowed here. The schema
+// is inlined so that an optional `mode` argument is that enum and not a
 // reference to a definition.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[schemars(inline)]
+#[allow(missing_docs)]
 pub enum Mode {
     #[default]
     Hybrid,
@@ -57,11 +59,19 @@ impl FromStr for Mode {
     }
 }
 
+/// What to search for and how.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchParams {
+    /// Words, "quoted phrases" or a question. Words match by their stems;
+    /// a quoted phrase must occur exactly in a lexical hit. It must not be
+    /// blank.
     pub query: String,
+    /// How to rank the passages.
     pub mode: Mode,
+    /// How many hits to return, from 1 to [`TOP_K_MAX`].
     pub top_k: usize,
+    /// Whether the reranking model reorders the best candidates. Lexical
+    /// mode ignores it.
     pub rerank: bool,
 }
 
@@ -72,20 +82,36 @@ pub struct SearchParams {
 /// when the passage was not in that list.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Hit {
+    /// The passage's id, which `read` takes.
     pub passage_id: u32,
+    /// The passage's whole text.
     pub text: String,
+    /// The texts of the headings above it, outermost first.
     pub section: Vec<String>,
+    /// Where it is in the book.
     pub locator: PassageLocator,
+    /// The ranges of `text` that hold a query word, by its stem, or a quoted
+    /// phrase.
     pub matches: Vec<[usize; 2]>,
+    /// The number the hits are ordered by, which means nothing outside this
+    /// search: the reranker's logit after reranking, else BM25 in lexical
+    /// mode, cosine similarity in semantic mode and the fused score in
+    /// hybrid mode.
     pub score: f32,
+    /// The passage's rank by BM25, from 1.
     pub lexical_rank: Option<u32>,
+    /// The passage's rank by cosine similarity, from 1.
     pub semantic_rank: Option<u32>,
 }
 
+/// The answer to a search.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct SearchResult {
+    /// The query, trimmed.
     pub query: String,
+    /// The mode that ranked the hits.
     pub mode: Mode,
+    /// The hits, best first; empty when nothing matched.
     pub hits: Vec<Hit>,
 }
 

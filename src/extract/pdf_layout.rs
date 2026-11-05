@@ -38,11 +38,17 @@ const SOFT_HYPHEN: char = '\u{AD}';
 /// One line of text with its box in top-origin page points (`top < bottom`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
+    /// The line's text as the PDF gives it.
     pub text: String,
+    /// The left edge of its box.
     pub left: f32,
+    /// The top edge of its box, measured down from the top of the page.
     pub top: f32,
+    /// The right edge of its box.
     pub right: f32,
+    /// The bottom edge of its box, measured down from the top of the page.
     pub bottom: f32,
+    /// The mean font size of its words, in points.
     pub font_size: f32,
 }
 
@@ -59,9 +65,13 @@ impl Line {
 /// The lines of one page, in the order the PDF reader gave them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLines {
+    /// The physical page, counted from 1.
     pub page: u32,
+    /// The page's width in points.
     pub width: f32,
+    /// The page's height in points.
     pub height: f32,
+    /// The page's lines.
     pub lines: Vec<Line>,
 }
 
@@ -69,10 +79,15 @@ pub struct PageLines {
 /// its lines on `page`; `page_end` is the page it ends on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LaidParagraph {
+    /// The paragraph's text, its lines joined.
     pub text: String,
+    /// The physical page it starts on.
     pub page: u32,
+    /// The physical page it ends on.
     pub page_end: u32,
+    /// `[left, top, right, bottom]` of its lines on `page`.
     pub bbox: [f32; 4],
+    /// Whether it is a note: smaller type below the page's body text.
     pub note: bool,
 }
 

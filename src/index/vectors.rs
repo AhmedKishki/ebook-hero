@@ -10,6 +10,7 @@ use std::path::Path;
 use crate::index::cache::io_error;
 use crate::{Error, Result};
 
+/// One unit-length embedding per passage, row `i` for passage `i`.
 pub struct Vectors {
     rows: usize,
     dim: usize,
@@ -42,14 +43,17 @@ impl Vectors {
         })
     }
 
+    /// How many rows there are: one per passage.
     pub fn rows(&self) -> usize {
         self.rows
     }
 
+    /// How many values each row has.
     pub fn dim(&self) -> usize {
         self.dim
     }
 
+    /// Writes the rows to `path`, back to back as little-endian `f32`.
     pub fn write(&self, path: &Path) -> Result<()> {
         let bytes: Vec<u8> = self.data.iter().flat_map(|x| x.to_le_bytes()).collect();
         fs::write(path, bytes).map_err(|e| io_error(path, e))

@@ -171,18 +171,29 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 /// stage-1 field equals [`expected_stage1`]; `embedding` belongs to stage 2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
+    /// The [`SCHEMA_VERSION`] of the cached document.
     pub schema_version: u32,
+    /// The version of ebook-hero that built the index.
     pub tool_version: String,
+    /// The [`PDF_READER_VERSION`] it was built with.
     pub pdf_reader: u32,
+    /// The [`EPUB_READER_VERSION`] it was built with.
     pub epub_reader: u32,
+    /// The [`PASSAGES_VERSION`] it was built with.
     pub passages: u32,
+    /// The [`ANALYZERS_VERSION`] it was built with.
     pub analyzers: u32,
+    /// Which model made the cached embeddings, once there are any.
     pub embedding: Option<EmbeddingStamp>,
 }
 
+/// The model behind a book's cached embeddings. They are used only when it
+/// is the model this build embeds queries with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddingStamp {
+    /// The model's name, such as [`EMBEDDING_MODEL`].
     pub model: String,
+    /// How many numbers each embedding has.
     pub dim: usize,
 }
 
@@ -206,6 +217,8 @@ impl Manifest {
     }
 }
 
+/// The manifest a stage-1 index built by this version of ebook-hero has,
+/// without embeddings.
 pub fn expected_stage1() -> Manifest {
     Manifest {
         schema_version: SCHEMA_VERSION,
@@ -353,6 +366,7 @@ fn remove_all(path: &Path) -> Result<()> {
 /// A book whose index is cached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedIndex {
+    /// The SHA-256 of the book's file, which names its cache directory.
     pub sha256: String,
     /// The bytes in all the files of the index.
     pub size_bytes: u64,

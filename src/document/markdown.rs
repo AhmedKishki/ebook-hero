@@ -1,3 +1,5 @@
+//! A [`Document`] as Markdown, which `ebook-hero extract` prints by default.
+
 use crate::document::{Block, BlockKind, Document, Locator};
 
 /// Writes the blocks as Markdown. A PDF block on a new page is preceded by a

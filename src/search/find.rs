@@ -15,9 +15,13 @@ use crate::{Error, Result};
 /// code-point ranges of the passage text, one per occurrence.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct FindHit {
+    /// The passage's id, which `read` takes.
     pub passage_id: u32,
+    /// The texts of the headings above it, outermost first.
     pub section: Vec<String>,
+    /// Where it is in the book.
     pub locator: PassageLocator,
+    /// One range per occurrence of the phrase in the passage's text.
     pub matches: Vec<[usize; 2]>,
 }
 
@@ -25,10 +29,15 @@ pub struct FindHit {
 /// book, not the page. `next_cursor` is the cursor of the next page, if any.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct FindResult {
+    /// The phrase, trimmed.
     pub phrase: String,
+    /// How many times the phrase occurs in the whole book.
     pub total_occurrences: usize,
+    /// How many passages of the whole book hold it.
     pub total_passages: usize,
+    /// The passages on this page, in reading order, at most [`FIND_PAGE`].
     pub occurrences: Vec<FindHit>,
+    /// The cursor of the next page; `None` on the last page.
     pub next_cursor: Option<usize>,
 }
 

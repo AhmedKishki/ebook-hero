@@ -11,37 +11,66 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::document::{Block, BlockKind, Locator};
 use crate::settings::PASSAGE_MAX_WORDS;
 
+/// A run of whole paragraphs, list items and notes of at most
+/// [`PASSAGE_MAX_WORDS`] words, inside one section and, in an EPUB, one file.
+/// Search returns passages, `read` prints them and quote verification checks
+/// them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Passage {
+    /// The passage's position in reading order, from 0. Every tool takes and
+    /// returns passages by this id.
     pub id: u32,
+    /// The text of its blocks, or pieces of them, joined by a blank line.
     pub text: String,
+    /// The texts of the headings above its first block, outermost first.
     pub section: Vec<String>,
+    /// Where each piece of `text` comes from, in order.
     pub blocks: Vec<BlockRange>,
+    /// Where the passage is in the book.
     pub locator: PassageLocator,
 }
 
-/// `passage.text[start..end]` is `block.text[block_offset..block_offset + end - start]`.
+/// A piece of a passage's text and the block it was taken from, in UTF-8
+/// bytes: `passage.text[start..end]` is `block.text[block_offset..block_offset + end - start]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BlockRange {
+    /// The block's id in [`Document::blocks`](crate::document::Document::blocks).
     pub block_id: u32,
+    /// Where the piece starts in the block's text.
     pub block_offset: usize,
+    /// Where the piece starts in the passage's text.
     pub start: usize,
+    /// Where the piece ends in the passage's text.
     pub end: usize,
 }
 
+/// Where a passage is, as a person would cite it. JSON names the variant in a
+/// `format` field; [`locator_text`](crate::read::locator_text) prints it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "format", rename_all = "lowercase")]
 pub enum PassageLocator {
+    /// A place in a PDF: `p. 12–13 (xii–xiii)`.
     Pdf {
+        /// The physical page the passage starts on, counted from 1.
         page_start: u32,
+        /// The physical page it ends on.
         page_end: u32,
+        /// The printed label of `page_start`, when the PDF defines labels.
         label_start: Option<String>,
+        /// The printed label of `page_end`, when the PDF defines labels.
         label_end: Option<String>,
     },
+    /// A place in an EPUB: `CHAPTER I ¶3–5, print p. 45`.
     Epub {
+        /// The content file the passage is in.
         href: String,
+        /// The position of its first block among the blocks of that file,
+        /// counted from 1.
         para_start: u32,
+        /// The position of its last block among the blocks of that file.
         para_end: u32,
+        /// The printed page where it starts, when the book marks its page
+        /// breaks.
         print_page: Option<String>,
         /// `None` for text before the book's first heading.
         under_heading: Option<HeadingPlace>,
@@ -53,8 +82,12 @@ pub enum PassageLocator {
 /// several files of an EPUB.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HeadingPlace {
+    /// The heading's text.
     pub text: String,
+    /// The number of the passage's first block among the blocks under the
+    /// heading, counted from 1.
     pub para_start: u32,
+    /// The number of its last block among the blocks under the heading.
     pub para_end: u32,
 }
 

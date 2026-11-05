@@ -1,4 +1,4 @@
-//! The MCP server: serves the six tools over standard input and output until
+//! The MCP server: serves the seven tools over standard input and output until
 //! the client disconnects. Like the command line it parses arguments and
 //! formats results, and calls a [`Session`] for everything else.
 //!

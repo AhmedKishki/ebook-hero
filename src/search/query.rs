@@ -3,7 +3,10 @@
 /// Words are matched stemmed; phrases must appear exactly, in order.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ParsedQuery {
+    /// The words outside quotes, in order.
     pub words: Vec<String>,
+    /// The texts between pairs of double quotes, trimmed; an empty pair
+    /// adds none.
     pub phrases: Vec<String>,
 }
 

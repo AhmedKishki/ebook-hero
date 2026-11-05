@@ -32,14 +32,17 @@ const SNIPPET_CONTEXT: usize = 40;
 /// Between the parts of a passage's place in the book: `passage 3 · p. 2 · Intro`.
 const SEPARATOR: &str = " · ";
 
+/// Search and read one PDF or EPUB
+///
+/// Each command takes the path of one book. The first command about a book
+/// indexes it, and later commands reuse the index. Run
+/// `ebook-hero help <command>` for a command's options and examples.
 #[derive(Parser)]
-#[command(
-    name = "ebook-hero",
-    version,
-    about = "Search and read one PDF or EPUB"
-)]
+#[command(name = "ebook-hero", version)]
 struct Cli {
     /// Print the result as JSON. For info, outline, search, find, read, verify and graph, it is what the MCP tools book_info, outline, search, find, read, verify_quote and concept_graph return
+    ///
+    /// index prints what info prints, and extract prints the Document as --format json does. cache and mcp ignore it.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -54,52 +57,77 @@ enum Command {
         path: String,
     },
     /// List the book's table of contents with the passage each entry starts at
+    ///
+    /// Each line gives the entry's id in brackets, which `read --outline`
+    /// takes, its title, and the passage where its text starts.
     Outline {
         /// The PDF or EPUB
         path: String,
     },
     /// Find the passages that answer a query
+    ///
+    /// The first hybrid or semantic search of a book downloads two models,
+    /// about 270 MB, if they are not cached yet, and embeds every passage,
+    /// which can take minutes. Lexical search needs neither.
+    #[command(after_help = "Examples:
+  ebook-hero search book.pdf \"how do institutions change\"
+  ebook-hero search book.pdf '\"social structure\" agency' --mode lexical --top-k 10")]
     Search {
         /// The PDF or EPUB
         path: String,
         /// Words, "quoted phrases" or a question
         query: String,
-        /// hybrid, lexical or semantic
+        /// How to rank the passages: hybrid by words and by meaning, then reranked; lexical by the words alone, with no model; semantic by meaning alone
         #[arg(long, default_value = "hybrid")]
         mode: Mode,
-        /// How many passages to return
+        /// How many passages to return, from 1 to 20
         #[arg(long, default_value_t = TOP_K_DEFAULT)]
         top_k: usize,
-        /// Skip the reranking model
+        /// Skip the reranking model, which reorders hybrid and semantic hits
         #[arg(long)]
         no_rerank: bool,
     },
     /// List every passage that contains an exact phrase
+    ///
+    /// Prints the number of occurrences in the whole book, then one line per
+    /// occurrence with its passage, place and context, 20 passages to a page.
+    #[command(after_help = "Examples:
+  ebook-hero find book.pdf \"social structure\"
+  ebook-hero find book.pdf \"social structure\" --cursor 20")]
     Find {
         /// The PDF or EPUB
         path: String,
-        /// The phrase, matched as whole words in any case
+        /// The phrase, matched as whole words in any case, without stemming
         phrase: String,
-        /// Where to continue, from the `next: --cursor` of the previous page
+        /// Where to continue, from the `next: --cursor` line of the previous page
         #[arg(long)]
         cursor: Option<usize>,
     },
     /// Print passages as Markdown
-    #[command(group(
-        ArgGroup::new("address")
-            .required(true)
-            .multiple(false)
-            .args(["passage_id", "page", "outline"])
-    ))]
+    ///
+    /// Give exactly one of a passage id, --page or --outline. One call prints
+    /// at most about 8000 characters; when more is left, it prints
+    /// `next: --cursor N` on stderr.
+    #[command(
+        group(
+            ArgGroup::new("address")
+                .required(true)
+                .multiple(false)
+                .args(["passage_id", "page", "outline"])
+        ),
+        after_help = "Examples:
+  ebook-hero read book.pdf 42 --before 1 --after 1
+  ebook-hero read book.pdf --page 12"
+    )]
     Read {
         /// The PDF or EPUB
         path: String,
-        /// Read this passage
+        /// Read this passage, by the id that search, find and outline print
         passage_id: Option<u32>,
         /// Read the passages on this PDF page: the physical page, counted from 1 (the printed page label is shown in the locator)
         #[arg(long)]
         page: Option<u32>,
-        /// Read the passages of this outline entry
+        /// Read the passages of this outline entry, by the id that outline prints in brackets
         #[arg(long)]
         outline: Option<u32>,
         /// Passages to add before the range, at most 10
@@ -108,21 +136,38 @@ enum Command {
         /// Passages to add after the range, at most 10
         #[arg(long, default_value_t = 0)]
         after: u32,
-        /// The passage to continue at, from the `next: --cursor` of the previous page
+        /// The passage to continue at, from the `next: --cursor` line of the previous call
         #[arg(long)]
         cursor: Option<u32>,
     },
     /// Check whether a quote occurs in the book, and where
+    ///
+    /// Prints exact when the quote occurs as written, equivalent when only
+    /// case, punctuation or spacing differ, and none otherwise. After none it
+    /// names the passage that comes closest, or the passage that holds the
+    /// quote when --passage-id named another. The exit status is 0 whatever
+    /// the verdict.
+    #[command(after_help = "Examples:
+  ebook-hero verify book.pdf \"the words to check\"
+  ebook-hero verify book.pdf \"the words to check\" --passage-id 42")]
     Verify {
         /// The PDF or EPUB
         path: String,
-        /// The text to look for
+        /// The quote, as you would cite it
         quote: String,
-        /// Look in this passage first
+        /// Look in this passage first, as a citation names it; without it, the whole book is searched
         #[arg(long)]
         passage_id: Option<u32>,
     },
     /// List the book's concepts, how they link and the communities they form
+    ///
+    /// A concept is a phrase that marks one of the book's topics. Two concepts
+    /// are linked when they share passages more often than chance, and the
+    /// number after a link is its NPMI, from 0 for chance to 1 for always
+    /// together. The book needs at least 20 passages.
+    #[command(after_help = "Examples:
+  ebook-hero graph book.epub
+  ebook-hero graph book.epub --json --full > graph.json")]
     Graph {
         /// The PDF or EPUB
         path: String,
@@ -131,29 +176,49 @@ enum Command {
         full: bool,
     },
     /// Print the whole book as Markdown or as JSON
+    ///
+    /// Reads the file on every call and uses no index.
+    #[command(after_help = "Examples:
+  ebook-hero extract book.pdf > book.md
+  ebook-hero extract book.pdf --format json > book.json")]
     Extract {
         /// The PDF or EPUB
         path: String,
+        /// How to print the book
         #[arg(long, value_enum, default_value_t = ExtractFormat::Markdown)]
         format: ExtractFormat,
     },
     /// Build the whole index of the book, including the embeddings
+    ///
+    /// Does ahead of time what the first hybrid or semantic search would do,
+    /// downloading the models if they are not cached yet, then prints what
+    /// info prints.
     Index {
         /// The PDF or EPUB
         path: String,
     },
     /// Manage the cached indexes
+    ///
+    /// The indexes are kept in $EBOOK_HERO_INDEXES if it is set, else in
+    /// ebook-hero/indexes in the user cache directory (~/.cache on Linux).
     Cache {
         #[command(subcommand)]
         action: CacheCommand,
     },
     /// Serve the tools to an MCP client over standard input and output
+    ///
+    /// The client starts the server itself and talks to it until it
+    /// disconnects. Logs go to stderr.
+    #[command(after_help = "Example, for Claude Code:
+  claude mcp add ebook-hero -- ebook-hero mcp")]
     Mcp,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum ExtractFormat {
+    /// The text, with the book's headings as Markdown headings
     Markdown,
+    /// The Document: metadata, outline, and every block with its kind, section and locator
     Json,
 }
 
@@ -162,6 +227,8 @@ enum CacheCommand {
     /// List the cached indexes with their size and book title
     List,
     /// Delete every cached index
+    ///
+    /// An index that another process is building or embedding is left alone.
     Clear,
 }
 
@@ -180,6 +247,12 @@ impl From<String> for Output {
     }
 }
 
+/// Runs the command line: parses the arguments, runs the command and prints
+/// its result. The binary's `main` returns what this returns.
+///
+/// A command that fails prints `error: ` and the cause on standard error and
+/// returns failure, status 1. Arguments that do not parse never reach a
+/// command: clap prints the usage and exits with status 2.
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
     init_logging();

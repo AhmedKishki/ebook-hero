@@ -16,8 +16,14 @@ use crate::{Error, Result};
 /// of one outline entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadAt {
+    /// The passage with this id.
     Passage(u32),
+    /// The passages whose pages include this physical page of a PDF,
+    /// counted from 1. An EPUB has no pages, so reading one by page is an
+    /// error.
     Page(u32),
+    /// The passages of the outline entry with this id, up to the next entry
+    /// at the same level or above.
     Outline(u32),
 }
 
@@ -26,17 +32,24 @@ pub enum ReadAt {
 /// passage to start at, from the `next_cursor` of an earlier call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadParams {
+    /// The passages to read.
     pub at: ReadAt,
+    /// How many passages to add before them, at most [`READ_NEIGHBOURS_MAX`].
     pub before: u32,
+    /// How many passages to add after them, at most [`READ_NEIGHBOURS_MAX`].
     pub after: u32,
+    /// The passage to start at, `None` for the first page of the range.
     pub cursor: Option<u32>,
 }
 
 /// A passage that was read.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct PassageRef {
+    /// The passage's id.
     pub passage_id: u32,
+    /// The texts of the headings above it, outermost first.
     pub section: Vec<String>,
+    /// Where it is in the book.
     pub locator: PassageLocator,
 }
 
@@ -44,8 +57,15 @@ pub struct PassageRef {
 /// range that did not fit, if any.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ReadResult {
+    /// The passages as Markdown. Each passage is a `<!-- passage N ·
+    /// locator -->` comment followed by its text. The first passage, and
+    /// each one whose section differs from the one before it, is headed by
+    /// its section path as a `##` heading, unless it has none.
     pub markdown: String,
+    /// The passages on this page, in order.
     pub passages: Vec<PassageRef>,
+    /// The passage to continue at, given as `cursor` with the same `at`,
+    /// `before` and `after`; `None` when the range is done.
     pub next_cursor: Option<u32>,
 }
 
@@ -54,15 +74,22 @@ pub struct ReadResult {
 /// last passage.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct OutlineItem {
+    /// The entry's id, which [`ReadAt::Outline`] takes.
     pub id: u32,
+    /// The entry's text.
     pub title: String,
+    /// Its depth in the table of contents, the top level being 1.
     pub level: u8,
+    /// The first passage of its text.
     pub passage_id: Option<u32>,
+    /// That passage's place in the book.
     pub locator: Option<PassageLocator>,
 }
 
+/// The table of contents of a book.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct OutlineResult {
+    /// The entries in reading order; empty when the book has no outline.
     pub entries: Vec<OutlineItem>,
 }
 
@@ -70,15 +97,28 @@ pub struct OutlineResult {
 /// true; `semantic_ready` is false until stage 2 (the embeddings) exists.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct BookInfo {
+    /// The title, if the file gives one.
     pub title: Option<String>,
+    /// The authors, in the order the file lists them.
     pub authors: Vec<String>,
+    /// The language an EPUB declares; always `None` for a PDF.
     pub language: Option<String>,
+    /// PDF or EPUB.
     pub format: Format,
+    /// The number of pages of a PDF.
     pub page_count: Option<u32>,
+    /// The number of entries in an EPUB's spine, its files in reading
+    /// order, which the command line prints as `Chapters`.
     pub spine_count: Option<u32>,
+    /// The number of passages, whose ids run from 0 to one less than this.
     pub passage_count: usize,
+    /// Whether lexical search can run: always true, since the summary is made
+    /// from the index.
     pub lexical_ready: bool,
+    /// Whether the passages are embedded, so that semantic and hybrid search
+    /// start without embedding the book first.
     pub semantic_ready: bool,
+    /// The parts of the file the reader could not read and left out.
     pub warnings: Vec<Warning>,
 }
 

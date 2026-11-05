@@ -15,6 +15,9 @@ use fastembed::{
 use crate::settings::{EMBED_BATCH, EMBEDDING_MODEL, QUERY_PREFIX, RERANK_BATCH, RERANKER_MODEL};
 use crate::{Error, Result};
 
+/// The embedding model and the reranking model, shared by every search of a
+/// [`Session`](crate::session::Session). Each loads on first use and can be
+/// dropped again with [`Models::release_idle`].
 pub struct Models {
     cache_dir: PathBuf,
     embedder: Slot<TextEmbedding>,

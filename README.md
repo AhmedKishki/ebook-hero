@@ -178,6 +178,8 @@ The window runs the first of these that exists: `$EBOOK_HERO_BIN`, `target/relea
 
 ## Documentation
 
+[usage.md](docs/usage.md) is the usage reference: every command, every MCP tool and the library, with recipes for common tasks.
+
 `docs/` explains how each part works, with its principles and references:
 
 - [document-model.md](docs/document-model.md): the Document that both readers produce and everything else reads.

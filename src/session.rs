@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
+use crate::cancel::Cancel;
 use crate::embed::Models;
 use crate::graph::GraphResult;
 use crate::index::book::Book;
@@ -87,10 +88,12 @@ type Hashed = (u64, SystemTime, String);
 /// ```
 pub struct Session {
     cache_root: PathBuf,
-    models: Models,
+    models: Arc<Models>,
     /// The most recently used book is last.
-    books: Mutex<VecDeque<Arc<Book>>>,
-    hashes: Mutex<HashMap<PathBuf, Hashed>>,
+    books: Arc<Mutex<VecDeque<Arc<Book>>>>,
+    hashes: Arc<Mutex<HashMap<PathBuf, Hashed>>>,
+    /// Set by the caller of [`Session::cancellable`]; never set otherwise.
+    cancel: Cancel,
 }
 
 impl Session {
@@ -121,9 +124,48 @@ impl Session {
         let _ = ensure_private_dir(&cache_root);
         Session {
             cache_root,
-            models: Models::new(models_dir),
-            books: Mutex::new(VecDeque::new()),
-            hashes: Mutex::new(HashMap::new()),
+            models: Arc::new(Models::new(models_dir)),
+            books: Arc::new(Mutex::new(VecDeque::new())),
+            hashes: Arc::new(Mutex::new(HashMap::new())),
+            cancel: Cancel::new(),
+        }
+    }
+
+    /// A session that shares this one's open books, hashes and models, and
+    /// whose calls end with [`Error::Cancelled`] once `cancel` is set.
+    ///
+    /// A call stops at the points where it can without leaving anything half
+    /// written: while it waits for another process's build lock, and between
+    /// two batches of passages it embeds. The embeddings made so far are
+    /// dropped, and the next call starts them again. A stage-1 build that
+    /// already holds the lock runs to its end, and so does a call that is
+    /// past those points. Cancelling after a call has finished changes
+    /// nothing.
+    ///
+    /// ```
+    /// # use ebook_hero::session::Session;
+    /// use ebook_hero::cancel::Cancel;
+    /// use ebook_hero::error::Error;
+    /// # fn main() -> ebook_hero::Result<()> {
+    /// # let tmp = tempfile::tempdir()?;
+    /// # let session = Session::with_cache_root(tmp.path().join("indexes"));
+    /// let cancel = Cancel::new();
+    /// let cancellable = session.cancellable(cancel.clone());
+    /// cancel.cancel();
+    /// let error = cancellable.info("tests/fixtures/alice.epub").unwrap_err();
+    /// assert!(matches!(error, Error::Cancelled));
+    /// // The session it came from is not affected.
+    /// assert!(session.info("tests/fixtures/alice.epub").is_ok());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn cancellable(&self, cancel: Cancel) -> Session {
+        Session {
+            cache_root: self.cache_root.clone(),
+            models: Arc::clone(&self.models),
+            books: Arc::clone(&self.books),
+            hashes: Arc::clone(&self.hashes),
+            cancel,
         }
     }
 
@@ -160,13 +202,19 @@ impl Session {
     /// # }
     /// ```
     pub fn book(&self, path: &str) -> Result<Arc<Book>> {
+        self.cancel.check()?;
         let path = resolve_path(path)?;
         let sha256 = self.hash(&path)?;
         if let Some(book) = touch(&mut locked(&self.books), &sha256) {
             return Ok(book);
         }
         // The index may take minutes to build, so no lock is held meanwhile.
-        let book = Arc::new(Book::open(&self.cache_root, &path, &sha256)?);
+        let book = Arc::new(Book::open_cancellable(
+            &self.cache_root,
+            &path,
+            &sha256,
+            &self.cancel,
+        )?);
         let mut books = locked(&self.books);
         if let Some(existing) = touch(&mut books, &sha256) {
             return Ok(existing);
@@ -288,6 +336,11 @@ impl Session {
     ) -> Result<SearchResult> {
         search::validate(&params)?;
         let book = self.book(path)?;
+        if params.mode != search::Mode::Lexical && !book.passages.is_empty() {
+            // Embed first, where a cancel can stop it; `search` then finds the
+            // vectors in memory.
+            book.vectors_cancellable(&self.models, progress, &self.cancel)?;
+        }
         search::search(&book, &self.models, &params, progress)
     }
 
@@ -366,7 +419,7 @@ impl Session {
     /// ```
     pub fn graph(&self, path: &str, full: bool) -> Result<GraphResult> {
         let book = self.book(path)?;
-        let graph = book.graph()?;
+        let graph = book.graph_cancellable(&self.cancel)?;
         Ok(if full {
             graph.clone()
         } else {
@@ -491,7 +544,7 @@ impl Session {
     /// ```
     pub fn index(&self, path: &str, progress: &dyn Fn(usize, usize)) -> Result<BookInfo> {
         let book = self.book(path)?;
-        book.vectors(&self.models, progress)?;
+        book.vectors_cancellable(&self.models, progress, &self.cancel)?;
         Ok(read::info(&book))
     }
 

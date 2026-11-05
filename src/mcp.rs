@@ -9,22 +9,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, ProgressNotificationParam, RequestMetaObject,
-    ServerCapabilities, ServerConfig,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
+    CreateTaskResult, GetTaskParams, GetTaskResult, Implementation, ProgressNotificationParam,
+    RequestMetaObject, ServerCapabilities, ServerConfig, UpdateTaskParams,
 };
+use rmcp::service::RequestContext;
+use rmcp::task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions};
 use rmcp::transport::stdio;
-use rmcp::{Peer, RoleServer, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use rmcp::{
+    ErrorData, Peer, RoleServer, ServerHandler, ServiceExt, tool, tool_handler, tool_router,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Error;
+use crate::cancel::Cancel;
 use crate::read::{ReadAt, ReadParams};
 use crate::search::{Mode, SearchParams};
 use crate::session::Session;
-use crate::settings::{MODEL_IDLE, TOP_K_DEFAULT};
+use crate::settings::{MODEL_IDLE, TASK_TTL, TOP_K_DEFAULT};
 
 /// What the server tells a client about itself when it connects.
 const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
@@ -111,6 +118,11 @@ struct VerifyArgs {
 struct EbookHero {
     session: Arc<Session>,
     tool_router: ToolRouter<EbookHero>,
+    /// The tasks of every client that asked for one; clones share them.
+    tasks: TaskManager,
+    /// Set on the copy that runs one task, so a long call can report what it
+    /// is doing in the task's status message.
+    task: Option<TaskContext>,
 }
 
 #[tool_router]
@@ -151,8 +163,12 @@ impl EbookHero {
         let (updates, mut arrivals) = tokio::sync::mpsc::unbounded_channel();
         let updates = token.is_some().then_some(updates);
         let session = Arc::clone(&self.session);
+        let task = self.task.clone();
         let work = tokio::task::spawn_blocking(move || {
             session.search(&args.path, params, &|done, total| {
+                if let Some(task) = &task {
+                    task.set_status_message(format!("{EMBEDDING_MESSAGE} {done} of {total}"));
+                }
                 if let Some(updates) = &updates {
                     // The receiver is gone only when this request was dropped.
                     let _ = updates.send((done, total));
@@ -222,7 +238,65 @@ impl EbookHero {
         EbookHero {
             session: Arc::new(session),
             tool_router: EbookHero::tool_router(),
+            tasks: TaskManager::new(),
+            task: None,
         }
+    }
+
+    /// A copy of the server whose calls end with [`Error::Cancelled`] once
+    /// `cancel` is set. It shares the books, the models and the tasks.
+    fn cancellable(&self, cancel: &Cancel, task: Option<TaskContext>) -> EbookHero {
+        EbookHero {
+            session: Arc::new(self.session.cancellable(cancel.clone())),
+            tool_router: self.tool_router.clone(),
+            tasks: self.tasks.clone(),
+            task,
+        }
+    }
+
+    /// Runs the tool as a task and returns its handle at once. The task ends
+    /// `cancelled` when the client cancels it and the call stops, `completed`
+    /// when the call finishes, whatever the client asked, and `failed` when
+    /// it runs past `TASK_TTL`.
+    fn start_task(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> CreateTaskResult {
+        let server = self.clone();
+        let task = self
+            .tasks
+            .spawn(TaskOptions::new().with_ttl_ms(TASK_TTL), |task| {
+                Box::pin(async move {
+                    let cancel = Cancel::new();
+                    // A task that expires is dropped; its call must stop as well.
+                    let _stop_on_drop = StopOnDrop(cancel.clone());
+                    let handler = server.cancellable(&cancel, Some(task.clone()));
+                    let call = handler
+                        .tool_router
+                        .call(ToolCallContext::new(&handler, request, context));
+                    tokio::pin!(call);
+                    let response = tokio::select! {
+                        response = &mut call => response,
+                        () = task.cancelled() => {
+                            cancel.cancel();
+                            call.await
+                        }
+                    };
+                    match response {
+                        Ok(CallToolResponse::Complete(result)) if was_cancelled(&result) => {
+                            Err(TaskExit::Cancelled)
+                        }
+                        Ok(CallToolResponse::Complete(result)) => Ok(result),
+                        Ok(_) => Err(TaskExit::Error(ErrorData::internal_error(
+                            "a tool asked for input, which this server never does",
+                            None,
+                        ))),
+                        Err(error) => Err(TaskExit::Error(error)),
+                    }
+                })
+            });
+        CreateTaskResult::new(task)
     }
 
     /// Runs `work` on a thread meant for blocking. A call can wait minutes for
@@ -237,12 +311,98 @@ impl EbookHero {
     }
 }
 
+/// Sets its flag when dropped, so a call whose task was dropped stops too.
+struct StopOnDrop(Cancel);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// Whether `result` is the failure of a call that stopped because it was
+/// cancelled.
+fn was_cancelled(result: &CallToolResult) -> bool {
+    result.is_error == Some(true)
+        && result.content.len() == 1
+        && result.content[0]
+            .as_text()
+            .is_some_and(|text| text.text == Error::Cancelled.to_string())
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for EbookHero {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("ebook-hero", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS)
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tasks()
+                .build(),
+        )
+        .with_server_info(Implementation::new("ebook-hero", env!("CARGO_PKG_VERSION")))
+        .with_instructions(INSTRUCTIONS)
+    }
+
+    /// A client that declared the tasks extension gets a task handle for every
+    /// tool and polls it; any other client waits for the result, as before.
+    /// Either way the call stops, with a tool error, when the client cancels
+    /// the request.
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        if !self.tool_router.has_route(&request.name) {
+            return Err(ErrorData::invalid_params("tool not found", None));
+        }
+        let wants_task = context
+            .client_capabilities()
+            .is_some_and(|capabilities| capabilities.supports_tasks());
+        if wants_task {
+            return Ok(CallToolResponse::Task(self.start_task(request, context)));
+        }
+        let cancel = Cancel::new();
+        let stop = {
+            let (token, cancel) = (context.ct.clone(), cancel.clone());
+            tokio::spawn(async move {
+                token.cancelled().await;
+                cancel.cancel();
+            })
+        };
+        let handler = self.cancellable(&cancel, None);
+        let response = handler
+            .tool_router
+            .call(ToolCallContext::new(&handler, request, context))
+            .await;
+        stop.abort();
+        response
+    }
+
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, ErrorData> {
+        self.tasks
+            .get_task(&request.task_id)
+            .map(GetTaskResult::new)
+    }
+
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.tasks
+            .update_task(&request.task_id, request.input_responses)
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.tasks.cancel_task(&request.task_id)
     }
 }
 
@@ -338,9 +498,11 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // The session makes its cache directory, which is file system work.
     let session = tokio::task::spawn_blocking(Session::new).await?;
     let server = EbookHero::new(session);
+    let tasks = server.tasks.clone();
     let releaser = tokio::spawn(release_idle_models(Arc::clone(&server.session), idle));
     let served = server.serve(stdio()).await?.waiting().await;
     releaser.abort();
+    tasks.shutdown();
     served?;
     Ok(())
 }

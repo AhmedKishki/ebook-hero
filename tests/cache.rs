@@ -9,10 +9,11 @@ use std::time::{Duration, SystemTime};
 
 use common::{EpubBuilder, EpubVersion, private_tempdir};
 use ebook_hero::Error;
+use ebook_hero::cancel::Cancel;
 use ebook_hero::index::book::Book;
 use ebook_hero::index::cache::{
     CachedIndex, ClearReport, Manifest, build_count, clear, expected_stage1, list_indexes,
-    sha256_file, with_lock,
+    sha256_file, with_lock, with_lock_cancellable,
 };
 use ebook_hero::search::{Mode, SearchParams};
 use ebook_hero::session::{Session, resolve_path, resolve_path_in};
@@ -243,6 +244,96 @@ fn lock_timeout_names_the_holder() {
     drop(held);
     let value = with_lock(root.path(), &sha, Duration::from_millis(200), || Ok(7)).unwrap();
     assert_eq!(value, 7);
+}
+
+/// Holds the build lock of `sha` in `root` until the returned file is dropped.
+fn hold_lock(root: &Path, sha: &str) -> File {
+    let held = File::options()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(root.join(format!("{sha}.lock")))
+        .unwrap();
+    fs4::FileExt::try_lock(&held).unwrap();
+    held
+}
+
+/// Calls `cancel` after `after` on another thread.
+fn cancel_later(cancel: &Cancel, after: Duration) -> thread::JoinHandle<()> {
+    let cancel = cancel.clone();
+    thread::spawn(move || {
+        thread::sleep(after);
+        cancel.cancel();
+    })
+}
+
+#[test]
+fn a_cancelled_wait_for_the_lock_ends_at_once() {
+    let root = private_tempdir();
+    let sha = "e".repeat(64);
+    let _held = hold_lock(root.path(), &sha);
+    let cancel = Cancel::new();
+    let canceller = cancel_later(&cancel, Duration::from_millis(300));
+
+    let started = std::time::Instant::now();
+    let result = with_lock_cancellable(root.path(), &sha, Duration::from_secs(60), &cancel, || {
+        Ok(())
+    });
+
+    canceller.join().unwrap();
+    assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the wait went on for {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_flag_set_after_the_lock_is_taken_does_not_stop_the_work() {
+    let root = private_tempdir();
+    let sha = "f".repeat(64);
+    let cancel = Cancel::new();
+
+    let value = with_lock_cancellable(root.path(), &sha, Duration::ZERO, &cancel, || {
+        cancel.cancel();
+        Ok(7)
+    });
+
+    assert_eq!(value.unwrap(), 7);
+}
+
+#[test]
+fn a_cancellable_session_stops_waiting_for_a_busy_index() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (path, sha) = setup.book("Cancelled While Waiting");
+    let held = hold_lock(setup.root(), &sha);
+    let cancel = Cancel::new();
+    let session = setup.session().cancellable(cancel.clone());
+    let canceller = cancel_later(&cancel, Duration::from_millis(300));
+
+    let result = session.info(str_of(&path));
+
+    canceller.join().unwrap();
+    assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
+    // Nothing was left behind: once the lock is free, the book opens.
+    drop(held);
+    assert!(setup.session().info(str_of(&path)).is_ok());
+}
+
+#[test]
+fn a_session_that_is_not_cancelled_is_not_affected_by_another_flag() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (path, _) = setup.book("Not Cancelled");
+    let session = setup.session();
+    let cancelled = session.cancellable(Cancel::new());
+    let other = Cancel::new();
+    other.cancel();
+
+    assert!(cancelled.info(str_of(&path)).is_ok());
+    assert!(session.info(str_of(&path)).is_ok());
 }
 
 #[test]

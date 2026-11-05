@@ -60,6 +60,10 @@ pub enum Error {
         /// What went wrong.
         reason: String,
     },
+    /// The call was cancelled before it finished. Nothing was left half
+    /// written; call again to retry.
+    #[error("cancelled before it finished; call again to retry")]
+    Cancelled,
     /// Another process held the book's build lock for longer than
     /// [`LOCK_WAIT`](crate::settings::LOCK_WAIT).
     #[error("index build for {sha256} is held by {}; waited {waited_secs}s", holder(.pid))]

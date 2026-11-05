@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
-const { GraphError, createGraphs, layout, parseGraph } = require('./graph');
+const { GraphError, createGraphs, layout, parseGraph, saveImage } = require('./graph');
 
 function graphOf(concepts, links) {
   return {
@@ -75,5 +75,64 @@ test('an older binary without the graph command is named, with how to update it'
   assert.equal(reply.ok, false);
   assert.match(reply.stderr, /\/old\/ebook-hero has no graph command/);
   assert.match(reply.stderr, /cargo build --release|EBOOK_HERO_BIN/);
+  fs.rmSync(dir, { recursive: true });
+});
+
+/** A folder holding a book, and a dialog that answers `answer` and keeps the name it was offered. */
+function saving(answer) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'graph-image-'));
+  const book = path.join(dir, 'Alice.epub');
+  fs.writeFileSync(book, 'x');
+  const offered = [];
+  const choose = async (proposed) => {
+    offered.push(proposed);
+    return typeof answer === 'function' ? answer(dir) : answer;
+  };
+  return { dir, book, offered, choose };
+}
+
+const image = { svg: '<svg xmlns="http://www.w3.org/2000/svg"/>', png: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) };
+
+test('saveImage offers <book>-concepts.png beside the book and writes nothing when cancelled', async () => {
+  const { dir, book, offered, choose } = saving(null);
+  const reply = await saveImage({ book, ...image }, choose);
+  assert.deepEqual(reply, { ok: true, path: null });
+  assert.deepEqual(offered, [path.join(dir, 'Alice-concepts.png')]);
+  assert.deepEqual(fs.readdirSync(dir), ['Alice.epub']);
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('saveImage writes the SVG text when the chosen name ends in .svg', async () => {
+  const { dir, book, choose } = saving((d) => path.join(d, 'graph.SVG'));
+  const reply = await saveImage({ book, ...image }, choose);
+  assert.deepEqual(reply, { ok: true, path: path.join(dir, 'graph.SVG') });
+  assert.equal(fs.readFileSync(path.join(dir, 'graph.SVG'), 'utf8'), image.svg);
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('saveImage writes the PNG bytes and adds .png to a name without an extension', async () => {
+  const { dir, book, choose } = saving((d) => path.join(d, 'graph'));
+  const reply = await saveImage({ book, ...image }, choose);
+  assert.deepEqual(reply, { ok: true, path: path.join(dir, 'graph.png') });
+  assert.deepEqual([...fs.readFileSync(path.join(dir, 'graph.png'))], [...image.png]);
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('saveImage refuses another extension, names the two it writes, and writes nothing', async () => {
+  const { dir, book, choose } = saving((d) => path.join(d, 'graph.jpg'));
+  const reply = await saveImage({ book, ...image }, choose);
+  assert.equal(reply.ok, false);
+  assert.match(reply.stderr, /\.jpg/);
+  assert.match(reply.stderr, /\.png.*\.svg|\.svg.*\.png/);
+  assert.deepEqual(fs.readdirSync(dir), ['Alice.epub']);
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('saveImage names the folder it cannot write to', async () => {
+  const { dir, book, choose } = saving((d) => path.join(d, 'missing', 'graph.png'));
+  const reply = await saveImage({ book, ...image }, choose);
+  assert.equal(reply.ok, false);
+  assert.match(reply.stderr, /missing/);
+  assert.match(reply.stderr, /ENOENT/);
   fs.rmSync(dir, { recursive: true });
 });

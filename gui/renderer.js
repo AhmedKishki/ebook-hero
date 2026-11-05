@@ -14,6 +14,10 @@ const tabResult = $('tab-result');
 const tabBook = $('tab-book');
 const tabGraph = $('tab-graph');
 const graphPane = $('graph-pane');
+const saveImageButton = $('graph-save');
+
+// The saved PNG is drawn at this many times the image's size, so it stays sharp when zoomed on a phone.
+const PNG_SCALE = 2;
 
 // "passage 12" where the tools print a passage: before " ·" in a hit, a read
 // result or a verify result, and before "," in an outline entry.
@@ -26,8 +30,9 @@ let lastRun = { path: '' };
 // The book on show in the Book pane, the key main gave it, and what the line said of it.
 let open = { key: null, title: null, note: '' };
 let opening = false;
-// The graph on show in the Graph pane, by the key main gave it, and the path it was asked for by.
-let shownGraph = { key: null, path: '' };
+// The graph on show in the Graph pane, by the key main gave it, the path it
+// was asked for by, and the graph with its layout, from which its image is drawn.
+let shownGraph = { key: null, path: '', graph: null, positions: null };
 let graphing = false;
 
 // The one line beside the tabs says something different for each pane.
@@ -170,9 +175,52 @@ async function showGraph(path) {
     return;
   }
   if (reply.key !== shownGraph.key) graphView.show(reply.graph, reply.positions);
-  shownGraph = { key: reply.key, path };
+  shownGraph = { key: reply.key, path, graph: reply.graph, positions: reply.positions };
+  saveImageButton.disabled = reply.graph.concepts.length === 0;
   const { concepts, communities } = reply.graph;
-  say('graph', `${concepts.length} concepts in ${communities.length} communities. Click a concept to list its passages.`);
+  say('graph', `${concepts.length} concepts in ${communities.length} communities. Click a concept to light its community and list its passages.`);
+}
+
+/** The bytes of a PNG `width` by `height` pixels, drawn from the standalone SVG `svg`. */
+function rasterise(svg, width, height) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    const picture = new Image();
+    picture.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(picture, 0, 0, width, height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((blob) => {
+        if (blob) blob.arrayBuffer().then((bytes) => resolve(new Uint8Array(bytes)), reject);
+        else reject(new Error('the canvas gave no PNG'));
+      }, 'image/png');
+    };
+    picture.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('the SVG did not load as an image'));
+    };
+    picture.src = url;
+  });
+}
+
+/** Saves the graph on show, with its legend, as the PNG or SVG the save dialog names. */
+async function saveGraphImage() {
+  const { graph, positions, path } = shownGraph;
+  if (!graph) return;
+  saveImageButton.disabled = true;
+  let reply;
+  try {
+    const sharp = graphDraw.image(graph, positions, { scale: PNG_SCALE });
+    const png = await rasterise(sharp.svg, sharp.width * PNG_SCALE, sharp.height * PNG_SCALE);
+    reply = await window.ebookHero.saveImage({ book: path, svg: graphDraw.image(graph, positions).svg, png });
+  } catch (error) {
+    reply = { ok: false, stderr: `error: could not draw the graph as an image (${error.message})` };
+  }
+  saveImageButton.disabled = false;
+  if (!reply.ok) say('graph', reply.stderr.trim(), true);
+  else if (reply.path) say('graph', `Saved the graph to ${reply.path}.`);
 }
 
 async function browse() {
@@ -190,6 +238,7 @@ async function start() {
   tabResult.addEventListener('click', () => showPane('result'));
   tabBook.addEventListener('click', () => showBook(bookPath.value));
   tabGraph.addEventListener('click', () => showGraph(bookPath.value));
+  saveImageButton.addEventListener('click', saveGraphImage);
   graphPane.addEventListener('click', (event) => {
     const link = event.target.closest('a[data-passage]');
     if (!link) return;

@@ -3,7 +3,7 @@
 const path = require('node:path');
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const { createLibrary } = require('./book');
-const { createGraphs } = require('./graph');
+const { createGraphs, saveImage } = require('./graph');
 const { TOOLS, run } = require('./runner');
 
 const library = createLibrary();
@@ -34,6 +34,14 @@ ipcMain.handle('tools', () => TOOLS);
 ipcMain.handle('run', (_event, request) => run(request));
 ipcMain.handle('book', (_event, request) => library.open(request));
 ipcMain.handle('graph', (_event, request) => graphs.open(request));
+ipcMain.handle('save-image', (event, request) => saveImage(request, async (defaultPath) => {
+  const result = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Save the concept graph',
+    defaultPath,
+    filters: [{ name: 'PNG image', extensions: ['png'] }, { name: 'SVG image', extensions: ['svg'] }],
+  });
+  return result.canceled ? null : result.filePath;
+}));
 ipcMain.handle('browse', async (event) => {
   const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
     properties: ['openFile'],

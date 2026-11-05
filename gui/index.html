@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'">
 <title>ebook-hero</title>
 <style>
   :root {
@@ -122,12 +122,15 @@
   #graph-svg .concept circle { stroke: var(--night); stroke-width: 1.5; }
   #graph-svg .concept text { font: 12px Georgia, serif; fill: var(--parchment); paint-order: stroke; stroke: #0a1226; stroke-width: 3px; }
   #graph-svg .concept:focus-visible circle { stroke: var(--gem); stroke-width: 3; }
+  #graph-svg .concept.chosen circle { stroke: var(--parchment); stroke-width: 3; }
+  #graph-svg .concept.chosen text { font-weight: bold; }
   #graph-svg.focus .concept { opacity: .22; }
   #graph-svg.focus .concept.near { opacity: .8; }
   #graph-svg.focus .concept.on { opacity: 1; }
   #graph-svg.focus line { stroke-opacity: .06; }
   #graph-svg.focus line.on { stroke-opacity: .9; }
   #graph-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  #graph-save { align-self: flex-start; }
   #graph-legend { display: flex; flex-direction: column; gap: 2px; max-height: 40%; overflow: auto; }
   #graph-legend button { text-align: left; border: 0; background: none; color: var(--parchment); padding: 2px 4px; font-size: 13px; }
   #graph-legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
@@ -167,6 +170,7 @@
 <section id="graph-pane" aria-label="Concept graph" hidden>
   <svg id="graph-svg" role="img" aria-label="The book's concepts and their links"></svg>
   <div id="graph-side">
+    <button type="button" id="graph-save" disabled title="The whole graph with its legend, as PNG or SVG">Save image…</button>
     <div id="graph-legend" aria-label="Communities"></div>
     <div id="graph-detail">
       <h2 id="graph-concept"></h2>
@@ -178,6 +182,7 @@
 </section>
 
 <script src="viewer.js"></script>
+<script src="graphdraw.js"></script>
 <script src="graphview.js"></script>
 <script src="renderer.js"></script>
 </body>

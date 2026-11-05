@@ -3,7 +3,9 @@
 // graph --json` writes it, and where to draw each concept. It has no Electron
 // in it, so `node --test` can exercise it without a display.
 
-const { execBinary, failure, locateBook } = require('./runner');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execBinary, expandHome, failure, locateBook } = require('./runner');
 
 // How many books' graphs stay loaded at once.
 const KEPT_GRAPHS = 2;
@@ -163,4 +165,29 @@ function createGraphs(exec = execBinary) {
   return { open };
 }
 
-module.exports = { GraphError, createGraphs, layout, parseGraph };
+/**
+ * Saves the image of `book`'s concept graph where `choose` says. `choose` gets
+ * the proposed file, `<book name>-concepts.png` beside the book, and resolves
+ * to the file chosen or to null when the dialog is cancelled. A name ending in
+ * `.svg` gets the text of `svg`, one ending in `.png` gets the bytes of `png`,
+ * and a name without an extension gains `.png`. Resolves to `{ ok: true, path }`,
+ * with `path` null when nothing was saved, or to a failure.
+ */
+async function saveImage({ book, svg, png }, choose) {
+  const where = path.parse(path.resolve(expandHome(String(book))));
+  const chosen = await choose(path.join(where.dir, `${where.name}-concepts.png`));
+  if (!chosen) return { ok: true, path: null };
+  const extension = path.extname(chosen).toLowerCase();
+  const file = extension === '' ? `${chosen}.png` : chosen;
+  if (!['', '.png', '.svg'].includes(extension)) {
+    return failure(`error: cannot save the graph as ${extension}; name the file .png or .svg`);
+  }
+  try {
+    await fs.promises.writeFile(file, extension === '.svg' ? svg : Buffer.from(png));
+  } catch (error) {
+    return failure(`error: cannot write ${file} (${error.code ?? error.message}); choose a folder that exists and that you can write to`);
+  }
+  return { ok: true, path: file };
+}
+
+module.exports = { GraphError, createGraphs, layout, parseGraph, saveImage };

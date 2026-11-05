@@ -145,7 +145,9 @@ Each passage a result names, such as `passage 95`, is a link. Clicking it opens 
 
 ![The Book tab with passage 95 marked](assets/gui-book.png)
 
-The Graph tab draws the concept graph of the book in the path box, as `ebook-hero graph` builds it. Each circle is a concept, sized by how many passages it occurs in and coloured by its community, and each line joins two concepts that share passages more often than chance, thicker the higher their NPMI. Pointing at a concept lights its links and the concepts at their other ends. Clicking it shows where its passages fall in the book, on a strip, and lists them; each one opens in the Book tab.
+The Graph tab draws the concept graph of the book in the path box, as `ebook-hero graph` builds it. Each circle is a concept, sized by how many passages it occurs in and coloured by its community, and each line joins two concepts that share passages more often than chance, thicker the higher their NPMI. Pointing at a concept lights its links and the concepts at their other ends. Clicking it rings it, keeps its community lit, shows where its passages fall in the book, on a strip, and lists them; each one opens in the Book tab. Clicking the empty drawing or pressing Escape lets the concept go.
+
+Save image… writes the whole graph with its legend, undimmed and on the tab's dark background, as a PNG of 3200 pixels across or as an SVG; the extension of the name decides which, and a name without one gets `.png`. The SVG carries its own colours and sizes, so a browser shows it as the window does, and the PNG opens anywhere, phones included.
 
 ![The Graph tab with the concept "mock turtle" chosen](assets/gui-graph.png)
 

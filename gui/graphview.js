@@ -1,8 +1,10 @@
 'use strict';
 // The Graph pane: draws the concept graph, lights a concept with its links and
-// partners, and lists the passages of the concept clicked as links into the
-// book. It knows nothing of commands or the form; renderer.js decides what to
-// show and opens the passages.
+// partners while it is pointed at, keeps the community of the concept clicked
+// lit, and lists that concept's passages as links into the book. It knows
+// nothing of commands or the form; renderer.js decides what to show and opens
+// the passages. graphdraw.js holds the colours and names it shares with the
+// saved image.
 
 const graphView = (() => {
   const SVG = 'http://www.w3.org/2000/svg';
@@ -10,9 +12,6 @@ const graphView = (() => {
   const STRIP_WIDTH = 1000;
   // Room around the drawing for the circles, and to their right for the labels.
   const MARGIN = { left: 20, top: 16, bottom: 16, rightShare: 0.2, rightMost: 140 };
-  // One colour per community, in the window's palette; communities past these are grey.
-  const COLOURS = ['#f0bf3c', '#43e6cb', '#e8798a', '#8fb8ff', '#b9e46a', '#d39bff', '#ff9f5a', '#7fd6f0'];
-  const OTHER = '#8a93a6';
 
   const drawing = document.getElementById('graph-svg');
   const legend = document.getElementById('graph-legend');
@@ -23,8 +22,8 @@ const graphView = (() => {
   let graph = null;
   let positions = [];
   let neighbours = [];
-
-  const colour = (community) => COLOURS[community] ?? OTHER;
+  // The concept clicked, whose community stays lit, or null.
+  let chosen = null;
 
   function element(name, attributes = {}, parent = null) {
     const node = document.createElementNS(SVG, name);
@@ -37,6 +36,7 @@ const graphView = (() => {
   function show(shown, placed) {
     graph = shown;
     positions = placed;
+    chosen = null;
     neighbours = graph.concepts.map(() => []);
     graph.links.forEach((link, i) => {
       neighbours[link.a].push([link.b, i]);
@@ -68,64 +68,75 @@ const graphView = (() => {
         'data-link': i,
       }, links);
     });
-    const most = Math.max(1, ...graph.concepts.map((c) => c.passages.length));
+    const most = graphDraw.mostPassages(graph);
     const concepts = element('g', { class: 'concepts' }, drawing);
     graph.concepts.forEach((concept, i) => {
-      const r = 3 + 7 * Math.sqrt(concept.passages.length / most);
+      const r = graphDraw.radius(concept, most);
       const group = element('g', { class: 'concept', 'data-concept': i, tabindex: 0, role: 'button' }, concepts);
-      element('circle', { cx: x(positions[i]), cy: y(positions[i]), r: r.toFixed(1), fill: colour(concept.community) }, group);
+      element('circle', { cx: x(positions[i]), cy: y(positions[i]), r: r.toFixed(1), fill: graphDraw.colour(concept.community) }, group);
       const label = element('text', { x: x(positions[i]) + r + 4, y: y(positions[i]) + 4 }, group);
       label.textContent = concept.label;
       element('title', {}, group).textContent = `${concept.label}: ${concept.passages.length} passages`;
     });
+    rest();
   }
 
   function drawLegend() {
     legend.replaceChildren(...graph.communities.map((community) => {
-      const top = community.concepts
-        .map((id) => graph.concepts[id])
-        .sort((p, q) => q.passages.length - p.passages.length)
-        .slice(0, 4)
-        .map((c) => c.label);
       const item = document.createElement('button');
       item.type = 'button';
       item.dataset.community = community.id;
       const swatch = document.createElement('span');
       swatch.className = 'swatch';
-      swatch.style.background = colour(community.id);
-      item.append(swatch, `${community.id + 1} · ${top.join(', ')}`);
+      swatch.style.background = graphDraw.colour(community.id);
+      item.append(swatch, graphDraw.communityLabel(graph, community));
       return item;
     }));
   }
 
-  /** Lights concept `i`, its links and its partners, or the whole drawing again for null. */
-  function light(i) {
-    drawing.classList.toggle('focus', i !== null);
-    const near = new Set(i === null ? [] : neighbours[i].map(([j]) => j));
-    const links = new Set(i === null ? [] : neighbours[i].map(([, l]) => l));
+  /**
+   * Lights the concepts in `on`, half-lights those in `near` and lights the
+   * links in `links`, dimming the rest; for null, lights the whole drawing.
+   * The chosen concept keeps its ring either way.
+   */
+  function paint(on, near = new Set(), links = new Set()) {
+    drawing.classList.toggle('focus', on !== null);
     for (const node of drawing.querySelectorAll('.concept')) {
       const j = Number(node.dataset.concept);
-      node.classList.toggle('on', j === i);
+      node.classList.toggle('on', on?.has(j) ?? false);
       node.classList.toggle('near', near.has(j));
+      node.classList.toggle('chosen', j === chosen);
     }
     for (const line of drawing.querySelectorAll('line')) line.classList.toggle('on', links.has(Number(line.dataset.link)));
   }
 
-  /** Lights the concepts of community `c`, or the whole drawing again for null. */
-  function lightCommunity(c) {
-    drawing.classList.toggle('focus', c !== null);
-    for (const node of drawing.querySelectorAll('.concept')) {
-      node.classList.toggle('on', c !== null && graph.concepts[Number(node.dataset.concept)].community === c);
-      node.classList.remove('near');
-    }
-    for (const line of drawing.querySelectorAll('line')) {
-      const link = graph.links[Number(line.dataset.link)];
-      line.classList.toggle('on', c !== null && graph.concepts[link.a].community === c && graph.concepts[link.b].community === c);
-    }
+  /** Lights concept `i`, its links and its partners while it is pointed at; null goes back to the chosen concept. */
+  function light(i) {
+    if (i === null) return rest();
+    paint(new Set([i]), new Set(neighbours[i].map(([j]) => j)), new Set(neighbours[i].map(([, l]) => l)));
   }
 
-  /** Shows concept `i`'s passages on the strip and as links, or how to choose one for null. */
+  /** Lights the concepts of community `c` and the links between them; null goes back to the chosen concept. */
+  function lightCommunity(c) {
+    if (c === null) return rest();
+    const lit = graphDraw.community(graph, c);
+    paint(lit.concepts, new Set(), lit.links);
+  }
+
+  /** Lights the chosen concept's community, or the whole drawing when no concept is chosen. */
+  function rest() {
+    if (chosen === null) paint(null);
+    else lightCommunity(graph.concepts[chosen].community);
+  }
+
+  /**
+   * Chooses concept `i`: rings it, keeps its community lit, and shows its
+   * passages on the strip and as links. For null, lights the whole drawing
+   * and says how to choose one.
+   */
   function choose(i) {
+    chosen = i;
+    rest();
     strip.replaceChildren();
     list.replaceChildren();
     if (i === null) {
@@ -165,9 +176,13 @@ const graphView = (() => {
   drawing.addEventListener('pointerout', (event) => {
     if (conceptOf(event) && !conceptOf({ target: event.relatedTarget ?? drawing })) light(null);
   });
+  // A click on a concept chooses it, and a click on the empty drawing lets it go.
   drawing.addEventListener('click', (event) => {
     const node = conceptOf(event);
-    if (node) choose(Number(node.dataset.concept));
+    choose(node ? Number(node.dataset.concept) : null);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && graph && chosen !== null && drawing.clientWidth > 0) choose(null);
   });
   drawing.addEventListener('keydown', (event) => {
     const node = conceptOf(event);

@@ -7,5 +7,6 @@ contextBridge.exposeInMainWorld('ebookHero', {
   run: (request) => ipcRenderer.invoke('run', request),
   openBook: (request) => ipcRenderer.invoke('book', request),
   openGraph: (request) => ipcRenderer.invoke('graph', request),
+  saveImage: (request) => ipcRenderer.invoke('save-image', request),
   browse: () => ipcRenderer.invoke('browse'),
 });

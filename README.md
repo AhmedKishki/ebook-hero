@@ -7,7 +7,7 @@ ebook-hero searches a PDF or EPUB, reads the text around what it finds, checks w
 ## Install
 
 ```sh
-cargo install --locked --git https://github.com/AhmedKishki/ebook-hero
+cargo install --locked ebook-hero
 ```
 
 From a clone:

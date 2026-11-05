@@ -33,7 +33,8 @@
 - Errors name the cause and a remedy. Nothing falls back silently.
 - `--json` output equals the structured result of the matching MCP tool.
 - Offsets are UTF-8 bytes inside the library and Unicode code points in output.
-- Tests that give `Session` a cache root use `tests/common::private_tempdir()`; the root must be mode 0700.
+- Tests that give `Session` a cache root use `tests/common::private_tempdir()`; the root must be private: owned by the current user, not a symbolic link, and not writable by group or others.
 - Test books are generated or public-domain. Commit no other book.
 - A change to an algorithm that `docs/` describes updates that document in the same commit.
+- Every change bumps the version in `Cargo.toml` by Semantic Versioning (patch for documentation and fixes that keep the behaviour, minor for new features or changed behaviour while at 0.x) and adds an entry under that version to `CHANGELOG.md`, in the same commit.
 - A commit message states what changed and why, with no generated-by or co-author trailers.

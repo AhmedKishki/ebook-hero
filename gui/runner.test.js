@@ -87,6 +87,20 @@ test('a failing command returns its own message and stdout', { skip: process.pla
   }
 });
 
+test("verify's exit status 3 is the verdict none, not a failure", { skip: process.platform === 'win32' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebook-hero-gui-'));
+  try {
+    const fake = path.join(dir, 'fake');
+    fs.writeFileSync(fake, '#!/bin/sh\necho "none"\nexit 3\n', { mode: 0o755 });
+    const verdict = await run({ tool: 'verify', path: '/b.pdf', query: 'not in the book' }, fake);
+    assert.deepEqual(verdict, { ok: true, stdout: 'none\n', stderr: '', binary: shown(fake) });
+    const other = await run({ tool: 'info', path: '/b.pdf' }, fake);
+    assert.equal(other.ok, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function executable(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, '#!/bin/sh\n', { mode: 0o755 });

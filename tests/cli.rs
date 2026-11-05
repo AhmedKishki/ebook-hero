@@ -108,7 +108,7 @@ fn info_prints_one_line_per_field() {
 }
 
 #[test]
-fn info_counts_the_chapters_of_an_epub() {
+fn info_counts_the_spine_items_of_an_epub() {
     let env = Env::new();
     let books = TempDir::new().unwrap();
     let book = epub(books.path(), &["One.", "Two."]);
@@ -116,8 +116,11 @@ fn info_counts_the_chapters_of_an_epub() {
     let out = env.stdout(&["info", &book]);
 
     assert!(out.contains("Format: EPUB\n"), "{out}");
-    assert!(out.contains("Chapters: 2\n"), "{out}");
+    assert!(out.contains("Spine items: 2\n"), "{out}");
+    assert!(!out.contains("Chapters:"), "{out}");
     assert!(!out.contains("Pages:"), "{out}");
+    let info = json(&env.stdout(&["info", &book, "--json"]));
+    assert_eq!(info["spine_count"], 2, "{info}");
 }
 
 #[test]
@@ -208,6 +211,15 @@ fn json_may_come_before_the_subcommand() {
 }
 
 #[test]
+fn find_names_a_single_occurrence_and_passage_in_the_singular() {
+    let env = Env::new();
+
+    let out = env.stdout(&["find", ALICE_EPUB, "pig and pepper"]);
+
+    assert!(out.starts_with("1 occurrence in 1 passage\n"), "{out}");
+}
+
+#[test]
 fn find_prints_the_totals_and_a_snippet_per_occurrence() {
     let env = Env::new();
 
@@ -244,15 +256,32 @@ fn find_json_and_cursor_continue_a_long_list() {
     let chapters = vec!["The needle is here."; 25];
     let book = epub(books.path(), &chapters);
 
-    let out = env.stdout(&["find", &book, "needle"]);
+    let first = env.run(&["find", &book, "needle"]).success();
+    let output = first.get_output();
+    let out = String::from_utf8_lossy(&output.stdout);
     assert!(out.starts_with("25 occurrences in 25 passages\n"), "{out}");
-    assert!(out.ends_with("next: --cursor 20\n"), "{out}");
+    assert_eq!(
+        out.lines().count(),
+        21,
+        "the totals and 20 occurrences: {out}"
+    );
+    assert!(!out.contains("next:"), "{out}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "next: --cursor 20\n"
+    );
 
+    let page = json(&env.stdout(&["find", &book, "needle", "--json"]));
+    assert_eq!(page["next_cursor"], 20, "{page}");
     let page = json(&env.stdout(&["find", &book, "needle", "--cursor", "20", "--json"]));
     assert_eq!(page["occurrences"].as_array().unwrap().len(), 5);
     assert!(page["next_cursor"].is_null());
-    let out = env.stdout(&["find", &book, "needle", "--cursor", "20"]);
-    assert!(!out.contains("next:"), "{out}");
+    let last = env
+        .run(&["find", &book, "needle", "--cursor", "20"])
+        .success();
+    let output = last.get_output();
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("next:"));
+    assert!(output.stderr.is_empty(), "{output:?}");
 }
 
 #[test]
@@ -361,18 +390,6 @@ fn verify_prints_the_verdict() {
         "{equivalent}"
     );
 
-    let none = env.stdout(&[
-        "verify",
-        SAMPLE_PDF,
-        "Entropy measures how much surprise a source of messages delivers",
-    ]);
-    assert!(
-        none.starts_with(
-            "none; closest passage 1 · p. 2 (1) (9 of 10 words; differs at \"delivers\")\n"
-        ),
-        "{none}"
-    );
-
     let result = json(&env.stdout(&[
         "verify",
         SAMPLE_PDF,
@@ -383,21 +400,62 @@ fn verify_prints_the_verdict() {
     assert_eq!(result["passage_id"], 1);
 }
 
+/// The stdout and stderr of a command that must exit with `code`.
+fn output_with_code(env: &Env, args: &[&str], code: i32) -> (String, String) {
+    let output = env.run(args).code(code).get_output().clone();
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+#[test]
+fn verify_exits_with_3_when_the_quote_is_not_in_the_book() {
+    let env = Env::new();
+    let quote = "Entropy measures how much surprise a source of messages delivers";
+
+    let (none, stderr) = output_with_code(&env, &["verify", SAMPLE_PDF, quote], 3);
+
+    assert_eq!(
+        none,
+        "none; closest passage 1 · p. 2 (1) (9 of 10 words; differs at \"delivers\")\n"
+    );
+    assert!(stderr.is_empty(), "{stderr}");
+    let (result, _) = output_with_code(&env, &["verify", SAMPLE_PDF, quote, "--json"], 3);
+    assert_eq!(json(&result)["verdict"], "none", "{result}");
+}
+
 #[test]
 fn verify_names_where_a_quote_was_found_elsewhere() {
     let env = Env::new();
 
-    let out = env.stdout(&[
-        "verify",
-        SAMPLE_PDF,
-        "Entropy measures how much surprise a source of messages carries",
-        "--passage-id",
-        "3",
-    ]);
+    let (out, _) = output_with_code(
+        &env,
+        &[
+            "verify",
+            SAMPLE_PDF,
+            "Entropy measures how much surprise a source of messages carries",
+            "--passage-id",
+            "3",
+        ],
+        3,
+    );
 
     let lines: Vec<&str> = out.lines().collect();
     assert!(lines[0].starts_with("none"), "{out}");
     assert!(lines.contains(&"found in passage 1 · p. 2 (1)"), "{out}");
+}
+
+#[test]
+fn verify_help_gives_the_exit_status_of_each_verdict() {
+    let env = Env::new();
+
+    let out = env.stdout(&["verify", "--help"]);
+
+    let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("0 after exact or equivalent"), "{out}");
+    assert!(flat.contains("3 after none"), "{out}");
+    assert!(flat.contains("error, which exits with 1"), "{out}");
 }
 
 #[test]
@@ -465,6 +523,38 @@ fn cache_list_prints_a_line_per_index() {
 }
 
 #[test]
+fn cache_list_json_gives_the_hash_size_and_title_of_each_index() {
+    let env = Env::new();
+    assert_eq!(
+        json(&env.stdout(&["cache", "list", "--json"])),
+        serde_json::json!({ "indexes": [] })
+    );
+
+    env.stdout(&["info", SAMPLE_PDF]);
+    let untitled = "1".repeat(64);
+    let dir = env.cache_root().join(&untitled);
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("document.json"), r#"{"metadata":{"title":null}}"#).unwrap();
+
+    let listing = json(&env.stdout(&["cache", "list", "--json"]));
+
+    let indexes: Vec<Value> = list_indexes(&env.cache_root())
+        .unwrap()
+        .into_iter()
+        .map(|index| {
+            serde_json::json!({
+                "sha256": index.sha256,
+                "size_bytes": index.size_bytes,
+                "title": index.title,
+            })
+        })
+        .collect();
+    assert_eq!(listing, serde_json::json!({ "indexes": indexes }));
+    let titles: Vec<&Value> = indexes.iter().map(|index| &index["title"]).collect();
+    assert_eq!(titles, [&Value::Null, &Value::from("Sample Book")]);
+}
+
+#[test]
 fn cache_clear_prints_how_many_indexes_it_removed() {
     let env = Env::new();
     assert_eq!(env.stdout(&["cache", "clear"]), "removed 0 indexes\n");
@@ -476,8 +566,29 @@ fn cache_clear_prints_how_many_indexes_it_removed() {
     env.stdout(&["info", SAMPLE_PDF]);
     assert_eq!(cached_shas(&env).len(), 1);
 
-    assert_eq!(env.stdout(&["cache", "clear"]), "removed 1 indexes\n");
+    assert_eq!(env.stdout(&["cache", "clear"]), "removed 1 index\n");
     assert_eq!(env.stdout(&["cache", "list"]), "");
+
+    env.stdout(&["info", SAMPLE_PDF]);
+    env.stdout(&["info", ALICE_EPUB]);
+    assert_eq!(env.stdout(&["cache", "clear"]), "removed 2 indexes\n");
+}
+
+#[test]
+fn cache_clear_json_gives_how_many_indexes_it_removed() {
+    let env = Env::new();
+    assert_eq!(
+        json(&env.stdout(&["cache", "clear", "--json"])),
+        serde_json::json!({ "removed": 0, "skipped_in_use": 0 })
+    );
+
+    env.stdout(&["info", SAMPLE_PDF]);
+
+    assert_eq!(
+        json(&env.stdout(&["cache", "clear", "--json"])),
+        serde_json::json!({ "removed": 1, "skipped_in_use": 0 })
+    );
+    assert!(cached_shas(&env).is_empty());
 }
 
 #[test]
@@ -487,14 +598,49 @@ fn cache_clear_reports_a_book_that_is_in_use() {
     let sha = cached_shas(&env).remove(0);
 
     // This process holds the build lock while the CLI, another process, clears.
-    let output = with_lock(&env.cache_root(), &sha, Duration::ZERO, || {
-        Ok(env.stdout(&["cache", "clear"]))
+    let (text, json_text) = with_lock(&env.cache_root(), &sha, Duration::ZERO, || {
+        Ok((
+            env.stdout(&["cache", "clear"]),
+            env.stdout(&["cache", "clear", "--json"]),
+        ))
     })
     .unwrap();
 
-    assert_eq!(output, "removed 0 indexes (1 skipped: in use)\n");
+    assert_eq!(text, "removed 0 indexes (1 skipped: in use)\n");
+    assert_eq!(
+        json(&json_text),
+        serde_json::json!({ "removed": 0, "skipped_in_use": 1 })
+    );
     assert_eq!(cached_shas(&env), [sha]);
-    assert_eq!(env.stdout(&["cache", "clear"]), "removed 1 indexes\n");
+    assert_eq!(env.stdout(&["cache", "clear"]), "removed 1 index\n");
+}
+
+#[test]
+fn mcp_refuses_json_before_it_starts() {
+    let env = Env::new();
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "test", "version": "0" }
+        }
+    });
+
+    // A server that started would answer the request on stdout.
+    let assert = env
+        .command()
+        .args(["mcp", "--json"])
+        .write_stdin(format!("{initialize}\n"))
+        .assert()
+        .code(1);
+
+    let output = assert.get_output();
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("error: --json "), "{stderr}");
+    assert!(stderr.contains("without --json"), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
 }
 
 #[test]
@@ -687,7 +833,7 @@ fn help_names_the_mcp_tool_each_json_output_matches() {
     let json = out
         .lines()
         .skip_while(|l| !l.contains("--json"))
-        .take_while(|l| !l.trim().is_empty())
+        .take_while(|l| !l.trim_start().starts_with("-h, --help"))
         .collect::<Vec<_>>()
         .join(" ");
     for name in [
@@ -701,6 +847,8 @@ fn help_names_the_mcp_tool_each_json_output_matches() {
         assert!(json.contains(name), "{name}: {json}");
     }
     assert!(!json.contains("same name"), "{json}");
+    assert!(json.contains("cache list"), "{json}");
+    assert!(!json.contains("ignore"), "{json}");
 }
 
 #[test]

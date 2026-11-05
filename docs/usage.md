@@ -100,11 +100,18 @@ ebook-hero [--json] <command> [arguments]
 These rules hold for every command:
 
 - `<path>` is the book: an absolute path, a path relative to the working directory, or one that starts with `~`. Symbolic links are followed. The format comes from the file's content, so the extension does not matter.
-- `--json` may stand anywhere on the line. For `info`, `outline`, `search`, `find`, `read`, `verify` and `graph` it prints, pretty-printed, the structured result of the MCP tool `book_info`, `outline`, `search`, `find`, `read`, `verify_quote` or `concept_graph`. `index` then prints what `info` prints, and `extract` prints the extracted document as `--format json` does. `cache` and `mcp` ignore it.
-- Standard output carries only the result. Errors, embedding progress, `read`'s `next: --cursor` line and log lines go to standard error.
+- `--json` may stand anywhere on the line. For `info`, `outline`, `search`, `find`, `read`, `verify` and `graph` it prints, pretty-printed, the structured result of the MCP tool `book_info`, `outline`, `search`, `find`, `read`, `verify_quote` or `concept_graph`. `index` then prints what `info` prints, and `extract` prints the extracted document as `--format json` does. `cache list` and `cache clear` print the objects that [cache](#cache) describes. `mcp` refuses it, because its standard output carries only protocol messages.
+- Standard output carries only the result. Errors, embedding progress, the `next: --cursor` line of `find` and `read`, and log lines go to standard error.
 - `ebook-hero help <command>` and `ebook-hero <command> --help` print a command's options and, for most commands, examples. `-h` prints a summary, and `--version` prints the version.
 
-The exit status is 0 when the command ran, also when it found nothing: `search` then prints `no results`, `find` prints `0 occurrences in 0 passages`, and `verify` prints `none`. A command that fails prints `error: ` and the cause on standard error and exits with 1. Arguments that do not parse, such as a missing argument or an unknown mode, print the usage and exit with 2.
+The exit status says how the command ended:
+
+| Status | When |
+|---|---|
+| 0 | The command ran, also when it found nothing: `search` then prints `no results`, and `find` prints `0 occurrences in 0 passages`. |
+| 1 | The command failed. It printed `error: ` and the cause on standard error. |
+| 2 | The arguments did not parse, such as a missing argument or an unknown mode. The usage was printed on standard error. |
+| 3 | `verify` ran and gave the verdict `none`: the quote is not in the book, or not in the passage that `--passage-id` names. |
 
 Every command that opens a book can fail in these ways:
 
@@ -128,7 +135,7 @@ ebook-hero info <path>
 
 Summarizes the book: its title, authors, language, format and size, its number of passages, and whether its passages are embedded yet. `info` takes no options besides `--json`.
 
-The text form prints one field per line. `Pages` is the page count of a PDF, and `Chapters` the number of files in an EPUB's spine. `Semantic index` is `ready` once the passages are embedded and `not built` before. Each part of the file that the reader had to leave out adds a line that starts with `Warning:` and names the part.
+The text form prints one field per line. `Pages` is the page count of a PDF, and `Spine items` the number of entries in an EPUB's spine, the list of its files in reading order. Spine items include covers and front matter, and a long chapter can be split across several, so the count is not a chapter count: `alice.epub` has 14 for its 12 chapters. `Semantic index` is `ready` once the passages are embedded and `not built` before. Each part of the file that the reader had to leave out adds a line that starts with `Warning:` and names the part.
 
 ```console
 $ ebook-hero info tests/fixtures/alice.epub
@@ -136,7 +143,7 @@ Title: Alice's Adventures in Wonderland
 Authors: Lewis Carroll
 Language: en
 Format: EPUB
-Chapters: 14
+Spine items: 14
 Passages: 166
 Semantic index: not built
 ```
@@ -303,7 +310,7 @@ passage 111 · CHAPTER IX. The Mock Turtle’s Story ¶36–42: …, and shoutin
 passage 145 · CHAPTER XII. Alice’s Evidence ¶54–60: …rning purple. “I won’t!” said Alice. “«Off with her head»!” the Queen shouted at the top of her v…
 ```
 
-A page holds the occurrences of 20 passages. When more are left, the last line of standard output is `next: --cursor <n>`, where `n` counts matching passages, not passage ids. A cursor past the last page prints the totals and nothing else.
+A page holds the occurrences of 20 passages. When more are left, `find` prints `next: --cursor <n>` on standard error, where `n` counts matching passages, not passage ids. The line tells how to go on and is not part of the listing, so a pipe receives only the totals and the occurrences, while a terminal shows the line after them. A cursor past the last page prints the totals and nothing else.
 
 ```console
 $ ebook-hero find tests/fixtures/alice.epub "the queen"
@@ -444,9 +451,15 @@ none
 found in passage 95 · CHAPTER VIII. The Queen’s Croquet-Ground ¶13–19
 ```
 
-The exit status is 0 whatever the verdict, so a script reads the verdict from the output.
+The exit status is 0 after `exact` or `equivalent` and 3 after `none`. An error exits with 1, so a script can tell `none` from a check that failed without reading the output:
 
-With `--json` it prints the [`verify_quote`](#verify_quote) result, which also gives the matched range:
+```console
+$ ebook-hero verify tests/fixtures/alice.epub "the Queen was very kind to everyone" > /dev/null
+$ echo $?
+3
+```
+
+With `--json` it exits with the same status and prints the [`verify_quote`](#verify_quote) result, which also gives the matched range:
 
 | Field | With `exact` or `equivalent` | With `none` |
 |---|---|---|
@@ -560,7 +573,7 @@ Title: Alice's Adventures in Wonderland
 Authors: Lewis Carroll
 Language: en
 Format: EPUB
-Chapters: 14
+Spine items: 14
 Passages: 166
 Semantic index: ready
 ```
@@ -576,7 +589,7 @@ ebook-hero cache clear
 
 `cache list` prints one line per cached index, sorted by hash: the SHA-256 of the book's file, the size of the index in megabytes, and the book's title. It prints nothing when the cache is empty.
 
-`cache clear` deletes every cached index and prints how many it removed. An index that another process is building or embedding is left alone, and the line then ends with ` (<n> skipped: in use)`. The empty `.lock` files beside the indexes stay, since deleting them could let two processes build one book at once.
+`cache clear` deletes every cached index and prints how many it removed: `removed 1 index`, or `removed <n> indexes` for any other number. An index that another process is building or embedding is left alone, and the line then ends with ` (<n> skipped: in use)`. The empty `.lock` files beside the indexes stay, since deleting them could let two processes build one book at once.
 
 After the examples above, the cache holds two books:
 
@@ -589,6 +602,42 @@ removed 2 indexes
 ```
 
 The lexical index of a book differs a little in size from one build to the next, so a rebuilt index can list a slightly different size. A book whose index was cleared is indexed again by the next command about it.
+
+With `--json` each command prints an object:
+
+| Command | Field | What it holds |
+|---|---|---|
+| `cache list` | `indexes[]` | one object per cached index, sorted by hash |
+| `cache list` | `indexes[].sha256` | the SHA-256 of the book's file |
+| `cache list` | `indexes[].size_bytes` | the bytes the index takes |
+| `cache list` | `indexes[].title` | the book's title, or `null` when it has none |
+| `cache clear` | `removed` | how many indexes it deleted |
+| `cache clear` | `skipped_in_use` | how many it left alone because another process was building or embedding them |
+
+An empty cache gives `"indexes": []`. On a cache that holds the same two books, the commands print:
+
+```console
+$ ebook-hero cache list --json
+{
+  "indexes": [
+    {
+      "sha256": "08a2de3a58226311915bd87056e59ed4ee49a284dcb5e722fef415bca4032a4b",
+      "size_bytes": 1111734,
+      "title": "Alice's Adventures in Wonderland"
+    },
+    {
+      "sha256": "79344fac38920106022acdf970fe94855b1f5f5e826756fdd4d4418bbdae18e5",
+      "size_bytes": 35864,
+      "title": "Sample Book"
+    }
+  ]
+}
+$ ebook-hero cache clear --json
+{
+  "removed": 2,
+  "skipped_in_use": 0
+}
+```
 
 ### mcp
 
@@ -604,6 +653,13 @@ error: I/O error: connection closed: initialize request
 ```
 
 An `EBOOK_HERO_MODEL_IDLE` that is not a whole number of at least 1 stops it before it starts: `error: I/O error: EBOOK_HERO_MODEL_IDLE is "five"; set it to a whole number of seconds, at least 1, or unset it to keep a model 300 seconds after its last use`.
+
+`--json` chooses the form of a command's output, and the protocol fixes the form of this one's, so `mcp --json` fails before the server starts:
+
+```console
+$ ebook-hero mcp --json
+error: --json does not apply to mcp, whose standard output carries only MCP messages; run ebook-hero mcp without --json
+```
 
 ## MCP reference
 
@@ -790,7 +846,7 @@ Checks whether a quote occurs in the book, and where. It is the MCP form of [`ve
 | `quote` | string | required | The text to look for, at most 440 words. |
 | `passage_id` | integer | the whole book | Look in this passage first, as a citation names it. |
 
-It returns `verdict`, `passage_id`, `locator`, `matched`, `closest` and `found_elsewhere`.
+It returns `verdict`, `passage_id`, `locator`, `matched`, `closest` and `found_elsewhere`. A `none` verdict is an ordinary result without `isError`, although the command exits with 3 for it.
 
 ```json
 {"path": "/home/me/books/alice.epub", "quote": "Off with her head!"}

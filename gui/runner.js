@@ -27,6 +27,8 @@ const REPOSITORY = path.join(__dirname, '..');
 // A page of `find` or `read` output is far below this; the cap exists so that a
 // runaway result is reported instead of silently cut.
 const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
+// The exit status of `ebook-hero verify` when the quote is not in the book.
+const VERIFY_NONE = 3;
 
 class FormError extends Error {}
 
@@ -136,7 +138,9 @@ function execBinary(args, binary = findBinary()) {
       { encoding: 'utf8', maxBuffer: MAX_OUTPUT_BYTES },
       (error, stdout, stderr) => {
         const ran = shown(binary);
-        if (!error) {
+        // verify exits with 3 when the quote is not in the book: a verdict, not a failure.
+        const verdictNone = error?.code === VERIFY_NONE && args[0] === 'verify';
+        if (!error || verdictNone) {
           resolve({ ok: true, stdout, stderr, binary: ran });
         } else if (error.code === 'ENOENT') {
           resolve(failure(

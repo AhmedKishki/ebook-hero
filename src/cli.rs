@@ -15,11 +15,9 @@ use crate::document::markdown::document_to_markdown;
 use crate::document::{Format, Warning};
 use crate::extract::extract;
 use crate::graph::{Concept, GraphResult};
-use crate::index::cache::{
-    CachedIndex, ClearReport, clear, default_cache_root, list_indexes, sha256_file,
-};
+use crate::index::cache::{CachedIndex, clear, default_cache_root, list_indexes, sha256_file};
 use crate::passages::{Passage, PassageLocator};
-use crate::read::{BookInfo, OutlineResult, ReadAt, ReadParams, ReadResult, locator_text};
+use crate::read::{BookInfo, OutlineResult, ReadAt, ReadParams, locator_text};
 use crate::search::find::FindResult;
 use crate::search::{Mode, SearchParams, SearchResult};
 use crate::session::{Session, resolve_path};
@@ -42,7 +40,7 @@ const SEPARATOR: &str = " · ";
 struct Cli {
     /// Print the result as JSON. For info, outline, search, find, read, verify and graph, it is what the MCP tools book_info, outline, search, find, read, verify_quote and concept_graph return
     ///
-    /// index prints what info prints, and extract prints the Document as --format json does. cache and mcp ignore it.
+    /// index prints what info prints, and extract prints the Document as --format json does. cache list prints the cached indexes, and cache clear how many it removed. mcp refuses it, because its standard output carries only MCP messages.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -91,6 +89,7 @@ enum Command {
     ///
     /// Prints the number of occurrences in the whole book, then one line per
     /// occurrence with its passage, place and context, 20 passages to a page.
+    /// When more are left, it prints `next: --cursor N` on stderr.
     #[command(after_help = "Examples:
   ebook-hero find book.pdf \"social structure\"
   ebook-hero find book.pdf \"social structure\" --cursor 20")]
@@ -145,8 +144,9 @@ enum Command {
     /// Prints exact when the quote occurs as written, equivalent when only
     /// case, punctuation or spacing differ, and none otherwise. After none it
     /// names the passage that comes closest, or the passage that holds the
-    /// quote when --passage-id named another. The exit status is 0 whatever
-    /// the verdict.
+    /// quote when --passage-id named another. The exit status is 0 after exact
+    /// or equivalent and 3 after none, so a script can tell none from an error,
+    /// which exits with 1.
     #[command(after_help = "Examples:
   ebook-hero verify book.pdf \"the words to check\"
   ebook-hero verify book.pdf \"the words to check\" --passage-id 42")]
@@ -232,10 +232,17 @@ enum CacheCommand {
     Clear,
 }
 
-/// What a command prints: `stdout` is its result, `stderr` a hint about it.
+/// The exit status of `verify` after the verdict none: the quote is not in the
+/// book, or not in the passage it was cited from. An error exits with 1 and a
+/// usage error with 2, so a script can tell the three apart.
+const VERDICT_NONE: u8 = 3;
+
+/// What a command prints and how it exits: `stdout` is its result, `stderr` a
+/// hint about it.
 struct Output {
     stdout: String,
     stderr: String,
+    status: ExitCode,
 }
 
 impl From<String> for Output {
@@ -243,6 +250,20 @@ impl From<String> for Output {
         Output {
             stdout,
             stderr: String::new(),
+            status: ExitCode::SUCCESS,
+        }
+    }
+}
+
+impl Output {
+    /// `stdout`, and when more is left, the `next: --cursor` line on stderr: it
+    /// says how to go on and is not part of the result.
+    fn continued(stdout: String, cursor: Option<impl std::fmt::Display>) -> Output {
+        Output {
+            stderr: cursor
+                .map(|cursor| format!("next: --cursor {cursor}\n"))
+                .unwrap_or_default(),
+            ..Output::from(stdout)
         }
     }
 }
@@ -251,16 +272,17 @@ impl From<String> for Output {
 /// its result. The binary's `main` returns what this returns.
 ///
 /// A command that fails prints `error: ` and the cause on standard error and
-/// returns failure, status 1. Arguments that do not parse never reach a
-/// command: clap prints the usage and exits with status 2.
+/// returns failure, status 1. `verify` returns status 3 after the verdict
+/// none. Arguments that do not parse never reach a command: clap prints the
+/// usage and exits with status 2.
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
     init_logging();
     let progress = Progress::new();
     let result = run(cli, &progress);
     progress.finish();
-    match result.and_then(|output| emit(&output)) {
-        Ok(()) => ExitCode::SUCCESS,
+    match result.and_then(|output| emit(&output).map(|()| output.status)) {
+        Ok(status) => status,
         Err(error) => {
             eprintln!("error: {error}");
             ExitCode::FAILURE
@@ -310,7 +332,14 @@ fn emit(output: &Output) -> Result<()> {
 fn run(cli: Cli, progress: &Progress) -> Result<Output> {
     let json = cli.json;
     let session = match cli.command {
-        Command::Cache { action } => return cache(&action).map(Output::from),
+        Command::Cache { action } => return cache(&action, json),
+        Command::Mcp if json => {
+            return Err(Error::InvalidArgument(
+                "--json does not apply to mcp, whose standard output carries only MCP messages; \
+                 run ebook-hero mcp without --json"
+                    .to_string(),
+            ));
+        }
         Command::Mcp => return serve_mcp().map(Output::from),
         Command::Extract { path, format } => {
             let json = json || format == ExtractFormat::Json;
@@ -354,7 +383,8 @@ fn run(cli: Cli, progress: &Progress) -> Result<Output> {
                 return to_json(&result).map(Output::from);
             }
             let book = session.book(&path)?;
-            find_text(&result, &book.passages).map(Output::from)
+            let text = find_text(&result, &book.passages)?;
+            Ok(Output::continued(text, result.next_cursor))
         }
         Command::Read {
             path,
@@ -381,7 +411,7 @@ fn run(cli: Cli, progress: &Progress) -> Result<Output> {
             if json {
                 return to_json(&result).map(Output::from);
             }
-            Ok(read_output(result))
+            Ok(Output::continued(result.markdown, result.next_cursor))
         }
         Command::Verify {
             path,
@@ -389,7 +419,11 @@ fn run(cli: Cli, progress: &Progress) -> Result<Output> {
             passage_id,
         } => {
             let result = session.verify(&path, &quote, passage_id)?;
-            printed(json, &result, verify_text)
+            let mut output = printed(json, &result, verify_text)?;
+            if result.verdict == Verdict::None {
+                output.status = ExitCode::from(VERDICT_NONE);
+            }
+            Ok(output)
         }
         Command::Graph { path, full } => {
             let graph = session.graph(&path, full)?;
@@ -474,16 +508,6 @@ fn extract_book(path: &str, json: bool) -> Result<String> {
     }
 }
 
-fn read_output(result: ReadResult) -> Output {
-    Output {
-        stderr: result
-            .next_cursor
-            .map(|cursor| format!("next: --cursor {cursor}\n"))
-            .unwrap_or_default(),
-        stdout: result.markdown,
-    }
-}
-
 /// The summary line, then each community: its concepts by passage count, and
 /// one line per concept with its passage count, first passage and linked
 /// concepts by NPMI, highest first.
@@ -565,11 +589,13 @@ fn graph_text(graph: &GraphResult) -> String {
     out
 }
 
-/// `n` and `noun`, with an s unless `n` is 1 (and "communities" for many).
+/// `n` and `noun`, with an s unless `n` is 1 ("communities" and "indexes"
+/// for many).
 fn counted(n: usize, noun: &str) -> String {
     match (n, noun) {
         (1, _) => format!("1 {noun}"),
         (_, "community") => format!("{n} communities"),
+        (_, "index") => format!("{n} indexes"),
         _ => format!("{n} {noun}s"),
     }
 }
@@ -594,7 +620,7 @@ fn info_text(info: &BookInfo) -> String {
     field("Format", &format);
     match (info.page_count, info.spine_count) {
         (Some(pages), _) => field("Pages", &pages),
-        (None, Some(chapters)) => field("Chapters", &chapters),
+        (None, Some(items)) => field("Spine items", &items),
         (None, None) => {}
     }
     field("Passages", &info.passage_count);
@@ -719,8 +745,9 @@ fn highlighted(text: &str, matches: &[[usize; 2]]) -> String {
 
 fn find_text(result: &FindResult, passages: &[Passage]) -> Result<String> {
     let mut out = format!(
-        "{} occurrences in {} passages\n",
-        result.total_occurrences, result.total_passages
+        "{} in {}\n",
+        counted(result.total_occurrences, "occurrence"),
+        counted(result.total_passages, "passage")
     );
     for hit in &result.occurrences {
         let passage = passages.get(hit.passage_id as usize).ok_or_else(|| {
@@ -754,9 +781,6 @@ fn find_text(result: &FindResult, passages: &[Passage]) -> Result<String> {
                 flat(&chars[end..(end + SNIPPET_CONTEXT).min(chars.len())]),
             );
         }
-    }
-    if let Some(cursor) = result.next_cursor {
-        let _ = writeln!(out, "next: --cursor {cursor}");
     }
     Ok(out)
 }
@@ -807,21 +831,66 @@ fn verify_text(result: &VerifyResult) -> String {
     out
 }
 
-fn cache(action: &CacheCommand) -> Result<String> {
-    let root = default_cache_root();
-    match action {
-        CacheCommand::List => Ok(indexes_text(&list_indexes(&root)?)),
-        CacheCommand::Clear => Ok(clear_text(&clear(&root)?)),
+/// What `cache list --json` prints: the cached indexes, sorted by hash.
+#[derive(Serialize)]
+struct CacheListing<'a> {
+    indexes: Vec<CachedBook<'a>>,
+}
+
+/// One cached index: the SHA-256 of the book's file, the bytes the index takes
+/// and the book's title, `None` when it has none.
+#[derive(Serialize)]
+struct CachedBook<'a> {
+    sha256: &'a str,
+    size_bytes: u64,
+    title: Option<&'a str>,
+}
+
+impl<'a> From<&'a CachedIndex> for CachedBook<'a> {
+    fn from(index: &'a CachedIndex) -> CachedBook<'a> {
+        CachedBook {
+            sha256: &index.sha256,
+            size_bytes: index.size_bytes,
+            title: index.title.as_deref(),
+        }
     }
 }
 
-fn indexes_text(indexes: &[CachedIndex]) -> String {
+/// What `cache clear --json` prints: how many indexes were deleted, and how
+/// many were left alone because another process held their build lock.
+#[derive(Serialize)]
+struct CacheCleared {
+    removed: usize,
+    skipped_in_use: usize,
+}
+
+fn cache(action: &CacheCommand, json: bool) -> Result<Output> {
+    let root = default_cache_root();
+    match action {
+        CacheCommand::List => {
+            let indexes = list_indexes(&root)?;
+            let listing = CacheListing {
+                indexes: indexes.iter().map(CachedBook::from).collect(),
+            };
+            printed(json, &listing, listing_text)
+        }
+        CacheCommand::Clear => {
+            let report = clear(&root)?;
+            let cleared = CacheCleared {
+                removed: report.removed,
+                skipped_in_use: report.skipped_busy,
+            };
+            printed(json, &cleared, cleared_text)
+        }
+    }
+}
+
+fn listing_text(listing: &CacheListing) -> String {
     let mut out = String::new();
-    for index in indexes {
+    for index in &listing.indexes {
         // A title is one line, whatever whitespace the book put in it.
         let title = index
             .title
-            .as_deref()
             .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| "(untitled)".to_string());
@@ -831,10 +900,10 @@ fn indexes_text(indexes: &[CachedIndex]) -> String {
     out
 }
 
-fn clear_text(report: &ClearReport) -> String {
-    let mut out = format!("removed {} indexes", report.removed);
-    if report.skipped_busy > 0 {
-        let _ = write!(out, " ({} skipped: in use)", report.skipped_busy);
+fn cleared_text(cleared: &CacheCleared) -> String {
+    let mut out = format!("removed {}", counted(cleared.removed, "index"));
+    if cleared.skipped_in_use > 0 {
+        let _ = write!(out, " ({} skipped: in use)", cleared.skipped_in_use);
     }
     out.push('\n');
     out

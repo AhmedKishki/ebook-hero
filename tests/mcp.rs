@@ -274,6 +274,36 @@ async fn structured_result_equals_cli_json() {
 }
 
 #[tokio::test]
+async fn a_quote_not_in_the_book_is_a_verdict_and_equals_cli_json() {
+    let server = Server::start().await;
+    let cli_env = private_tempdir();
+    let cli_models = private_tempdir();
+    let quote = "Entropy measures how much surprise a source of messages delivers";
+    // The command exits with 3 for this verdict; the tool returns it as data.
+    let output = Command::new(env!("CARGO_BIN_EXE_ebook-hero"))
+        .args(["verify", SAMPLE_PDF, quote, "--json"])
+        .env("EBOOK_HERO_INDEXES", cli_env.path())
+        .env("EBOOK_HERO_MODELS", cli_models.path())
+        .env_remove("EBOOK_HERO_LOG")
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+    let cli: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    let result = server
+        .call(
+            "verify_quote",
+            json!({ "path": SAMPLE_PDF, "quote": quote }),
+        )
+        .await;
+
+    assert!(!is_error(&result), "{result:?}");
+    assert_eq!(cli["verdict"], "none", "{cli}");
+    assert_eq!(result.structured_content, Some(cli));
+}
+
+#[tokio::test]
 async fn concept_graph_equals_cli_json() {
     let server = Server::start().await;
     let cli_env = private_tempdir();

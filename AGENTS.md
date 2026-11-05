@@ -17,6 +17,7 @@
 
 - Readers in `src/extract/` turn a file into a `Document` (`src/document/`). Everything after them reads a `Document` and never changes it.
 - `passages`, `index`, `search`, `read`, `verify` and `graph` hold the logic. `cli.rs` and `mcp.rs` parse arguments and format output only. Both call `Session`.
+- Two algorithms come from crates of their own: the PDF reader calls `furniture-detection` to find page furniture, and `graph` calls `concept-map` to build the concept graph and converts its result into ebook-hero's output types. Each crate's own `docs/` explains its algorithm; `docs/furniture-detection.md` and `docs/concept-graph.md` here explain how ebook-hero uses them.
 - `src/settings.rs` holds the search, read and limit constants and the version numbers. Input caps, writer budgets and reader heuristics live in the module that uses them.
 - `docs/` explains each part's algorithm and `evals/` holds evaluations against other tools, each with its harness and frozen inputs.
 - `gui/` is an Electron window that runs the built `ebook-hero` binary and shows what it prints. It does not link the library, and its logic is finding that binary and turning the form into one command (`gui/runner.js`), reading the book for its Book tab (`gui/book.js`), reading the concept graph for its Graph tab and saving its image (`gui/graph.js`), and drawing that graph as a standalone SVG with the colours and community names the tab shares (`gui/graphdraw.js`, loaded by the window and by `node --test`). `gui/launch.js` starts Electron; `npm start` and the `ebook-hero-gui` command both run it.
@@ -26,7 +27,7 @@
 ## Rules
 
 - A `Document` schema change is additive and bumps `SCHEMA_VERSION`.
-- A change to a reader, to passage packing, or to an analyzer bumps its version in `src/settings.rs`, so cached indexes rebuild.
+- A change to a reader, to passage packing, or to an analyzer bumps its version in `src/settings.rs`, so cached indexes rebuild. Moving to a version of `furniture-detection` whose output differs bumps `PDF_READER_VERSION`, and to a version of `concept-map` whose graphs differ bumps `GRAPH_VERSION`.
 - stdout carries only MCP messages or command output. Logs go to stderr.
 - Errors name the cause and a remedy. Nothing falls back silently.
 - `--json` output equals the structured result of the matching MCP tool.

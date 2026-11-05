@@ -486,6 +486,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "concept-map"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6efbad3dd6c771f6d44cb428bc611a59991f1c181a14b870dd34d8d2836cb07c"
+dependencies = [
+ "frostem",
+ "serde",
+]
+
+[[package]]
 name = "console"
 version = "0.16.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -924,13 +934,15 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "ebook-hero"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "clap",
+ "concept-map",
  "dirs 7.0.0",
  "fastembed",
  "fs4 1.1.0",
+ "furniture-detection",
  "libc",
  "pdf_oxide",
  "rbook",
@@ -1174,6 +1186,15 @@ checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
 dependencies = [
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "furniture-detection"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e709f5fdf32cb7997eb4fbb8ed3efe82ad4121baa25e7818ab37bc3616a47b87"
+dependencies = [
+ "unicode-normalization",
 ]
 
 [[package]]

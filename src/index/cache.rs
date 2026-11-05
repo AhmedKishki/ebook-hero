@@ -28,6 +28,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::cancel::Cancel;
 use crate::document::SCHEMA_VERSION;
 use crate::settings::{
     ANALYZERS_VERSION, EMBEDDING_DIM, EMBEDDING_MODEL, EPUB_READER_VERSION, LOCK_POLL,
@@ -242,12 +243,26 @@ pub fn with_lock<T>(
     wait: Duration,
     f: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
+    with_lock_cancellable(root, sha, wait, &Cancel::new(), f)
+}
+
+/// [`with_lock`], but the wait for the lock ends with [`Error::Cancelled`]
+/// as soon as `cancel` is set, within [`LOCK_POLL`]. Once the lock is held,
+/// `f` runs to its end whatever `cancel` says; `f` may check it itself.
+pub fn with_lock_cancellable<T>(
+    root: &Path,
+    sha: &str,
+    wait: Duration,
+    cancel: &Cancel,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     require_sha256(sha)?;
     ensure_private_dir(root)?;
     let path = lock_path(root, sha);
     let mut lock = open_lock(&path)?;
     let started = Instant::now();
     loop {
+        cancel.check()?;
         match FileExt::try_lock(&lock) {
             Ok(()) => break,
             Err(TryLockError::WouldBlock) => {

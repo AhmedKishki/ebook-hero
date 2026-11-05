@@ -12,6 +12,7 @@ use fastembed::{
     EmbeddingModel, RerankInitOptions, RerankerModel, TextEmbedding, TextInitOptions, TextRerank,
 };
 
+use crate::cancel::Cancel;
 use crate::settings::{EMBED_BATCH, EMBEDDING_MODEL, QUERY_PREFIX, RERANK_BATCH, RERANKER_MODEL};
 use crate::{Error, Result};
 
@@ -63,9 +64,22 @@ impl Models {
         texts: &[&str],
         progress: &dyn Fn(usize, usize),
     ) -> Result<Vec<Vec<f32>>> {
+        self.embed_passages_cancellable(texts, progress, &Cancel::new())
+    }
+
+    /// [`embed_passages`](Models::embed_passages) that stops between two
+    /// batches with [`Error::Cancelled`] once `cancel` is set. The batch in
+    /// progress finishes first, and the rows already made are dropped.
+    pub fn embed_passages_cancellable(
+        &self,
+        texts: &[&str],
+        progress: &dyn Fn(usize, usize),
+        cancel: &Cancel,
+    ) -> Result<Vec<Vec<f32>>> {
         let total = texts.len();
         let mut rows = Vec::with_capacity(total);
         for batch in texts.chunks(EMBED_BATCH) {
+            cancel.check()?;
             rows.extend(self.embed(batch)?);
             progress(rows.len(), total);
         }

@@ -42,6 +42,12 @@ pub const READ_NEIGHBOURS_MAX: u32 = 10;
 /// How long a process waits for another to finish building a book's index
 /// before it gives up with [`Error::LockTimeout`](crate::Error::LockTimeout).
 pub const LOCK_WAIT: Duration = Duration::from_secs(900);
+
+/// How long, in milliseconds, the MCP server lets a task run, and keeps it
+/// after it has ended so that the client can still read its result. A task
+/// that runs longer fails and its call is cancelled. One hour is far above the
+/// minutes it takes to embed a long book.
+pub const TASK_TTL: u64 = 3_600_000;
 /// How often a waiting process tries the build lock again.
 pub const LOCK_POLL: Duration = Duration::from_millis(200);
 /// How long the MCP server keeps a model it has not used, unless

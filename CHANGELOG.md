@@ -2,6 +2,19 @@
 
 Every change to ebook-hero gets a version and an entry here, newest first. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html): documentation and fixes that keep the behaviour bump the patch number, and new features or changed behaviour bump the minor number while ebook-hero is at 0.x. The entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-11-05
+
+### Added
+
+- MCP tasks. The server declares the `io.modelcontextprotocol/tasks` extension, and a client that declares it too gets a task handle for every tool and polls `tasks/get`. A `search` task reports `embedding passages 8 of 166` in its status message. A client that does not declare the extension waits for the result as before.
+- Cancellation. `tasks/cancel` and `notifications/cancelled` stop a call while it waits for another process's build lock and between two batches of passages it embeds. A cancelled embedding is dropped and nothing is cached. A stage-1 index build that holds the lock runs to its end.
+- Library: `Session::cancellable(Cancel)`, the `cancel::Cancel` flag, `Error::Cancelled`, and `Book::open_cancellable`, `Book::vectors_cancellable`, `Book::graph_cancellable`, `Models::embed_passages_cancellable` and `cache::with_lock_cancellable`. The existing methods are unchanged.
+- `settings::TASK_TTL`, one hour, how long a task may run and is kept after it ends.
+
+### Changed
+
+- `Session` keeps its books, hashes and models behind `Arc`s so that a cancellable session can share them. Nothing in its public API changes.
+
 ## [0.4.0] - 2026-11-05
 
 ### Added

@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use crate::cancel::Cancel;
 use crate::document::Document;
 use crate::embed::Models;
 use crate::extract::extract;
@@ -53,13 +54,25 @@ impl Book {
     /// only then is the index built. A cache that does not load is rebuilt
     /// like a stale one, and why it did not load is logged as a warning.
     pub fn open(cache_root: &Path, path: &Path, sha256: &str) -> Result<Book> {
+        Book::open_cancellable(cache_root, path, sha256, &Cancel::new())
+    }
+
+    /// [`Book::open`] whose wait for another process's build lock ends with
+    /// [`Error::Cancelled`] once `cancel` is set. A build that has the lock
+    /// runs to its end, so the cache is never left half written.
+    pub fn open_cancellable(
+        cache_root: &Path,
+        path: &Path,
+        sha256: &str,
+        cancel: &Cancel,
+    ) -> Result<Book> {
         cache::require_sha256(sha256)?;
         cache::ensure_private_dir(cache_root)?;
         let dir = cache::stage_dir(cache_root, sha256);
         if let Ok(Some(book)) = load_current(&dir, path, sha256) {
             return Ok(book);
         }
-        cache::with_lock(cache_root, sha256, LOCK_WAIT, || {
+        cache::with_lock_cancellable(cache_root, sha256, LOCK_WAIT, cancel, || {
             match load_current(&dir, path, sha256) {
                 Ok(Some(book)) => return Ok(book),
                 Ok(None) => {}
@@ -93,6 +106,18 @@ impl Book {
     /// cache directory that was removed since the book was opened is an error
     /// that asks for another call, which opens the book again.
     pub fn vectors(&self, models: &Models, progress: &dyn Fn(usize, usize)) -> Result<&Vectors> {
+        self.vectors_cancellable(models, progress, &Cancel::new())
+    }
+
+    /// [`Book::vectors`] that ends with [`Error::Cancelled`] once `cancel` is
+    /// set, while it waits for the lock or between two batches of passages.
+    /// The embeddings made so far are dropped, and nothing is written.
+    pub fn vectors_cancellable(
+        &self,
+        models: &Models,
+        progress: &dyn Fn(usize, usize),
+        cancel: &Cancel,
+    ) -> Result<&Vectors> {
         if let Some(vectors) = self.vectors.get() {
             return Ok(vectors);
         }
@@ -100,13 +125,13 @@ impl Book {
             .dir
             .parent()
             .ok_or_else(|| Error::Index(format!("{} is not inside a cache", self.dir.display())))?;
-        let vectors = cache::with_lock(root, &self.sha256, LOCK_WAIT, || {
+        let vectors = cache::with_lock_cancellable(root, &self.sha256, LOCK_WAIT, cancel, || {
             if !self.dir.is_dir() {
                 return Err(removed());
             }
             match self.stored_vectors() {
                 Some(vectors) => Ok(vectors),
-                None => self.embed(models, progress),
+                None => self.embed(models, progress, cancel),
             }
         })?;
         Ok(self.vectors.get_or_init(|| vectors))
@@ -118,6 +143,12 @@ impl Book {
     /// rebuilt, and why is logged as a warning. A cache directory removed
     /// since the book was opened is an error that asks for another call.
     pub fn graph(&self) -> Result<&GraphResult> {
+        self.graph_cancellable(&Cancel::new())
+    }
+
+    /// [`Book::graph`] whose wait for the lock ends with [`Error::Cancelled`]
+    /// once `cancel` is set. A build that has the lock runs to its end.
+    pub fn graph_cancellable(&self, cancel: &Cancel) -> Result<&GraphResult> {
         if let Some(graph) = self.graph.get() {
             return Ok(graph);
         }
@@ -125,7 +156,7 @@ impl Book {
             .dir
             .parent()
             .ok_or_else(|| Error::Index(format!("{} is not inside a cache", self.dir.display())))?;
-        let graph = cache::with_lock(root, &self.sha256, LOCK_WAIT, || {
+        let graph = cache::with_lock_cancellable(root, &self.sha256, LOCK_WAIT, cancel, || {
             if !self.dir.is_dir() {
                 return Err(removed());
             }
@@ -179,9 +210,15 @@ impl Book {
 
     /// Embeds every passage and caches the result. Call it only while holding
     /// the lock for this book.
-    fn embed(&self, models: &Models, progress: &dyn Fn(usize, usize)) -> Result<Vectors> {
+    fn embed(
+        &self,
+        models: &Models,
+        progress: &dyn Fn(usize, usize),
+        cancel: &Cancel,
+    ) -> Result<Vectors> {
         let texts: Vec<&str> = self.passages.iter().map(|p| p.text.as_str()).collect();
-        let vectors = Vectors::from_rows(models.embed_passages(&texts, progress)?)?;
+        let rows = models.embed_passages_cancellable(&texts, progress, cancel)?;
+        let vectors = Vectors::from_rows(rows)?;
         if vectors.rows() > 0 && vectors.dim() != EMBEDDING_DIM {
             return Err(Error::Index(format!(
                 "{EMBEDDING_MODEL} returned {} values per passage, not {EMBEDDING_DIM}",

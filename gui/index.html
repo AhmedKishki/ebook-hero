@@ -142,6 +142,50 @@
   #graph-strip .axis { stroke: var(--gold-dark); }
   #graph-strip rect { fill: var(--gem); }
   #graph-passages { margin: 0; padding: 0; list-style: none; overflow: auto; flex: 1; columns: 2; font-size: 13px; }
+
+  /* The Help pane: the guide's contents, and beside them the binary's help for the chosen tool above the guide. */
+  #help-pane { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(160px, 22%) minmax(0, 1fr); gap: 8px; }
+  #help-contents { min-height: 0; overflow: auto; padding: 8px 10px; background: #0a1226; border: 1px solid var(--gold-dark); border-radius: 4px; font-size: 13px; }
+  #help-contents ol { margin: 0; padding: 0; list-style: none; }
+  #help-contents ol ol { padding-left: 12px; }
+  #help-contents a { display: block; padding: 1px 0; color: var(--parchment); text-decoration: none; }
+  #help-contents > ol > li > a { color: var(--gold); margin-top: 6px; }
+  #help-contents a:hover { text-decoration: underline; }
+  #help-main { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+  #help-command { flex: none; }
+  #help-command summary { cursor: pointer; color: var(--gold); font-size: 14px; margin-bottom: 4px; }
+  #help-command-text { max-height: 35vh; }
+  #help-command-text:empty { display: none; }
+  #help-command-text.failed { color: var(--alarm); border-color: var(--ruby); }
+  #help-guide {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 14px 24px;
+    background: var(--parchment);
+    color: #2a1b12;
+    border: 2px solid var(--gold-dark);
+    border-radius: 4px;
+    font: 15px/1.6 Georgia, "Times New Roman", serif;
+  }
+  #help-guide > * { max-width: 86ch; margin: 0 auto .9em; }
+  #help-guide :is(h1, h2, h3, h4, h5, h6) { color: #6b1b27; line-height: 1.25; margin-top: 1.4em; }
+  #help-guide > h1:first-child { margin-top: .2em; }
+  #help-guide :not(pre) > code { font: .9em "DejaVu Sans Mono", Menlo, Consolas, monospace; background: #e6d7ae; padding: 0 3px; border-radius: 3px; overflow-wrap: anywhere; }
+  /* A code block keeps its lines and scrolls sideways instead of widening the page. */
+  #help-guide pre { color: var(--parchment); white-space: pre; overflow-x: auto; }
+  #help-guide pre code { font: inherit; }
+  #help-guide a { color: var(--ruby); text-decoration: underline dotted; }
+  #help-guide a:hover { text-decoration: underline; }
+  #help-guide a[data-external]::after { content: " \2197"; font-size: .8em; }
+  #help-guide ul, #help-guide ol { padding-left: 1.6em; }
+  #help-guide blockquote { padding-left: 12px; border-left: 3px solid var(--gold-dark); color: #4a3626; }
+  #help-guide blockquote > :last-child, #help-guide li > p:last-child { margin-bottom: 0; }
+  #help-guide .table { overflow-x: auto; }
+  #help-guide table { border-collapse: collapse; font-size: 14px; }
+  #help-guide th, #help-guide td { border: 1px solid #c9b78a; padding: 4px 8px; text-align: left; vertical-align: top; }
+  #help-guide th { background: #e6d7ae; }
+  #help-guide p.failed { color: var(--ruby); font-weight: bold; }
 </style>
 </head>
 <body>
@@ -160,6 +204,7 @@
     <button type="button" role="tab" id="tab-result" aria-selected="true">Result</button>
     <button type="button" role="tab" id="tab-book" aria-selected="false">Book</button>
     <button type="button" role="tab" id="tab-graph" aria-selected="false">Graph</button>
+    <button type="button" role="tab" id="tab-help" aria-selected="false">Help</button>
   </div>
   <p id="status" role="status"></p>
 </div>
@@ -180,10 +225,22 @@
     </div>
   </div>
 </section>
+<section id="help-pane" aria-label="Help" hidden>
+  <nav id="help-contents" aria-label="Contents of the usage guide"></nav>
+  <div id="help-main">
+    <details id="help-command" open>
+      <summary id="help-command-title"></summary>
+      <pre id="help-command-text" aria-label="The help the binary prints for the chosen tool"></pre>
+    </details>
+    <article id="help-guide" aria-label="Usage guide"></article>
+  </div>
+</section>
 
 <script src="viewer.js"></script>
 <script src="graphdraw.js"></script>
 <script src="graphview.js"></script>
+<script src="markdown.js"></script>
+<script src="helpview.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>

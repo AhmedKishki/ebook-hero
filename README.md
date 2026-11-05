@@ -151,6 +151,8 @@ Save image… writes the whole graph with its legend, undimmed and on the tab's 
 
 ![The Graph tab with the concept "mock turtle" chosen](assets/gui-graph.png)
 
+The Help tab shows the usage guide, `docs/usage.md`, with its sections listed beside it, and above the guide what `ebook-hero help` prints for the tool chosen in the form. That help comes from the binary the window runs, so it matches that binary even where the guide, read from the clone, describes another version.
+
 It needs Node.js with npm. Once, from a clone:
 
 ```sh

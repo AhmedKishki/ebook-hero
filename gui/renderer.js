@@ -13,7 +13,9 @@ const bookText = $('book-text');
 const tabResult = $('tab-result');
 const tabBook = $('tab-book');
 const tabGraph = $('tab-graph');
+const tabHelp = $('tab-help');
 const graphPane = $('graph-pane');
+const helpPane = $('help-pane');
 const saveImageButton = $('graph-save');
 
 // The saved PNG is drawn at this many times the image's size, so it stays sharp when zoomed on a phone.
@@ -34,12 +36,16 @@ let opening = false;
 // was asked for by, and the graph with its layout, from which its image is drawn.
 let shownGraph = { key: null, path: '', graph: null, positions: null };
 let graphing = false;
+// How many times the Help pane has asked for a tool's help, so that only the
+// reply to the latest request, for the tool chosen now, is shown.
+let helpAsked = 0;
 
 // The one line beside the tabs says something different for each pane.
 const lines = {
   result: { text: '', failed: false },
   book: { text: '', failed: false },
   graph: { text: '', failed: false },
+  help: { text: '', failed: false },
 };
 let pane = 'result';
 
@@ -71,9 +77,11 @@ function showPane(name) {
   err.hidden = name !== 'result';
   bookText.hidden = name !== 'book';
   graphPane.hidden = name !== 'graph';
+  helpPane.hidden = name !== 'help';
   tabResult.setAttribute('aria-selected', String(name === 'result'));
   tabBook.setAttribute('aria-selected', String(name === 'book'));
   tabGraph.setAttribute('aria-selected', String(name === 'graph'));
+  tabHelp.setAttribute('aria-selected', String(name === 'help'));
   paintLine();
 }
 
@@ -223,6 +231,51 @@ async function saveGraphImage() {
   else if (reply.path) say('graph', `Saved the graph to ${reply.path}.`);
 }
 
+/** Opens the Help pane on the usage guide and the help of the chosen tool. */
+function showHelp() {
+  showPane('help');
+  showGuide();
+  showCommandHelp();
+}
+
+/** Shows docs/usage.md, read again each time, so an edited guide shows its edits. */
+async function showGuide() {
+  let reply;
+  try {
+    reply = await window.ebookHero.guide();
+  } catch (error) {
+    reply = { ok: false, stderr: `error: ${error.message}` };
+  }
+  if (reply.ok) helpView.showGuide(reply.text, reply.base);
+  else helpView.showGuideFailure(reply.stderr.trim());
+}
+
+/** Shows what the binary prints for `help <tool>`, for the tool the form has chosen. */
+async function showCommandHelp() {
+  const asked = tool.value;
+  const request = ++helpAsked;
+  let reply;
+  try {
+    reply = await window.ebookHero.commandHelp(asked);
+  } catch (error) {
+    reply = { ok: false, stdout: '', stderr: `error: ${error.message}` };
+  }
+  if (request !== helpAsked) return;
+  helpView.showCommand(asked, reply);
+  say('help', reply.ok ? `The help for ${asked} comes from ${reply.binary}.` : reply.stderr.trim(), !reply.ok);
+}
+
+/** Opens a link of the guide to another site in the system browser. */
+async function openLink(url) {
+  let reply;
+  try {
+    reply = await window.ebookHero.openLink(url);
+  } catch (error) {
+    reply = { ok: false, stderr: `error: ${error.message}` };
+  }
+  if (!reply.ok) say('help', reply.stderr.trim(), true);
+}
+
 async function browse() {
   const chosen = await window.ebookHero.browse();
   if (chosen) bookPath.value = chosen;
@@ -233,17 +286,27 @@ async function start() {
   for (const name of Object.keys(tools)) tool.add(new Option(name, name));
   for (const kind of tools.read.addresses) address.add(new Option(kind, kind));
   tool.addEventListener('change', sync);
+  tool.addEventListener('change', () => {
+    if (pane === 'help') showCommandHelp();
+  });
   $('form').addEventListener('submit', run);
   $('browse').addEventListener('click', browse);
   tabResult.addEventListener('click', () => showPane('result'));
   tabBook.addEventListener('click', () => showBook(bookPath.value));
   tabGraph.addEventListener('click', () => showGraph(bookPath.value));
+  tabHelp.addEventListener('click', showHelp);
   saveImageButton.addEventListener('click', saveGraphImage);
   graphPane.addEventListener('click', (event) => {
     const link = event.target.closest('a[data-passage]');
     if (!link) return;
     event.preventDefault();
     showBook(shownGraph.path, Number(link.dataset.passage));
+  });
+  helpPane.addEventListener('click', (event) => {
+    const link = event.target.closest('a[data-external]');
+    if (!link) return;
+    event.preventDefault();
+    openLink(link.getAttribute('href'));
   });
   out.addEventListener('click', (event) => {
     const link = event.target.closest('a[data-passage]');

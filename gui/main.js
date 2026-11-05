@@ -1,9 +1,10 @@
 'use strict';
 
 const path = require('node:path');
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { createLibrary } = require('./book');
 const { createGraphs, saveImage } = require('./graph');
+const { commandHelp, openLink, readGuide } = require('./help');
 const { TOOLS, run } = require('./runner');
 
 const library = createLibrary();
@@ -42,6 +43,10 @@ ipcMain.handle('save-image', (event, request) => saveImage(request, async (defau
   });
   return result.canceled ? null : result.filePath;
 }));
+ipcMain.handle('guide', () => readGuide());
+ipcMain.handle('help', (_event, tool) => commandHelp(tool));
+// A link of the guide to another site opens in the system browser, never in the window.
+ipcMain.handle('open-link', (_event, url) => openLink(url, (address) => shell.openExternal(address)));
 ipcMain.handle('browse', async (event) => {
   const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
     properties: ['openFile'],

@@ -43,7 +43,7 @@ fn block_to_markdown(block: &Block) -> String {
                 block.text
             )
         }
-        BlockKind::Paragraph => block.text.clone(),
+        BlockKind::Paragraph | BlockKind::Code { .. } | BlockKind::Rule => block.text.clone(),
         BlockKind::ListItem => format!("- {}", block.text),
         BlockKind::Note { label } => {
             let text = match label {
@@ -70,6 +70,7 @@ mod tests {
             text: text.to_string(),
             spans: Vec::new(),
             ids: Vec::new(),
+            within: Vec::new(),
             section: None,
             locator: Locator::Pdf {
                 page,
@@ -128,6 +129,7 @@ mod tests {
             sections: Vec::new(),
             files: Vec::new(),
             page_labels: Vec::new(),
+            containers: Vec::new(),
             blocks,
             furniture: Vec::new(),
             warnings: Vec::new(),

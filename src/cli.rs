@@ -609,6 +609,7 @@ fn info_text(info: &BookInfo) -> String {
     let format = match info.format {
         Format::Pdf => "PDF",
         Format::Epub => "EPUB",
+        Format::Markdown => "Markdown",
     };
     let mut out = String::new();
     let mut field = |name: &str, value: &dyn std::fmt::Display| {
@@ -646,6 +647,9 @@ fn warning_text(warning: &Warning) -> String {
         }
         Warning::UnreadableContent { href, reason } => format!("could not read {href}: {reason}"),
         Warning::UnreadablePart { part, reason } => format!("could not read {part}: {reason}"),
+        Warning::BrokenLink { href, block } => {
+            format!("the link to {href} in block {block} leads nowhere in this document")
+        }
     }
 }
 
@@ -690,13 +694,17 @@ fn search_text(result: &SearchResult) -> String {
     out
 }
 
-/// Where a search hit is: its locator, then its section path. An EPUB locator
-/// that already names the nearest heading takes the rest of the path in front
-/// of it instead, so the heading is printed once.
+/// Where a search hit is: its locator, then its section path. An EPUB or
+/// Markdown locator that already names the nearest heading takes the rest of
+/// the path in front of it instead, so the heading is printed once.
 fn hit_place(section: &[String], locator: &PassageLocator) -> String {
     let place = locator_text(locator);
     if let (
         PassageLocator::Epub {
+            under_heading: Some(heading),
+            ..
+        }
+        | PassageLocator::Markdown {
             under_heading: Some(heading),
             ..
         },
@@ -955,6 +963,71 @@ mod tests {
             &epub(Some("CHAPTER VIII")),
         );
         assert_eq!(place, "Alice › CHAPTER VIII ¶10–11");
+    }
+
+    fn markdown(under_heading: Option<&str>) -> PassageLocator {
+        PassageLocator::Markdown {
+            line_start: 260,
+            line_end: 284,
+            under_heading: under_heading.map(|text| HeadingPlace {
+                text: text.to_string(),
+                para_start: 3,
+                para_end: 5,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_markdown_hit_names_its_heading_once() {
+        let place = hit_place(&section(&["Guide", "search"]), &markdown(Some("search")));
+        assert_eq!(place, "Guide › search ¶3–5, lines 260–284");
+        assert_eq!(
+            hit_place(&section(&["search"]), &markdown(Some("search"))),
+            "search ¶3–5, lines 260–284"
+        );
+    }
+
+    #[test]
+    fn a_markdown_hit_before_any_heading_is_placed_by_its_lines() {
+        assert_eq!(hit_place(&[], &markdown(None)), "lines 260–284");
+    }
+
+    #[test]
+    fn a_broken_link_names_the_href_and_the_block() {
+        let warning = Warning::BrokenLink {
+            href: "#missing".to_string(),
+            block: 12,
+        };
+        assert_eq!(
+            warning_text(&warning),
+            "the link to #missing in block 12 leads nowhere in this document"
+        );
+    }
+
+    #[test]
+    fn info_names_each_format() {
+        for (format, name) in [
+            (Format::Pdf, "PDF"),
+            (Format::Epub, "EPUB"),
+            (Format::Markdown, "Markdown"),
+        ] {
+            let info = BookInfo {
+                title: None,
+                authors: Vec::new(),
+                language: None,
+                format,
+                page_count: None,
+                spine_count: None,
+                passage_count: 0,
+                lexical_ready: true,
+                semantic_ready: false,
+                warnings: Vec::new(),
+            };
+            assert!(
+                info_text(&info).contains(&format!("Format: {name}\n")),
+                "{name}"
+            );
+        }
     }
 
     #[test]

@@ -64,15 +64,15 @@ Which fields are filled depends on the verdict:
 
 `matched` counts Unicode code points from the start of the passage's text. `start` is the first matched code point and `end` the one after the last. `read` prints a passage's text unchanged below its `<!-- passage … -->` line (`render` in `src/read.rs`), so the range applies to the text `read` shows.
 
-A locator is a `PassageLocator` from `src/passages.rs`, tagged by `format`. In a PDF it holds the physical pages `page_start` to `page_end`, counted from 1, and their printed labels. In an EPUB it holds the file `href`, the blocks `para_start` to `para_end` of that file counted from 1, the printed page if the book marks one, and `under_heading`, the paragraphs counted from the nearest heading above.
+A locator is a `PassageLocator` from `src/passages.rs`, tagged by `format`. In a PDF it holds the physical pages `page_start` to `page_end`, counted from 1, and their printed labels. In an EPUB it holds the file `href`, the blocks `para_start` to `para_end` of that file counted from 1, the printed page if the book marks one, and `under_heading`, the paragraphs counted from the nearest heading above. In a Markdown file it holds the lines `line_start` to `line_end` and the same `under_heading`.
 
 Both refuse a quote that is blank, has no letters or digits, or has more than 440 words, and a `passage_id` the book does not have. Each error names its cause and a remedy, such as `passage 99999 does not exist; the book has 166 passages`. The command prints the error on stderr and exits with status 1. The MCP tool returns it as a tool result with `isError` set (`failure` in `src/mcp.rs`).
 
 ## What a quote is compared with
 
-A quote is compared with the book's passages (`build_passages` in `src/passages.rs`). A passage is a run of paragraphs, list items and notes of at most `PASSAGE_MAX_WORDS` (220) words. It never crosses a heading or, in an EPUB, a file. A block longer than the limit is split first, at sentences or, inside an overlong sentence, at words, so every passage keeps to the limit. The passage's text is the text of its blocks joined by a blank line. Its id is its position in reading order, counted from 0.
+A quote is compared with the book's passages (`build_passages` in `src/passages.rs`). A passage is a run of paragraphs, list items, notes and code blocks of at most `PASSAGE_MAX_WORDS` (220) words. It never crosses a heading or a rule or, in an EPUB, a file. A block longer than the limit is split first, at sentences or, inside an overlong sentence, at words, so every passage keeps to the limit. The passage's text is the text of its blocks joined by a blank line. Its id is its position in reading order, counted from 0.
 
-A heading closes the passage before it and reaches the passages after it only as their `section`, so its text is in no passage. Every reader normalizes the text of each block with `normalize` in `src/normalize.rs` when it extracts the book, the same function the quote goes through in step 1.
+A heading closes the passage before it and reaches the passages after it only as their `section`, so its text is in no passage. A rule closes the passage too, and a block without words goes into none. Every reader normalizes the text of each block with `normalize` in `src/normalize.rs` when it extracts the book, the same function the quote goes through in step 1.
 
 ## Procedure
 

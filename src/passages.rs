@@ -13,7 +13,7 @@ use crate::index::cache::{PASSAGES_FILE, unreadable};
 use crate::settings::PASSAGE_MAX_WORDS;
 use crate::{Error, Result};
 
-/// A run of whole paragraphs, list items and notes of at most
+/// A run of whole paragraphs, list items, notes and code blocks of at most
 /// [`PASSAGE_MAX_WORDS`] words, inside one section and, in an EPUB, one file.
 /// Search returns passages, `read` prints them and quote verification checks
 /// them.
@@ -77,6 +77,15 @@ pub enum PassageLocator {
         /// `None` for text before the book's first heading.
         under_heading: Option<HeadingPlace>,
     },
+    /// A place in a Markdown file: `search ¶3–5, lines 260–284`.
+    Markdown {
+        /// The line where the passage's first block starts, counted from 1.
+        line_start: u32,
+        /// The line where its last block ends.
+        line_end: u32,
+        /// `None` for text before the file's first heading.
+        under_heading: Option<HeadingPlace>,
+    },
 }
 
 /// A passage's paragraphs counted from the nearest heading above it. The count
@@ -113,19 +122,22 @@ struct Piece<'a> {
     text: &'a str,
 }
 
-/// Packs the paragraphs, list items and notes of the document's blocks, in
-/// order, into passages of at most `PASSAGE_MAX_WORDS` words, joined with a
-/// blank line. A passage stays inside one section and, in an EPUB, one file.
-/// A block with more words than the limit is split into pieces first. A
-/// heading opens a new section even when its path repeats the previous one,
-/// so it closes the passage being built; it reaches a passage only through
-/// its `section`. `places` must be the document's.
+/// Packs the blocks of the document, in order, into passages of at most
+/// `PASSAGE_MAX_WORDS` words, joined with a blank line. A passage stays inside
+/// one section and, in an EPUB, one file. A block with more words than the
+/// limit is split into pieces first, and a block without words, such as an
+/// empty table cell, goes into no passage and does not close the one being
+/// built. A heading opens a new section even when its path repeats the
+/// previous one, so it closes the passage being built; it reaches a passage
+/// only through its `section`. A rule closes the passage as well but opens no
+/// section, since it separates parts of a text. `places` must be the
+/// document's.
 pub fn build_passages(document: &Document, places: &Places) -> Vec<Passage> {
     let mut passages = Vec::new();
     let mut current: Vec<Piece> = Vec::new();
     let mut words = 0;
     for block in &document.blocks {
-        if matches!(block.kind, BlockKind::Heading { .. }) {
+        if matches!(block.kind, BlockKind::Heading { .. } | BlockKind::Rule) {
             close(&mut passages, &mut current, &mut words, document, places);
             continue;
         }
@@ -246,20 +258,25 @@ fn word_count(text: &str) -> usize {
     text.unicode_words().count()
 }
 
-/// Whether two blocks may share a passage: same section and, in an EPUB, same file.
+/// Whether two blocks may share a passage: same section and, in an EPUB, same
+/// file. A Markdown file is one part.
 fn same_part(a: &Block, b: &Block) -> bool {
     a.section == b.section
         && match (&a.locator, &b.locator) {
-            (Locator::Pdf { .. }, Locator::Pdf { .. }) => true,
+            (Locator::Pdf { .. }, Locator::Pdf { .. })
+            | (Locator::Markdown { .. }, Locator::Markdown { .. }) => true,
             (Locator::Epub { file: a }, Locator::Epub { file: b }) => a == b,
             _ => false,
         }
 }
 
 /// The block as one piece, or as several when it has more words than the
-/// limit, each with its word count.
+/// limit, each with its word count; none when it has no words.
 fn pieces(block: &Block) -> Vec<(Piece<'_>, usize)> {
     let words = word_count(&block.text);
+    if words == 0 {
+        return Vec::new();
+    }
     if words <= PASSAGE_MAX_WORDS {
         let whole = Piece {
             block,
@@ -418,19 +435,33 @@ fn locator(pieces: &[Piece], document: &Document, places: &Places) -> PassageLoc
             para_start: places.para(first.id),
             para_end: places.para(last.id),
             print_page: places.print_page(first.id).map(str::to_string),
-            under_heading: places.section_path(first).last().map(|text| HeadingPlace {
-                text: text.clone(),
-                para_start: places.section_para(first.id),
-                para_end: places.section_para(last.id),
-            }),
+            under_heading: under_heading(first, last, places),
+        },
+        Locator::Markdown { line, .. } => PassageLocator::Markdown {
+            line_start: *line,
+            line_end: match &last.locator {
+                Locator::Markdown { line, line_end } => line_end.unwrap_or(*line),
+                _ => *line,
+            },
+            under_heading: under_heading(first, last, places),
         },
     }
+}
+
+/// The nearest heading above `first` and the numbers of the blocks from
+/// `first` to `last` under it; `None` before the first heading.
+fn under_heading(first: &Block, last: &Block, places: &Places) -> Option<HeadingPlace> {
+    places.section_path(first).last().map(|text| HeadingPlace {
+        text: text.clone(),
+        para_start: places.section_para(first.id),
+        para_end: places.section_para(last.id),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{BlockKind, Format, Locator, Span, SpanKind};
+    use crate::document::{BlockKind, Container, Format, Locator, Span, SpanKind};
     use crate::settings::PASSAGE_MAX_WORDS;
     use unicode_segmentation::UnicodeSegmentation;
 
@@ -453,6 +484,7 @@ mod tests {
             text: text.to_string(),
             spans: Vec::new(),
             ids: Vec::new(),
+            within: Vec::new(),
             section: None,
             locator: Locator::Pdf {
                 page,
@@ -482,6 +514,41 @@ mod tests {
             locator: Locator::Epub { file },
             ..heading(level, text)
         }
+    }
+
+    /// A paragraph of a Markdown file that starts on `line` and ends on
+    /// `line_end`, when that is a later line.
+    fn md_block(text: &str, line: u32, line_end: Option<u32>) -> Block {
+        Block {
+            locator: Locator::Markdown { line, line_end },
+            ..pdf_block(text, 1)
+        }
+    }
+
+    fn md_heading(level: u8, text: &str, line: u32) -> Block {
+        Block {
+            kind: BlockKind::Heading { level },
+            ..md_block(text, line, None)
+        }
+    }
+
+    /// `block` with another kind.
+    fn of_kind(kind: BlockKind, block: Block) -> Block {
+        Block { kind, ..block }
+    }
+
+    fn rule(line: u32) -> Block {
+        of_kind(BlockKind::Rule, md_block("", line, None))
+    }
+
+    fn texts(passages: &[Passage]) -> Vec<&str> {
+        passages.iter().map(|p| p.text.as_str()).collect()
+    }
+
+    /// A Markdown document of `blocks`, numbered and given sections from
+    /// their headings.
+    fn md_document(blocks: Vec<Block>) -> Document {
+        Document::from_blocks(Format::Markdown, blocks)
     }
 
     /// `block` with a printed page that starts where it starts.
@@ -962,6 +1029,224 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_closes_the_passage_and_wordless_blocks_go_into_none() {
+        let doc = md_document(vec![
+            md_heading(1, "Part", 1),
+            md_block("one", 3, None),
+            rule(5),
+            md_block("", 7, None),
+            md_block("two", 9, None),
+        ]);
+        let passages = passages_of(&doc);
+        assert_eq!(texts(&passages), ["one", "two"]);
+        // A rule separates parts of a text; it opens no section.
+        assert_eq!(passages[0].section, section(&["Part"]));
+        assert_eq!(passages[1].section, section(&["Part"]));
+        assert_eq!(doc.sections.len(), 1);
+    }
+
+    #[test]
+    fn a_block_without_words_joins_the_passage_around_it() {
+        let doc = md_document(vec![
+            md_block("one", 1, None),
+            md_block("", 3, None),
+            md_block("* * *", 5, None),
+            md_block("two", 7, None),
+        ]);
+        let passages = passages_of(&doc);
+        assert_eq!(texts(&passages), ["one\n\ntwo"]);
+        assert_eq!(
+            passages[0]
+                .blocks
+                .iter()
+                .map(|r| r.block_id)
+                .collect::<Vec<_>>(),
+            [0, 3]
+        );
+    }
+
+    #[test]
+    fn a_passage_made_only_of_blocks_without_words_is_not_made() {
+        let doc = md_document(vec![rule(1), md_block("", 3, None), rule(5)]);
+        assert!(passages_of(&doc).is_empty());
+    }
+
+    #[test]
+    fn a_code_block_packs_like_a_paragraph_and_keeps_its_lines() {
+        let code = of_kind(
+            BlockKind::Code {
+                language: Some("rust".to_string()),
+            },
+            md_block("fn main() {\n    run();\n}", 3, Some(7)),
+        );
+        let doc = md_document(vec![
+            md_block("Before.", 1, None),
+            code,
+            md_block("After.", 9, None),
+        ]);
+        let passages = passages_of(&doc);
+        assert_eq!(
+            texts(&passages),
+            ["Before.\n\nfn main() {\n    run();\n}\n\nAfter."]
+        );
+        assert_ranges_map_back(&passages, &doc.blocks);
+    }
+
+    #[test]
+    fn the_paragraphs_of_table_cells_pack_and_an_empty_cell_goes_into_none() {
+        // The Registers table of the design: a header row and two rows, the
+        // last cell empty.
+        let cell = |text: &str, line, within: [u32; 3]| Block {
+            within: within.to_vec(),
+            ..md_block(text, line, None)
+        };
+        let mut doc = md_document(vec![
+            md_heading(2, "Registers", 1),
+            cell("Register", 3, [0, 1, 2]),
+            cell("Address", 3, [0, 1, 3]),
+            cell("STATUS", 5, [0, 4, 5]),
+            cell("0x1A", 5, [0, 4, 6]),
+            cell("CONTROL", 6, [0, 7, 8]),
+            cell("", 6, [0, 7, 9]),
+        ]);
+        let row = |header| Container::Row { header };
+        doc.containers = vec![
+            Container::Table,
+            row(true),
+            Container::Cell,
+            Container::Cell,
+            row(false),
+            Container::Cell,
+            Container::Cell,
+            row(false),
+            Container::Cell,
+            Container::Cell,
+        ];
+        let passages = passages_of(&doc);
+        assert_eq!(
+            texts(&passages),
+            ["Register\n\nAddress\n\nSTATUS\n\n0x1A\n\nCONTROL"]
+        );
+        assert_eq!(passages[0].section, section(&["Registers"]));
+    }
+
+    #[test]
+    fn a_markdown_file_is_one_part_that_never_crosses_a_section() {
+        let passages = build_md(vec![
+            md_block("Before.", 1, None),
+            md_heading(1, "A", 3),
+            md_block("Under A.", 5, None),
+            md_block("Still A.", 7, None),
+            md_heading(2, "B", 9),
+            md_block("Under B.", 11, None),
+        ]);
+        assert_eq!(
+            texts(&passages),
+            ["Before.", "Under A.\n\nStill A.", "Under B."]
+        );
+    }
+
+    fn build_md(blocks: Vec<Block>) -> Vec<Passage> {
+        passages_of(&md_document(blocks))
+    }
+
+    #[test]
+    fn a_markdown_locator_names_the_lines_and_the_paragraphs_under_the_heading() {
+        let passages = build_md(vec![
+            md_heading(1, "search", 1),
+            md_block("First.", 3, None),
+            md_block(&words(10), 5, Some(8)),
+            md_block(&words(10), 10, Some(12)),
+        ]);
+        assert_eq!(passages.len(), 1);
+        assert_eq!(
+            passages[0].locator,
+            PassageLocator::Markdown {
+                line_start: 3,
+                line_end: 12,
+                under_heading: Some(HeadingPlace {
+                    text: "search".to_string(),
+                    para_start: 1,
+                    para_end: 3,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_markdown_passage_ends_on_the_last_line_of_its_last_block() {
+        let passages = build_md(vec![
+            md_block(&words(10), 4, Some(6)),
+            md_block(&words(10), 8, None),
+        ]);
+        assert_eq!(
+            passages[0].locator,
+            PassageLocator::Markdown {
+                line_start: 4,
+                line_end: 8,
+                under_heading: None,
+            }
+        );
+        let passages = build_md(vec![md_block(&words(10), 4, Some(6))]);
+        assert_eq!(
+            passages[0].locator,
+            PassageLocator::Markdown {
+                line_start: 4,
+                line_end: 6,
+                under_heading: None,
+            }
+        );
+    }
+
+    #[test]
+    fn markdown_paragraphs_are_counted_from_their_heading() {
+        let passages = build_md(vec![
+            md_heading(1, "One", 1),
+            md_block(&words(150), 3, None),
+            md_block(&words(150), 5, None),
+            md_heading(1, "Two", 7),
+            md_block(&words(10), 9, None),
+        ]);
+        let places: Vec<_> = passages
+            .iter()
+            .map(|p| match &p.locator {
+                PassageLocator::Markdown {
+                    under_heading: Some(place),
+                    ..
+                } => (place.text.clone(), place.para_start, place.para_end),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            places,
+            [
+                ("One".to_string(), 1, 1),
+                ("One".to_string(), 2, 2),
+                ("Two".to_string(), 1, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn assembling_a_markdown_book_gives_the_built_passages() {
+        let long = (0..50).map(sentence).collect::<Vec<_>>().join(" ");
+        let doc = md_document(vec![
+            md_block("Before any heading.", 1, None),
+            md_heading(1, "One", 3),
+            md_block(&long, 5, Some(9)),
+            rule(11),
+            md_block("After the rule.", 13, None),
+        ]);
+        let places = Places::new(&doc);
+        let built = build_passages(&doc, &places);
+        assert!(built.len() > 4);
+        assert_eq!(
+            assemble(&doc, &places, &stored_form(&built)).unwrap(),
+            built
+        );
+    }
+
+    #[test]
     fn ids_follow_reading_order() {
         let mut blocks: Vec<Block> = (0..6).map(|_| pdf_block(&words(100), 1)).collect();
         blocks.push(heading(1, "B"));
@@ -984,9 +1269,13 @@ mod tests {
     }
 
     #[test]
-    fn pdf_and_epub_blocks_never_share_a_passage() {
-        let passages = build(vec![pdf_block(&words(10), 1), epub_block(&words(10), 0)]);
-        assert_eq!(block_counts(&passages), [1, 1]);
+    fn blocks_of_different_formats_never_share_a_passage() {
+        let passages = build(vec![
+            pdf_block(&words(10), 1),
+            epub_block(&words(10), 0),
+            md_block(&words(10), 1, None),
+        ]);
+        assert_eq!(block_counts(&passages), [1, 1, 1]);
     }
 
     #[test]

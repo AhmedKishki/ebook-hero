@@ -58,11 +58,13 @@ flowchart TD
 
 Packing follows these rules:
 
-- Blocks are taken in reading order. Paragraphs, list items and notes go into passages.
+- Blocks are taken in reading order. Paragraphs, list items, notes and code blocks go into passages, and so does the paragraph in each cell of a table. A code block keeps its lines in the passage text.
 - A heading goes into no passage. It closes the passage being built, and its text reaches the passages under it only through their `section`, the path of headings above them.
+- A rule goes into no passage either. It closes the passage being built as a heading does, but it opens no section, because it separates parts of a text without naming a new one.
+- A block without words, such as an empty table cell, goes into no passage and does not close the one being built.
 - A passage holds at most `PASSAGE_MAX_WORDS` = 220 words. Words are counted at Unicode word boundaries (UAX #29, through the `unicode-segmentation` crate), so punctuation is not counted.
 - Blocks are added whole while they fit. A block that would take the passage past 220 words starts the next one.
-- A passage never crosses a section and, in an EPUB, never crosses a file (`same_part`).
+- A passage never crosses a section and, in an EPUB, never crosses a file (`same_part`). A Markdown file is one part, and a PDF is too.
 - A block of more than 220 words is split first, into pieces of whole sentences of at most 220 words (`split_ranges`). A single sentence longer than that is cut before a word, after the whitespace that precedes it (`split_at_words`), so punctuation and hyphenated parts stay with their word. The pieces then pack like blocks, so the last piece of a long paragraph can share a passage with the paragraphs after it.
 - Pieces are joined with a blank line.
 
@@ -71,9 +73,9 @@ Each passage records:
 - `id`: its position in reading order, from 0. Ids index the book's passage list and the rows of the vector file.
 - `section`: the heading path of its first block.
 - `blocks`: one `BlockRange` per piece, mapping the passage's text back to its block. `passage.text[start..end]` equals `block.text[block_offset..block_offset + end - start]`.
-- `locator`: where it is. For a PDF, the first and last physical page, counted from 1, and the printed page labels when the PDF has them. For an EPUB, the file (`href`), the paragraph numbers within that file, the printed page if the book marks one, and `under_heading`: the nearest heading above and the paragraphs counted from it. That count runs on across files, so it stays unique when a chapter is split over several.
+- `locator`: where it is. For a PDF, the first and last physical page, counted from 1, and the printed page labels when the PDF has them. For an EPUB, the file (`href`), the paragraph numbers within that file, the printed page if the book marks one, and `under_heading`: the nearest heading above and the paragraphs counted from it. That count runs on across files, so it stays unique when a chapter is split over several. For a Markdown file, the line where the first block starts, the line where the last block ends, and `under_heading` as for an EPUB.
 
-`locator_text` in `src/read.rs` prints a locator as a person would cite it: `p. 12–13 (xii–xiii)` for a PDF and `CHAPTER I ¶3–5, print p. 45` for an EPUB. EPUB text before the first heading is placed by its file, as in `cover.xhtml ¶1`.
+`locator_text` in `src/read.rs` prints a locator as a person would cite it: `p. 12–13 (xii–xiii)` for a PDF, `CHAPTER I ¶3–5, print p. 45` for an EPUB and `search ¶3–5, lines 260–284` for a Markdown file. EPUB text before the first heading is placed by its file, as in `cover.xhtml ¶1`, and Markdown text before the first heading by its lines alone, as in `lines 4–9`.
 
 ## The lexical index
 

@@ -146,6 +146,7 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
                 text: raw.text,
                 spans,
                 ids: raw.ids,
+                within: Vec::new(),
                 section: None,
                 locator: Locator::Epub { file },
             });
@@ -181,6 +182,7 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
         sections,
         files,
         page_labels: Vec::new(),
+        containers: Vec::new(),
         blocks,
         furniture: Vec::new(),
         warnings,

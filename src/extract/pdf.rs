@@ -189,6 +189,7 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
             text,
             spans: Vec::new(),
             ids: Vec::new(),
+            within: Vec::new(),
             section: None,
             locator: Locator::Pdf {
                 page,
@@ -206,6 +207,7 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
         sections,
         files: Vec::new(),
         page_labels,
+        containers: Vec::new(),
         blocks,
         furniture: furniture_blocks,
         warnings,
@@ -531,6 +533,7 @@ fn place_headings(laid: &[LaidParagraph], entries: &[Entry]) -> (Vec<Block>, Vec
             text: text.to_string(),
             spans: Vec::new(),
             ids: Vec::new(),
+            within: Vec::new(),
             section: None,
             locator,
         });

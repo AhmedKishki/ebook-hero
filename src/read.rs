@@ -106,7 +106,7 @@ pub struct BookInfo {
     pub authors: Vec<String>,
     /// The language an EPUB declares; always `None` for a PDF.
     pub language: Option<String>,
-    /// PDF or EPUB.
+    /// PDF, EPUB or Markdown.
     pub format: Format,
     /// The number of pages of a PDF.
     pub page_count: Option<u32>,
@@ -322,7 +322,7 @@ fn entry_range(
     if outline.is_empty() {
         let addresses = match document.source.format {
             Format::Pdf => "passage_id or page",
-            Format::Epub => "passage_id",
+            Format::Epub | Format::Markdown => "passage_id",
         };
         return Err(Error::InvalidArgument(format!(
             "this book has no outline; use {addresses}"
@@ -384,9 +384,11 @@ fn outline_of(document: &Document, passages: &[Passage]) -> OutlineResult {
 }
 
 /// Where a passage is, as a person would cite it: `p. 12–13 (xii–xiii)` for a
-/// PDF and `CHAPTER I ¶3–5, print p. 45` for an EPUB, whose paragraphs are
-/// counted from the nearest heading. EPUB text before the first heading is
-/// placed by its file instead: `cover.xhtml ¶1`.
+/// PDF, `CHAPTER I ¶3–5, print p. 45` for an EPUB, whose paragraphs are
+/// counted from the nearest heading, and `search ¶3–5, lines 260–284` for a
+/// Markdown file. EPUB text before the first heading is placed by its file
+/// instead: `cover.xhtml ¶1`. Markdown text before the first heading is placed
+/// by its lines alone: `lines 4–9`.
 pub fn locator_text(locator: &PassageLocator) -> String {
     match locator {
         PassageLocator::Pdf {
@@ -427,6 +429,26 @@ pub fn locator_text(locator: &PassageLocator) -> String {
                 text.push_str(&format!(", print p. {page}"));
             }
             text
+        }
+        PassageLocator::Markdown {
+            line_start,
+            line_end,
+            under_heading,
+        } => {
+            let prefix = if line_start == line_end {
+                "line "
+            } else {
+                "lines "
+            };
+            let lines = range_text(prefix, *line_start, *line_end);
+            match under_heading {
+                Some(place) => format!(
+                    "{} {}, {lines}",
+                    place.text,
+                    range_text("¶", place.para_start, place.para_end)
+                ),
+                None => lines,
+            }
         }
     }
 }
@@ -472,6 +494,18 @@ mod tests {
         }
     }
 
+    fn markdown(paras: (u32, u32), under: Option<&str>, lines: (u32, u32)) -> PassageLocator {
+        PassageLocator::Markdown {
+            line_start: lines.0,
+            line_end: lines.1,
+            under_heading: under.map(|text| HeadingPlace {
+                text: text.to_string(),
+                para_start: paras.0,
+                para_end: paras.1,
+            }),
+        }
+    }
+
     fn epub_under(heading_paras: (u32, u32), print_page: Option<&str>) -> PassageLocator {
         PassageLocator::Epub {
             href: "ch1.xhtml".to_string(),
@@ -501,6 +535,25 @@ mod tests {
                 epub_under((1, 3), Some("45")),
                 "CHAPTER I. Down the Rabbit-Hole ¶1–3, print p. 45",
             ),
+        ];
+        for (locator, text) in cases {
+            assert_eq!(locator_text(&locator), text, "{locator:?}");
+        }
+    }
+
+    #[test]
+    fn a_markdown_locator_names_the_heading_paragraphs_and_lines() {
+        let cases = [
+            (
+                markdown((3, 5), Some("search"), (260, 284)),
+                "search ¶3–5, lines 260–284",
+            ),
+            (
+                markdown((3, 3), Some("search"), (260, 260)),
+                "search ¶3, line 260",
+            ),
+            (markdown((1, 1), None, (4, 9)), "lines 4–9"),
+            (markdown((1, 1), None, (4, 4)), "line 4"),
         ];
         for (locator, text) in cases {
             assert_eq!(locator_text(&locator), text, "{locator:?}");
@@ -587,6 +640,7 @@ mod tests {
             sections: Vec::new(),
             files: Vec::new(),
             page_labels: Vec::new(),
+            containers: Vec::new(),
             blocks: Vec::new(),
             furniture: Vec::new(),
             warnings: Vec::new(),
@@ -869,12 +923,14 @@ mod tests {
     #[test]
     fn page_addressing_is_for_pdfs() {
         let passages = vec![passage(0, "a", &[], &[0])];
-        let document = document(Format::Epub, Vec::new());
+        for format in [Format::Epub, Format::Markdown] {
+            let document = document(format, Vec::new());
 
-        assert_eq!(
-            invalid(resolve(&document, &passages, &params(ReadAt::Page(1)))),
-            "page addressing applies to PDFs; use passage_id or outline_id"
-        );
+            assert_eq!(
+                invalid(resolve(&document, &passages, &params(ReadAt::Page(1)))),
+                "page addressing applies to PDFs; use passage_id or outline_id"
+            );
+        }
     }
 
     #[test]
@@ -882,9 +938,14 @@ mod tests {
         let passages = vec![passage(0, "a", &[], &[0])];
         let epub = document(Format::Epub, Vec::new());
         let pdf = document(Format::Pdf, Vec::new());
+        let markdown = document(Format::Markdown, Vec::new());
 
         assert_eq!(
             invalid(resolve(&epub, &passages, &params(ReadAt::Outline(0)))),
+            "this book has no outline; use passage_id"
+        );
+        assert_eq!(
+            invalid(resolve(&markdown, &passages, &params(ReadAt::Outline(0)))),
             "this book has no outline; use passage_id"
         );
         assert_eq!(

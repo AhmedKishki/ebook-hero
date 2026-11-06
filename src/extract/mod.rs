@@ -92,6 +92,10 @@ pub fn extract(path: &Path, sha256: &str) -> Result<Document> {
     match source.format {
         Format::Epub => epub::read_epub(path, source),
         Format::Pdf => pdf::read_pdf(path, source),
+        // `detect_format` does not return Markdown until its reader exists.
+        Format::Markdown => Err(Error::Unsupported {
+            path: path.to_path_buf(),
+        }),
     }
 }
 
@@ -137,6 +141,7 @@ mod tests {
             text: text.to_string(),
             spans: Vec::new(),
             ids: Vec::new(),
+            within: Vec::new(),
             section: Some(99),
             locator: Locator::Epub { file: 0 },
         }

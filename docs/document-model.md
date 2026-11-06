@@ -35,6 +35,7 @@ classDiagram
         sections: Vec~Section~
         files: Vec~String~
         page_labels: Vec~Option~String~~
+        containers: Vec~Container~
         blocks: Vec~Block~
         furniture: Vec~Block~
         warnings: Vec~Warning~
@@ -48,6 +49,7 @@ classDiagram
         <<enumeration>>
         Pdf
         Epub
+        Markdown
     }
     class Metadata {
         title: Option~String~
@@ -72,6 +74,7 @@ classDiagram
         text: String
         spans: Vec~Span~
         ids: Vec~String~
+        within: Vec~u32~
         section: Option~u32~
         locator: Locator
     }
@@ -80,6 +83,18 @@ classDiagram
         Heading: level
         Paragraph
         ListItem
+        Note: label
+        Code: language
+        Rule
+    }
+    class Container {
+        <<enumeration>>
+        List: ordered, start
+        Item
+        Quote
+        Table
+        Row: header
+        Cell
         Note: label
     }
     class Span {
@@ -91,36 +106,58 @@ classDiagram
         <<enumeration>>
         Math: latex
         PageBreak: label
+        Emphasis
+        Strong
+        Strikethrough
+        Code
+        Link: href, to
+        Break: lines
+        NoteRef: marker, block
+    }
+    class LinkTarget {
+        <<enumeration>>
+        Block: block
+        File: path
+        Address
+        Nowhere
     }
     class Locator {
         <<enumeration>>
         Pdf: page, page_end, bbox
         Epub: file
+        Markdown: line, line_end
     }
     class Warning {
         <<enumeration>>
         PagesWithoutText: pages
         UnreadableContent: href, reason
         UnreadablePart: part, reason
+        BrokenLink: href, block
     }
     Document *-- Source
     Source *-- Format
     Document *-- Metadata
     Document *-- OutlineEntry
     Document *-- Section
+    Document *-- Container
     Document *-- Block : blocks, furniture
     Document *-- Warning
     Block *-- BlockKind
     Block *-- Span
     Block *-- Locator
     Span *-- SpanKind
+    SpanKind *-- LinkTarget
+    Block ..> Container : within
+    SpanKind ..> Block : NoteRef.block
+    LinkTarget ..> Block : block
+    Warning ..> Block : block
     OutlineEntry ..> Block : block_id
     Section ..> Block : heading
     Section ..> Section : parent
     Block ..> Section : section
 ```
 
-A `Document` holds the text as two lists of blocks: `blocks` for the reading text and `furniture` for the lines the reader took out of it. Beside them sit facts about the file (`source`, `metadata`), the table of contents (`outline`), the tables that blocks point into (`sections`, `files`, `page_labels`) and the parts the reader could not read (`warnings`). The JSON form uses the field names above, except where [The JSON form](#the-json-form) says a value is left out. `BlockKind`, `SpanKind` and `Warning` carry their variant in a `type` field, in snake case.
+A `Document` holds the text as two lists of blocks: `blocks` for the reading text and `furniture` for the lines the reader took out of it. Beside them sit facts about the file (`source`, `metadata`), the table of contents (`outline`), the tables that blocks point into (`sections`, `files`, `page_labels`, `containers`) and the parts the reader could not read (`warnings`). The JSON form uses the field names above, except where [The JSON form](#the-json-form) says a value is left out. `BlockKind`, `Container`, `SpanKind`, `LinkTarget` and `Warning` carry their variant in a `type` field, in snake case.
 
 ### Source
 
@@ -128,7 +165,7 @@ A `Document` holds the text as two lists of blocks: `blocks` for the reading tex
 |---|---|
 | `sha256` | The SHA-256 of the file's bytes as 64 hex digits, from `sha256_file` in `src/index/cache.rs`. It names the book's cache directory. |
 | `file_name` | The last component of the path, converted to UTF-8 with invalid bytes replaced. |
-| `format` | `"pdf"` or `"epub"`, decided from the file's content by `detect_format` in `src/extract/mod.rs`. |
+| `format` | `"pdf"`, `"epub"` or `"markdown"`, decided from the file's content by `detect_format` in `src/extract/mod.rs`, which does not return `"markdown"` yet. |
 
 ### Metadata
 
@@ -142,7 +179,7 @@ A `Document` holds the text as two lists of blocks: `blocks` for the reading tex
 
 ### Blocks
 
-A block is one unit of reading text: a heading, a paragraph, a list item or a note.
+A block is one unit of reading text: a heading, a paragraph, a list item, a note, a code block or a rule. The lists, tables and notes it sits in are not blocks. They are listed beside the blocks, and [Containers](#containers) describes them.
 
 `id` numbers the blocks from 0 in reading order, so a block's id equals its index in `blocks`. JSON therefore leaves it out, and loading sets it from the position. `OutlineEntry.block_id`, `Section.heading` and the `BlockRange.block_id` of a passage in `src/passages.rs` refer to blocks by this number. `first_passage` in `src/read.rs` binary-searches the passages by block id, which works because ids rise in reading order.
 
@@ -154,16 +191,44 @@ A block is one unit of reading text: a heading, a paragraph, a list item or a no
 | `Paragraph` | `{"type": "paragraph"}` | Both readers |
 | `ListItem` | `{"type": "list_item"}` | EPUB only: text directly inside an `li` |
 | `Note { label }` | `{"type": "note", "label": "n1"}` | EPUB: footnotes and endnotes, labelled with the note element's id. PDF: notes found by the layout, always without a label. |
+| `Code { language }` | `{"type": "code", "language": "rust"}` | No reader yet. A code block; `language` is the one its fence names, or null. |
+| `Rule` | `{"type": "rule"}` | No reader yet. A thematic break, with empty text. |
 
-The kind decides what happens downstream. `build_passages` packs paragraphs, list items and notes into passages. A heading opens a section, through which it reaches the passages under it as their section path.
+The kind decides what happens downstream. `build_passages` packs paragraphs, list items, notes and code blocks into passages. A heading opens a section, through which it reaches the passages under it as their section path. A rule closes the passage being built as a heading does, but opens no section, because a rule separates parts of a text without naming a new one. A block without words, such as a rule or an empty table cell, goes into no passage and does not close the one being built.
 
-`text` is the block's text after `normalize` in `src/normalize.rs`: Latin ligatures expanded, soft hyphens, zero-width spaces, byte-order marks and non-whitespace control characters dropped, composed to NFC, every whitespace run collapsed to one space, and trimmed. It is a single line without markup.
+`text` is the block's text after `normalize` in `src/normalize.rs`: Latin ligatures expanded, soft hyphens, zero-width spaces, byte-order marks and non-whitespace control characters dropped, composed to NFC, every whitespace run collapsed to one space, and trimmed. It is a single line without markup. A code block is the one exception. Collapsing its whitespace would change the code, so its `text` keeps its lines and indentation as written, without the final newline. Quote verification still finds a quote in it, because `find_exact` in `src/verify.rs` collapses the whitespace of the text it searches.
 
-`section` is the index in `sections` of the section the block is in. A block before the first heading has none, and [Sections](#sections) explains how the others get theirs. `locator` says where the block is in the file, with the fields that [Locators](#locators) lists.
+`section` is the index in `sections` of the section the block is in. A block before the first heading has none, and [Sections](#sections) explains how the others get theirs. `within` lists the containers the block sits in, and [Containers](#containers) explains how to read it. `locator` says where the block is in the file, with the fields that [Locators](#locators) lists.
 
 `ids` holds the element ids of an EPUB block: the ids of the elements that start in the block, its own included, and of the empty elements met since the block before. The EPUB reader resolves a table-of-contents fragment to the first block whose `ids` hold it. The PDF reader writes none.
 
-`spans` marks ranges of `text` without changing it. A `Span` covers `start..end`, counted in Unicode code points of `text`, and its `SpanKind` says what the range is. The EPUB reader writes one kind, `PageBreak { label }`, an empty span (`start` equals `end`) at the point where a page of the printed edition starts. It puts each break at offset 0 of the first block whose text starts on the new page. `Math { latex }` is reserved for formulas, and no reader writes it.
+`spans` marks ranges of `text` without changing it. A `Span` covers `start..end`, counted in Unicode code points of `text`, and its `SpanKind` says what the range is:
+
+| Variant | JSON | Marks |
+|---|---|---|
+| `PageBreak { label }` | `{"type": "page_break", "label": "45"}` | A point where a page of the printed edition starts. The EPUB reader puts each break at offset 0 of the first block whose text starts on the new page. |
+| `Math { latex }` | `{"type": "math", "latex": "H"}` | A formula. Reserved: no reader writes one. |
+| `Emphasis`, `Strong`, `Strikethrough` | `{"type": "emphasis"}` | Text in that style. No reader writes them yet. |
+| `Code` | `{"type": "code"}` | Inline code. No reader writes it yet. |
+| `Link { href, to }` | `{"type": "link", "href": "#setup", "to": {"type": "block", "block": 12}}` | A link. `href` is the target as the file wrote it, and `to` is where the reader found that it leads. No reader writes one yet. |
+| `Break { lines }` | `{"type": "break", "lines": 2}` | The space in `text` that stands for line breaks. `lines` counts them, so 2 leaves a blank line, as between two stanzas of a poem. No reader writes it yet. |
+| `NoteRef { marker, block }` | `{"type": "note_ref", "marker": "1", "block": 7}` | A footnote reference, as a point. `marker` is what the reference shows and `block` the note's first block, or null when the reader did not find the note. No reader writes it yet. |
+
+`LinkTarget` is the `to` of a link. The reader decides what a link is, so the window acts on `to` and never on the book's format.
+
+| Variant | JSON | Leads to |
+|---|---|---|
+| `Block { block }` | `{"type": "block", "block": 12}` | A block of this document |
+| `File { path }` | `{"type": "file", "path": "ch2.md"}` | A file beside this one, as a path relative to its directory |
+| `Address` | `{"type": "address"}` | An address with a scheme, such as `https:` or `mailto:` |
+| `Nowhere` | `{"type": "nowhere"}` | A target the reader could not find, or one outside what the model holds |
+
+The spans of one block follow four rules. `span_errors` in `src/document/mod.rs` returns a message for each rule a block breaks, so that a reader's tests can check what the reader wrote.
+
+- `start` and `end` count code points of `text`, and no `end` lies past the text. `extract --format json` prints the `Document` as it is and the window reads it, and AGENTS.md fixes code points for output. Library code that needs a byte offset converts through `byte_offset`, the one helper for it.
+- Spans are well nested: two spans either do not overlap or one holds the other. The view and the writer can then open and close marks with a stack.
+- Spans are sorted by `start`, and the longer first when two start together. A walk from the first span to the last therefore meets every span after the one that holds it, which is the order a stack opens them in.
+- Only a `NoteRef` or a `PageBreak` may be empty (`start` equals `end`), since each marks a point. A note marker is apparatus and a page break is a position, so neither adds characters to `text`, and a quote that runs across either still verifies.
 
 An EPUB note as JSON, the first block on printed page 45:
 
@@ -177,6 +242,51 @@ An EPUB note as JSON, the first block on printed page 45:
   "locator": { "file": 2 }
 }
 ```
+
+### Containers
+
+`containers` lists what the blocks sit in, each container once, in the order it opens, and a container's id is its index. A block's `within` holds the ids of the containers around it, outermost first. JSON leaves both lists out when they are empty.
+
+| Variant | JSON | Stands for |
+|---|---|---|
+| `List { ordered, start }` | `{"type": "list", "ordered": true, "start": 3}` | A list. `start` is the first number of an ordered list, kept because readers cite an item by its number. |
+| `Item` | `{"type": "item"}` | One item of a list |
+| `Quote` | `{"type": "quote"}` | A block quote |
+| `Table` | `{"type": "table"}` | A table |
+| `Row { header }` | `{"type": "row", "header": true}` | A row of a table; `header` marks the header row |
+| `Cell` | `{"type": "cell"}` | A cell of a row |
+| `Note { label }` | `{"type": "note", "label": "n1"}` | A footnote or endnote. `label` is the note's id in an EPUB or its label in Markdown, and null in a PDF. |
+
+Storing each container once keeps a block's path to a few numbers: a table of 1,000 cells would otherwise repeat its table and row in every cell. Ids follow the order the containers open, so two adjacent lists differ by id. A paragraph in the second item of a list inside a quote has a `within` like `[0, 1, 3]`: quote 0, list 1, and item 3, the first item being 2. A table is built like a list, and its cells hold ordinary blocks. This Markdown:
+
+```markdown
+## Registers
+
+| Register | Address |
+|----------|---------|
+| STATUS   | 0x1A    |
+| CONTROL  |         |
+```
+
+gives `containers` `[table, row (header), cell, cell, row, cell, cell, row, cell, cell]` with ids 0 to 9, and these blocks, all under the section `Registers`:
+
+| id | kind | text | within | line |
+|---|---|---|---|---|
+| 0 | heading 2 | Registers | | 1 |
+| 1 | paragraph | Register | 0, 1, 2 | 3 |
+| 2 | paragraph | Address | 0, 1, 3 | 3 |
+| 3 | paragraph | STATUS | 0, 4, 5 | 5 |
+| 4 | paragraph | 0x1A | 0, 4, 6 | 5 |
+| 5 | paragraph | CONTROL | 0, 7, 8 | 6 |
+| 6 | paragraph | (empty) | 0, 7, 9 | 6 |
+
+A cell that holds two paragraphs gives two blocks with the same `within`.
+
+A container exists only through the blocks inside it, so an empty one would vanish from the document. A reader therefore writes an empty `Paragraph` into a container that would otherwise hold no block, such as the empty cell in block 6 or an empty list item. Passages skip such a block, because an empty text has no words.
+
+Three models of nesting were weighed. A tree, as in Pandoc's AST or in mdast, holds the same structure, but a block's id would stop being its index in `blocks`, and every reader of the `Document` would have to walk the tree. Docling's `DoclingDocument` keeps a flat list with references to parents, so a consumer follows links to learn where a block sits. The path puts that answer on the block, and a view opens and closes containers by comparing the paths of neighbouring blocks in one pass. The containers' kinds sit in one list beside the blocks, so the path costs a few ids per block.
+
+Containers add structure that search does not use. Passages, search, verify and the concept graph go on reading `text`, so a table cell packs like a paragraph and the passages of a table read as its cells in order.
 
 ### Sections
 
@@ -226,6 +336,15 @@ A page's printed label sits in `Document.page_labels`, one entry per physical pa
 
 The passage locator built from `para` in `src/passages.rs` adds a paragraph count from the nearest heading, which `Places::section_para` gives. `locator_text` in `src/read.rs` prints that count, or the file and the `para` range for text before the first heading.
 
+`Locator::Markdown`:
+
+| Field | Content |
+|---|---|
+| `line` | The line of the file where the block starts, counted from 1 |
+| `line_end` | The line where the block ends, set only when that is a later line |
+
+A Markdown file has no pages, files or printed pages. `Places` gives its blocks `para` 0 as it does a PDF's, and `section_para` counts them under their heading as for an EPUB. The passage locator built from them, `PassageLocator::Markdown` in `src/passages.rs`, takes `line_start` from the first block's `line` and `line_end` from the last block's `line_end`, or its `line` when that is unset, and `under_heading` as the EPUB form does. `locator_text` prints it as `search ¶3–5, lines 260–284`, and as `lines 260–284` for text before the first heading.
+
 The model stores no anchor, the last element id at or before a block's start, because a link into the book resolves through the `ids` of the block that holds its target.
 
 A PDF locator as JSON:
@@ -271,8 +390,9 @@ The EPUB reader writes an empty list. Nothing after the readers reads `furniture
 | `PagesWithoutText` | `pages_without_text` | `pages` | PDF: the pages that were read and hold no text |
 | `UnreadableContent` | `unreadable_content` | `href`, `reason` | EPUB: a spine item that was skipped, named by its href, or by its `idref` when the manifest lacks it |
 | `UnreadablePart` | `unreadable_part` | `part`, `reason` | PDF: a part left out or replaced, named `page 7`, `page labels`, `outline` or `word spacing` |
+| `BrokenLink` | `broken_link` | `href`, `block` | No reader yet: a link into the document that leads nowhere, with the target as written and the block that holds the link |
 
-A warning means the reader left part of the book out and read the rest. A book with no text at all is an error instead: `Unreadable` with "no readable text" for an EPUB, and `NoTextLayer` ("no text layer; OCR is not supported") or `Unreadable` for a PDF. The warnings reach the `book_info` result (`BookInfo.warnings` in `src/read.rs`) and the output of `ebook-hero info`.
+A warning means the reader left part of the book out and read the rest. A book with no text at all is an error instead: `Unreadable` with "no readable text" for an EPUB, and `NoTextLayer` ("no text layer; OCR is not supported") or `Unreadable` for a PDF. The warnings reach the `book_info` result (`BookInfo.warnings` in `src/read.rs`) and the output of `ebook-hero info`, which words a broken link as `the link to #setup in block 12 leads nowhere in this document`.
 
 ## Each fact once
 
@@ -288,6 +408,8 @@ A fact is stored once, at the level where it holds: the document, a run of block
 | the printed page at a block | derived: the last `PageBreak` at or before the block's start |
 | a PDF page's label | `page_labels`, one entry per page |
 | an element id | `ids` on the block where the element is |
+| a container | `containers`, once, its id being its index |
+| the containers around a block | `within` on the block, their ids outermost first |
 | a block's id | derived: its position in `blocks` |
 | a locator's format | derived: `source.format`, and the locator's own fields |
 | a passage's text, section and locator | derived: `passages.json.lz4` stores its pieces as a block, an offset and a length |
@@ -301,7 +423,7 @@ Alice's 875 blocks lie in 19 sections and 14 content documents, so a block holds
 | Method | Gives |
 |---|---|
 | `section_path(block)` | the heading texts above the block, outermost first; a heading's own path ends with its text |
-| `para(block)` | the block's position among the blocks of its EPUB file, from 1; 0 in a PDF |
+| `para(block)` | the block's position among the blocks of its EPUB file, from 1; 0 in a PDF or a Markdown file |
 | `section_para(block)` | the block's number among the non-heading blocks of its section, from 1; 0 for a heading |
 | `print_page(block)` | the label of the last `PageBreak` at or before the block's start |
 
@@ -320,8 +442,8 @@ The pieces come from a file on disk, so `assemble` checks them. A piece in a blo
 Serde writes each field under its name, except where a value is derived or empty:
 
 - A block's `id` is left out, and `numbered` in `src/document/mod.rs` restores it: serde reads the `blocks` and `furniture` lists through it, and it numbers each list from 0.
-- A locator carries no `format` tag, since its fields tell the variants apart: a PDF locator has `page`, an EPUB locator `file`. `Locator` is written untagged, and its hand-written `Deserialize` reads every field a locator may have into `LocatorFields` in one pass and picks the variant from the fields present. A locator with both `page` and `file`, or neither, does not load. Serde's untagged enums would buffer each locator and try one variant after the other, which is slower and fails with a message that names no field.
-- `spans`, `ids` and a block's `section` are left out when they are empty or absent, and take their defaults when the JSON lacks them.
+- A locator carries no `format` tag, since its fields tell the variants apart: a PDF locator has `page`, an EPUB locator `file`, a Markdown locator `line`. `Locator` is written untagged, and its hand-written `Deserialize` reads every field a locator may have into `LocatorFields` in one pass and picks the variant from the fields present. A locator with fields of two formats, such as `page` and `file`, or with none, does not load. Serde's untagged enums would buffer each locator and try one variant after the other, which is slower and fails with a message that names no field.
+- `containers`, `spans`, `ids`, `within` and a block's `section` are left out when they are empty or absent, and take their defaults when the JSON lacks them.
 
 ## Design principles
 
@@ -331,15 +453,15 @@ AGENTS.md sets the boundary: readers turn a file into a `Document`, and everythi
 
 ### Flat blocks
 
-`blocks` is one list in reading order. Structure travels as data on each block (`kind`) and as numbers that point into lists: a block's `section` into `sections`, and `Section.heading`, `OutlineEntry.block_id` and `BlockRange.block_id` into `blocks`. A consumer walks one sequence: `build_passages` packs consecutive blocks, and `gui/book.js` draws the book as "its text in order". The two formats reach this shape from opposite ends. The EPUB reader flattens a tree of elements, and the PDF reader builds paragraphs up from positioned lines.
+`blocks` is one list in reading order. Structure travels as data on each block (`kind`) and as numbers that point into lists: a block's `section` into `sections`, its `within` into `containers`, and `Section.heading`, `OutlineEntry.block_id` and `BlockRange.block_id` into `blocks`. Lists, quotes and tables therefore nest through paths and not through a tree, for the reasons that [Containers](#containers) gives. A consumer walks one sequence: `build_passages` packs consecutive blocks, and `gui/book.js` draws the book as "its text in order". The two formats reach this shape from opposite ends. The EPUB reader flattens a tree of elements, and the PDF reader builds paragraphs up from positioned lines.
 
 ### Plain text with standoff spans
 
-`text` holds plain characters with no markup. A span marks a range of `text` by offset and leaves the characters alone. A `PageBreak` marks the point where a printed page starts and adds no character, so search, passage packing and quote verification read the same characters at the same offsets whether a book marks its pages or not. A future `Math` span could carry LaTeX for a formula in the same way. `src/normalize.rs` is "shared by every reader and by quote verification", so a quote and the text it is checked against pass through the same function.
+`text` holds plain characters with no markup. A span marks a range of `text` by offset and leaves the characters alone. A `PageBreak` marks the point where a printed page starts and adds no character, so search, passage packing and quote verification read the same characters at the same offsets whether a book marks its pages or not. Emphasis, links and note references work the same way, and so does a `Break`, which marks the one space that stands for line breaks. A future `Math` span could carry LaTeX for a formula in the same way. `src/normalize.rs` is "shared by every reader and by quote verification", so a quote and the text it is checked against pass through the same function.
 
 ### Locators per format
 
-A PDF places a block by physical page and box, and an EPUB by content document. The locator holds only these, while the printed label, the paragraph number and the printed page come from the document's tables and from `Places`. An EPUB has no physical pages, and a PDF has no files or element ids, so the model gives each format its own variant and no shared fields. Each consumer handles both variants explicitly. `PassageLocator` in `src/passages.rs` keeps the split. `locator_text` in `src/read.rs` prints `p. 12–13 (xii–xiii)` for a PDF and `CHAPTER I ¶3–5, print p. 45` for an EPUB. `gui/book.js` handles neither variant, because `read --json` gives each passage the ids of its blocks (`PassageRef.blocks` in `src/read.rs`, taken from the passage's `BlockRange`s) and the window marks those.
+A PDF places a block by physical page and box, an EPUB by content document, and a Markdown file by line. The locator holds only these, while the printed label, the paragraph number and the printed page come from the document's tables and from `Places`. An EPUB has no physical pages, a PDF has no files or element ids, and a Markdown file has neither pages nor files, so the model gives each format its own variant and no shared fields. Each consumer handles both variants explicitly. `PassageLocator` in `src/passages.rs` keeps the split. `locator_text` in `src/read.rs` prints `p. 12–13 (xii–xiii)` for a PDF, `CHAPTER I ¶3–5, print p. 45` for an EPUB and `search ¶3–5, lines 260–284` for a Markdown file. `gui/book.js` handles neither variant, because `read --json` gives each passage the ids of its blocks (`PassageRef.blocks` in `src/read.rs`, taken from the passage's `BlockRange`s) and the window marks those.
 
 ### Furniture kept apart
 
@@ -362,7 +484,7 @@ Inside, `BlockRange` in `src/passages.rs` maps passage text to block text by byt
 
 On the way out, `to_char_ranges` in `src/search/highlight.rs` turns byte ranges into `[start, end]` pairs of code points. It produces the `matches` of `search` and `find` hits and the `matched` range of `verify_quote`, and each of these tools' descriptions ends "Ranges are Unicode code points." A code-point count stays the same whatever encoding a client stores the text in, while a byte offset holds only for UTF-8. In `café au lait`, `é` takes two bytes and one code point, so `au` starts at byte 6 and at code point 5.
 
-The `Document` holds one pair of offsets itself, `Span.start` and `Span.end`. They count code points of the block's `text`, like the ranges in output, because `extract --format json` prints them for other programs to read.
+The `Document` holds one pair of offsets itself, `Span.start` and `Span.end`. They count code points of the block's `text`, like the ranges in output, because `extract --format json` prints them for other programs to read. Code that has to slice the text at a span converts through `byte_offset` in `src/document/mod.rs`, which gives the byte where a code point starts, or the text's length for a code point past its end. In `café au lait`, `byte_offset(text, 5)` is 6.
 
 ## Markdown rendering
 
@@ -374,6 +496,7 @@ The `Document` holds one pair of offsets itself, `Span.start` and `Span.end`. Th
 | `Paragraph` | The text |
 | `ListItem` | `- ` and the text |
 | `Note { label }` | `> [label] text`, or `> text` without a label; each line of the text gets its own `> ` |
+| `Code { .. }`, `Rule` | The text as it is, as for a paragraph, since no reader writes them yet and the renderer ignores containers and spans |
 
 A PDF block whose `page` differs from the previous PDF block's is preceded by `<!-- page N -->`, where N is the physical page. EPUB blocks get no page comments, printed pages included. The renderer writes nothing for `furniture`, `outline`, `warnings`, `sections`, `files` or `page_labels`, nor for a block's `section`, `ids` or `spans`.
 
@@ -403,10 +526,10 @@ The title and a level-1 heading both get one `#`, so a book whose chapters are `
 
 ## Limits
 
-- Four kinds of block. Table cells, figure captions, block quotes, code and verse have no kind of their own. The EPUB reader writes them as paragraphs, and `normalize` turns the line breaks of code and verse into spaces.
+- Structure the readers do not write. The model has containers, code blocks, rules and inline spans, but no reader writes them. The PDF reader writes headings, paragraphs and notes. The EPUB reader also writes list items and page breaks, and it turns table cells, block quotes, code and verse into paragraphs, so `normalize` turns the line breaks of code and verse into spaces.
 - No images and no formulas. The model has no field for an image, and the `Math` span that would hold a formula has no writer.
-- No inline markup. Emphasis, links and superscript markup leave no trace in `text`. Characters such as `²` survive, since `normalize` keeps them.
-- No link from a note reference to its note. The EPUB reader deletes `noteref` elements, an EPUB `Note` keeps only the note element's id as `label`, and a PDF note has no label.
+- No inline markup from the PDF and EPUB readers. Emphasis, links and superscript markup leave no trace in `text`. Characters such as `²` survive, since `normalize` keeps them.
+- No link from a note reference to its note. The model can hold one (`NoteRef` with the note's first block), but the EPUB reader deletes `noteref` elements, an EPUB `Note` keeps only the note element's id as `label`, and a PDF note has no label.
 - One box per block. `bbox` covers the block's lines on its first page, and the part of a paragraph that runs on to `page_end` has no box.
 - Levels are `u8`. An outline deeper than 255 levels is capped, and the Markdown renderer writes at most six `#`.
 - Missing per-format facts. A PDF never has a `language`, an EPUB never has a `page_count`, and an EPUB without page-break markers has no page numbers at all.
@@ -416,6 +539,9 @@ The title and a level-1 heading both get one `#`, so a book whose chapters are `
 
 - F. Yergeau. "UTF-8, a transformation format of ISO 10646." RFC 3629, Internet Engineering Task Force, November 2003. https://www.rfc-editor.org/rfc/rfc3629. The encoding whose bytes the library's offsets count.
 - T. Bray, editor. "The JavaScript Object Notation (JSON) Data Interchange Format." RFC 8259, Internet Engineering Task Force, December 2017. https://www.rfc-editor.org/rfc/rfc8259. The format of the JSON in `document.json.lz4` and of `ebook-hero extract --format json`.
-- John MacFarlane. "CommonMark Spec", version 0.31.2, 28 January 2024. https://spec.commonmark.org/0.31.2/. ATX headings of one to six `#`, block quotes, bullet list items and HTML comments, which the Markdown renderer writes.
+- John MacFarlane. "CommonMark Spec", version 0.31.2, 28 January 2024. https://spec.commonmark.org/0.31.2/. ATX headings of one to six `#`, block quotes, bullet list items and HTML comments, which the Markdown renderer writes, and the lists, quotes, code blocks and thematic breaks that `Container`, `BlockKind::Code` and `BlockKind::Rule` model.
+- "pandoc-types: Text.Pandoc.Definition." Hackage. https://hackage.haskell.org/package/pandoc-types/docs/Text-Pandoc-Definition.html. Pandoc's AST, a tree of blocks and inlines, the first of the models of nesting that [Containers](#containers) compares.
+- "mdast: Markdown Abstract Syntax Tree format." syntax-tree. https://github.com/syntax-tree/mdast. A tree of nodes like Pandoc's, which remark builds.
+- "Docling document." Docling documentation. https://docling-project.github.io/docling/concepts/docling_document/. `DoclingDocument`, whose lists of items refer to their parents and children by JSON pointer, the model whose parent links the path puts on the block.
 - ISO 32000-2:2020. "Document management — Portable document format — Part 2: PDF 2.0." International Organization for Standardization, 2020. The page labels, document outline, Info dictionary and media box behind `Locator::Pdf`, `OutlineEntry` and `Metadata`.
 - Matt Garrish, Ivan Herman and Dave Cramer, editors. "EPUB 3.3." W3C Recommendation, 25 May 2023. https://www.w3.org/TR/epub-33/. The package document, spine and navigation document behind `Locator::Epub`, `OutlineEntry` and `Metadata`.

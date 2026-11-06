@@ -56,7 +56,7 @@ impl Places {
                     file = Some(this);
                     1
                 }
-                Locator::Pdf { .. } => 0,
+                Locator::Pdf { .. } | Locator::Markdown { .. } => 0,
             };
             if block.section != section {
                 section = block.section;
@@ -102,7 +102,7 @@ impl Places {
     }
 
     /// The block's position among the blocks of its EPUB file, from 1; 0 in a
-    /// PDF.
+    /// PDF or a Markdown file.
     pub fn para(&self, block: u32) -> u32 {
         self.blocks[block as usize].para
     }
@@ -134,6 +134,7 @@ mod tests {
             text: text.to_string(),
             spans: Vec::new(),
             ids: Vec::new(),
+            within: Vec::new(),
             section: None,
             locator: Locator::Epub { file },
         }
@@ -197,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn para_is_zero_in_a_pdf() {
+    fn para_is_zero_in_a_pdf_and_in_a_markdown_file() {
         let pdf = Block {
             locator: Locator::Pdf {
                 page: 1,
@@ -206,8 +207,39 @@ mod tests {
             },
             ..para(0)
         };
-        let (_, places) = places(vec![pdf]);
-        assert_eq!(places.para(0), 0);
+        let (_, in_pdf) = places(vec![pdf]);
+        assert_eq!(in_pdf.para(0), 0);
+
+        let markdown = |line| Block {
+            locator: Locator::Markdown {
+                line,
+                line_end: None,
+            },
+            ..para(0)
+        };
+        let (_, in_markdown) = places(vec![markdown(1), markdown(3)]);
+        assert_eq!([0, 1].map(|b| in_markdown.para(b)), [0, 0]);
+    }
+
+    #[test]
+    fn section_para_counts_markdown_blocks_under_their_heading() {
+        let markdown = |kind, text, line| Block {
+            locator: Locator::Markdown {
+                line,
+                line_end: None,
+            },
+            ..block(kind, text, 0)
+        };
+        let (_, places) = places(vec![
+            markdown(BlockKind::Heading { level: 1 }, "One", 1),
+            markdown(BlockKind::Paragraph, "a", 3),
+            markdown(BlockKind::Rule, "", 5),
+            markdown(BlockKind::Paragraph, "b", 7),
+        ]);
+        assert_eq!(
+            (0..4).map(|b| places.section_para(b)).collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
     }
 
     #[test]

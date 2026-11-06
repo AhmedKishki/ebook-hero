@@ -222,11 +222,13 @@ The reader is `src/extract/markdown.rs`, built on pulldown-cmark, the pure-Rust 
 
 ### Detection
 
-`detect_format` keeps its order: the `%PDF-` marker in the first 1024 bytes, then the EPUB archive. A file that is neither is Markdown when its bytes are UTF-8 after an optional byte-order mark, because every UTF-8 text is a valid CommonMark document. No extension is consulted, as now. A plain `.txt` file therefore opens as a Markdown document. Any other file stays `Unsupported`, and its message names the three formats.
+`detect_format` checks five things in order: the `%PDF-` marker at byte 0, the EPUB archive, UTF-8 text after an optional byte-order mark, the `%PDF-` marker elsewhere in the first 1024 bytes, and otherwise `Unsupported`, whose message names the three formats. Every UTF-8 text is a valid CommonMark document, so a text file is Markdown, and a plain `.txt` file opens as one. The PDF header belongs at the start of the file, and the 1024-byte tolerance exists for binary bytes before a real header, so it applies only to a file that is not text; a Markdown note that mentions `%PDF-` near its start is therefore read as Markdown. No extension is consulted, as now.
 
 ### Input cap
 
 A file over `MAX_MARKDOWN_BYTES`, 64 MiB, fails with its size and the cap. Like the EPUB reader's caps, the constant lives in the reader module. 64 MiB of text is about ten million words, more than any book.
+
+The size cap does not bound memory, because GFM pads every table row to the width of its header and pulldown-cmark builds the whole document before it yields events: a 120 KB file can ask for ten million cells. A second cap, `MAX_TABLE_CELLS`, 250,000 cells per file, is checked by a scan of the source before parsing. The scan counts each table's columns times its following lines, which can only over-count, and a file over the cap fails with the table's line, its size and the cap.
 
 ### Walk
 

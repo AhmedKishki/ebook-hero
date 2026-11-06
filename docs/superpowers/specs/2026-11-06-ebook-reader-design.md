@@ -211,6 +211,8 @@ A `#id` or footnote reference with no target leads `Nowhere` and adds a `BrokenL
 - `*`, `**`, `~~`, code spans with enough backticks, and `[text](href)` links
 - `[^label]` references and `[^label]:` definitions, where the label is the target `Note` container's label, or the marker when the note has none
 
+A GFM table writes each row on one line, so its cells hold only inline text and cannot span rows or columns. An EPUB table can do both, so the writer writes a table that GFM cannot hold as an HTML table, with `rowspan` and `colspan` kept and each cell's blocks written as escaped text separated by `<br>`. Markdown renderers show it as a table. The Markdown reader leaves HTML out, but no document it reads holds such a table, so the round trip below is unaffected.
+
 The writer escapes text so that reading the output gives the text back, and it escapes a character only where it could start syntax, so that prose stays readable. Tests decide the exact set. The PDF page comments `<!-- page N -->` stay. The reader drops comments, so they are gone on reading back, which suits a Markdown document because it has no pages.
 
 The tests check one property. For a `Document` D read from Markdown, `read(write(D))` has the same blocks in order, with the same kind, text, `within` and spans. Locators may differ because lines move. The tests run the property on every file in `docs/` and on generated documents.
@@ -284,6 +286,7 @@ Each step leaves `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings
 - The container path on flat blocks, over a tree.
 - Span offsets count code points.
 - Rows and cells are containers, and an empty container holds an empty `Paragraph`.
+- The writer writes a table that GFM cannot hold as an HTML table.
 - Notes are containers in all three readers, so the PDF reader changes too.
 - A note marker is an empty `NoteRef` span and stays out of `text`.
 - A link's target is resolved by the reader into `LinkTarget`. A missing target inside the book warns, and a target outside what the model holds does not.

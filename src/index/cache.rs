@@ -585,15 +585,15 @@ pub(crate) fn read_lz4_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let mut json = Vec::new();
     FrameDecoder::new(compressed.as_slice())
         .read_to_end(&mut json)
-        .map_err(|e| unreadable(path, &e))?;
-    serde_json::from_slice(&json).map_err(|e| unreadable(path, &e))
+        .map_err(|e| unreadable(&path.display(), &e))?;
+    serde_json::from_slice(&json).map_err(|e| unreadable(&path.display(), &e))
 }
 
-/// The error for a cache file that is there but does not decode.
-fn unreadable(path: &Path, reason: &dyn std::fmt::Display) -> Error {
+/// The error for a cache file, named by `file`, that is there but does not
+/// decode or holds what the index never writes.
+pub(crate) fn unreadable(file: &dyn std::fmt::Display, reason: &dyn std::fmt::Display) -> Error {
     Error::Index(format!(
-        "{}: not a readable cache file ({reason}); run \"ebook-hero cache clear\" and try again",
-        path.display()
+        "{file}: not a readable cache file ({reason}); run \"ebook-hero cache clear\" and try again"
     ))
 }
 

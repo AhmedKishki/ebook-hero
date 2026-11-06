@@ -15,10 +15,13 @@ use ebook_hero::index::cache::{
     CachedIndex, ClearReport, Manifest, build_count, clear, expected_stage1, list_indexes,
     sha256_file, with_lock, with_lock_cancellable,
 };
+use ebook_hero::passages::build_passages;
 use ebook_hero::search::{Mode, SearchParams};
 use ebook_hero::session::{Session, resolve_path, resolve_path_in};
 use ebook_hero::settings::OPEN_BOOKS;
 use tempfile::TempDir;
+
+const ALICE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/alice.epub");
 
 /// `build_count` is process-wide and the tests run in parallel, so every test
 /// that builds a book holds this lock and sees only its own builds.
@@ -197,6 +200,57 @@ fn a_damaged_cache_file_is_rebuilt() {
     assert_eq!(build_count() - before, 1);
     assert!(!book.passages.is_empty());
     serde_json::from_slice::<serde_json::Value>(&read_lz4(&file)).unwrap();
+}
+
+#[test]
+fn stored_passages_hold_no_text() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let sha = sha256_file(Path::new(ALICE)).unwrap();
+    let book = setup.session().book(ALICE).unwrap();
+    let dir = setup.root().join(&sha);
+
+    let stored = read_lz4(&dir.join("passages.json.lz4"));
+    let document = read_lz4(&dir.join("document.json.lz4"));
+
+    // The check can only fail if the book says it somewhere.
+    assert!(String::from_utf8(document).unwrap().contains("crocodile"));
+    let value: serde_json::Value = serde_json::from_slice(&stored).unwrap();
+    assert!(
+        !value.to_string().contains("crocodile"),
+        "the stored passages repeat the book's text"
+    );
+    // Each passage is a list of pieces, and a piece says only where it lies.
+    let passages = value.as_array().unwrap();
+    assert_eq!(passages.len(), book.passages.len());
+    for piece in passages
+        .iter()
+        .flat_map(|passage| passage.as_array().unwrap())
+    {
+        let mut keys: Vec<_> = piece.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["block", "len", "offset"]);
+    }
+    // What is loaded is what packing the document gives.
+    assert_eq!(book.passages, build_passages(&book.document, &book.places));
+}
+
+#[test]
+fn a_stored_piece_outside_its_block_is_rebuilt() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (path, sha) = setup.book("Stale Pieces");
+    setup.session().book(str_of(&path)).unwrap();
+    let file = setup.root().join(&sha).join("passages.json.lz4");
+    let outside = br#"[[{"block":0,"offset":0,"len":100000}]]"#;
+    write_lz4(&file, outside);
+
+    let before = build_count();
+    let book = setup.session().book(str_of(&path)).unwrap();
+
+    assert_eq!(build_count() - before, 1);
+    assert!(!book.passages.is_empty());
+    assert_ne!(read_lz4(&file), outside);
 }
 
 #[test]

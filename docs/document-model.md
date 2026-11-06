@@ -21,7 +21,7 @@ flowchart LR
     passages --> tools["search, find, read, verify_quote, concept_graph"]
 ```
 
-`src/index/book.rs` runs the reader once per book, packs the blocks into passages and writes both to the user cache as `document.json.lz4` and `passages.json.lz4`, in a directory named by the file's SHA-256. Later calls load the cached `Document` instead of reading the file again, and loading builds the book's `Places` from it (see [Each fact once](#each-fact-once)). `ebook-hero extract` runs the reader on every call and prints the `Document`: as JSON with `--format json` or `--json`, otherwise as Markdown.
+`src/index/book.rs` runs the reader once per book, packs the blocks into passages and writes the document and the passages to the user cache as `document.json.lz4` and `passages.json.lz4`, in a directory named by the file's SHA-256. Later calls load the cached `Document` instead of reading the file again, and loading builds the book's `Places` from it and the passages from the stored pieces (see [Each fact once](#each-fact-once)). `ebook-hero extract` runs the reader on every call and prints the `Document`: as JSON with `--format json` or `--json`, otherwise as Markdown.
 
 ## Structure
 
@@ -290,6 +290,7 @@ A fact is stored once, at the level where it holds: the document, a run of block
 | an element id | `ids` on the block where the element is |
 | a block's id | derived: its position in `blocks` |
 | a locator's format | derived: `source.format`, and the locator's own fields |
+| a passage's text, section and locator | derived: `passages.json.lz4` stores its pieces as a block, an offset and a length |
 
 Alice's 875 blocks lie in 19 sections and 14 content documents, so a block holds two small numbers where it would otherwise repeat the heading texts above it and its document's name. Its document takes 304 KB as `extract --format json` prints it, against 523 KB when every block carried these facts.
 
@@ -305,6 +306,14 @@ Alice's 875 blocks lie in 19 sections and 14 content documents, so a block holds
 | `print_page(block)` | the label of the last `PageBreak` at or before the block's start |
 
 `Places` keeps its own copies of the paths and labels it returns, so it can sit beside the `Document` in `Book` (`src/index/book.rs`), which builds it whenever it loads a book. `build_passages` takes it with the document and reads from it each passage's section path and EPUB locator. A PDF page's label needs no table of its own, because `page_labels` already holds one entry per page.
+
+### Passages
+
+`passages.json.lz4` stores each passage as its pieces and no text. A piece is `len` bytes of the text of block `block`, from byte `offset`, and `StoredPiece` in `src/passages.rs` is those three numbers. Every piece is part of a block, and `document.json.lz4` already holds the text of every block, so storing a passage's text would store it twice. Alice's `passages.json.lz4` takes 7.2 KB, against 119 KB when each passage also carried its text.
+
+`stored_form` turns the passages `build_passages` made into pieces, and `assemble` turns them back when a book is loaded. `assemble` cuts each piece out of its block, joins the pieces with a blank line, and takes the section path and the locator from `Places`. `build_passages` makes a passage with the same function, so a loaded passage equals the built one in its text, its `BlockRange`s, its section and its locator, and nothing after loading sees that passages are stored as pieces. Loading assembles every text once, because search, find and verify scan the passage texts many times; that copy lives only in memory.
+
+The pieces come from a file on disk, so `assemble` checks them. A piece in a block that does not exist, a piece that runs past the end of its block or starts or ends inside a character, and a passage without pieces are each an `Error::Index` that names `passages.json.lz4` and says to run `ebook-hero cache clear`. Opening a book handles that error like any cache file that does not load: it logs a warning and builds the index again. The stored form is part of what `PASSAGES_VERSION` versions, so an index made before pieces, which stores each passage's text, is built again when its book is opened.
 
 ### The JSON form
 

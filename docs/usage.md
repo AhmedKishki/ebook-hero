@@ -42,7 +42,7 @@ A book's directory holds these files:
 |---|---|
 | `manifest.json` | what the index was built from, as plain JSON |
 | `document.json.lz4` | the extracted book, the document that [extract](#extract) prints with `--format json` |
-| `passages.json.lz4` | the passages that search runs on |
+| `passages.json.lz4` | where each passage lies in the blocks of `document.json.lz4`, from which the passages that search runs on are assembled when the book is opened |
 | `tantivy/` | the lexical search index |
 | `vectors.f32` | the passage embeddings, written the first time a semantic or hybrid search, or `index`, needs them |
 | `graph.json.lz4` | the concept graph, written the first time `graph` needs it |

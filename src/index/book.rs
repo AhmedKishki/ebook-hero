@@ -16,7 +16,7 @@ use crate::index::cache::{
 };
 use crate::index::lexical::LexicalIndex;
 use crate::index::vectors::Vectors;
-use crate::passages::{Passage, build_passages};
+use crate::passages::{Passage, StoredPiece, assemble, build_passages, stored_form};
 use crate::settings::{EMBEDDING_DIM, EMBEDDING_MODEL, GRAPH_VERSION, LOCK_WAIT};
 use crate::{Error, Result};
 
@@ -318,13 +318,16 @@ fn load_current(dir: &Path, path: &Path, sha256: &str) -> Result<Option<Book>> {
 
 fn load(dir: &Path, path: &Path, sha256: &str) -> Result<Book> {
     let document: Document = cache::read_lz4_json(&dir.join(DOCUMENT_FILE))?;
+    let places = Places::new(&document);
+    let stored: Vec<Vec<StoredPiece>> = cache::read_lz4_json(&dir.join(PASSAGES_FILE))?;
+    let passages = assemble(&document, &places, &stored)?;
     Ok(Book {
         path: path.to_path_buf(),
         sha256: sha256.to_string(),
         dir: dir.to_path_buf(),
-        places: Places::new(&document),
         document,
-        passages: cache::read_lz4_json(&dir.join(PASSAGES_FILE))?,
+        places,
+        passages,
         lexical: LexicalIndex::open(&dir.join(TANTIVY_DIR))?,
         vectors: OnceLock::new(),
         graph: OnceLock::new(),
@@ -351,7 +354,7 @@ fn build(cache_root: &Path, dir: &Path, path: &Path, sha256: &str) -> Result<()>
 
 fn write_stage(staging: &Path, document: &Document, passages: &[Passage]) -> Result<()> {
     cache::write_lz4_json_atomic(&staging.join(DOCUMENT_FILE), document)?;
-    cache::write_lz4_json_atomic(&staging.join(PASSAGES_FILE), &passages)?;
+    cache::write_lz4_json_atomic(&staging.join(PASSAGES_FILE), &stored_form(passages))?;
     let tantivy = staging.join(TANTIVY_DIR);
     fs::create_dir(&tantivy).map_err(|e| io_error(&tantivy, e))?;
     LexicalIndex::build(&tantivy, passages)?;

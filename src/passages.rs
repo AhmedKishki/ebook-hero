@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::document::{Block, BlockKind, Document, Locator, Places};
+use crate::index::cache::{PASSAGES_FILE, unreadable};
 use crate::settings::PASSAGE_MAX_WORDS;
+use crate::{Error, Result};
 
 /// A run of whole paragraphs, list items and notes of at most
 /// [`PASSAGE_MAX_WORDS`] words, inside one section and, in an EPUB, one file.
@@ -91,12 +93,24 @@ pub struct HeadingPlace {
     pub para_end: u32,
 }
 
+/// `len` bytes of block `block`'s text from `offset`: where one piece of a
+/// passage lies, which is all the index stores of it. The passage's text is
+/// read from the blocks when the book is loaded (see [`assemble`]).
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoredPiece {
+    /// The block's id in [`Document::blocks`](crate::document::Document::blocks).
+    pub block: u32,
+    /// Where the piece starts in the block's text, in UTF-8 bytes.
+    pub offset: usize,
+    /// The piece's length in UTF-8 bytes.
+    pub len: usize,
+}
+
 /// The text of one block, or a piece of it, that goes into a passage whole.
 struct Piece<'a> {
     block: &'a Block,
     offset: usize,
     text: &'a str,
-    words: usize,
 }
 
 /// Packs the paragraphs, list items and notes of the document's blocks, in
@@ -115,19 +129,102 @@ pub fn build_passages(document: &Document, places: &Places) -> Vec<Passage> {
             close(&mut passages, &mut current, &mut words, document, places);
             continue;
         }
-        for piece in pieces(block) {
+        for (piece, piece_words) in pieces(block) {
             let fits = current.first().is_some_and(|first| {
-                same_part(first.block, block) && words + piece.words <= PASSAGE_MAX_WORDS
+                same_part(first.block, block) && words + piece_words <= PASSAGE_MAX_WORDS
             });
             if !fits {
                 close(&mut passages, &mut current, &mut words, document, places);
             }
-            words += piece.words;
+            words += piece_words;
             current.push(piece);
         }
     }
     close(&mut passages, &mut current, &mut words, document, places);
     passages
+}
+
+/// Where each passage's pieces lie, which is all of a passage the index
+/// stores: its text, section and locator follow from the blocks. [`assemble`]
+/// is the way back.
+pub fn stored_form(passages: &[Passage]) -> Vec<Vec<StoredPiece>> {
+    passages
+        .iter()
+        .map(|passage| {
+            passage
+                .blocks
+                .iter()
+                .map(|range| StoredPiece {
+                    block: range.block_id,
+                    offset: range.block_offset,
+                    len: range.end - range.start,
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Rebuilds exactly the passages [`build_passages`] gave, from the form
+/// [`stored_form`] made of them. `places` must be the document's.
+///
+/// The stored pieces come from a file on disk. One that lies outside its
+/// block, or splits a character, or a passage without pieces, is an
+/// [`Error::Index`] that names `passages.json.lz4` and says to clear the
+/// cache.
+pub fn assemble(
+    document: &Document,
+    places: &Places,
+    stored: &[Vec<StoredPiece>],
+) -> Result<Vec<Passage>> {
+    stored
+        .iter()
+        .enumerate()
+        .map(|(id, stored_pieces)| {
+            if stored_pieces.is_empty() {
+                return Err(bad_piece(id, "no pieces".to_string()));
+            }
+            let pieces = stored_pieces
+                .iter()
+                .map(|stored| locate(document, id, stored))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(passage(id as u32, &pieces, document, places))
+        })
+        .collect()
+}
+
+/// The text `stored` names in the document's blocks.
+fn locate<'a>(document: &'a Document, id: usize, stored: &StoredPiece) -> Result<Piece<'a>> {
+    let block = document.blocks.get(stored.block as usize).ok_or_else(|| {
+        bad_piece(
+            id,
+            format!("a piece in block {}, which is not there", stored.block),
+        )
+    })?;
+    let text = stored
+        .offset
+        .checked_add(stored.len)
+        .and_then(|end| block.text.get(stored.offset..end))
+        .ok_or_else(|| {
+            bad_piece(
+                id,
+                format!(
+                    "a piece of {} bytes from byte {} that is not inside block {}'s {} bytes of text",
+                    stored.len,
+                    stored.offset,
+                    stored.block,
+                    block.text.len()
+                ),
+            )
+        })?;
+    Ok(Piece {
+        block,
+        offset: stored.offset,
+        text,
+    })
+}
+
+fn bad_piece(id: usize, what: String) -> Error {
+    unreadable(&PASSAGES_FILE, &format!("passage {id} has {what}"))
 }
 
 /// Turns the pieces collected so far, if any, into the next passage.
@@ -159,26 +256,28 @@ fn same_part(a: &Block, b: &Block) -> bool {
         }
 }
 
-fn pieces(block: &Block) -> Vec<Piece<'_>> {
+/// The block as one piece, or as several when it has more words than the
+/// limit, each with its word count.
+fn pieces(block: &Block) -> Vec<(Piece<'_>, usize)> {
     let words = word_count(&block.text);
     if words <= PASSAGE_MAX_WORDS {
-        return vec![Piece {
+        let whole = Piece {
             block,
             offset: 0,
             text: &block.text,
-            words,
-        }];
+        };
+        return vec![(whole, words)];
     }
     split_ranges(&block.text)
         .into_iter()
         .map(|range| {
             let text = &block.text[range.clone()];
-            Piece {
+            let piece = Piece {
                 block,
                 offset: range.start,
                 text,
-                words: word_count(text),
-            }
+            };
+            (piece, word_count(text))
         })
         .collect()
 }
@@ -250,6 +349,8 @@ fn trimmed(text: &str, range: Range<usize>) -> Option<Range<usize>> {
     Some(start..start + kept.len())
 }
 
+/// The passage `id` made of `pieces`, which are not empty. Packing and
+/// [`assemble`] both make a passage here, so the two cannot differ.
 fn passage(id: u32, pieces: &[Piece], document: &Document, places: &Places) -> Passage {
     let mut text = String::new();
     let mut ranges = Vec::with_capacity(pieces.len());
@@ -891,5 +992,158 @@ mod tests {
     #[test]
     fn no_blocks_make_no_passages() {
         assert!(build(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn the_stored_form_is_where_each_piece_lies_and_no_text() {
+        let passages = build((0..5).map(|_| pdf_block(&words(100), 1)).collect());
+        let each = words(100).len();
+        assert_eq!(
+            stored_form(&passages),
+            [
+                vec![
+                    StoredPiece {
+                        block: 0,
+                        offset: 0,
+                        len: each
+                    },
+                    StoredPiece {
+                        block: 1,
+                        offset: 0,
+                        len: each
+                    },
+                ],
+                vec![
+                    StoredPiece {
+                        block: 2,
+                        offset: 0,
+                        len: each
+                    },
+                    StoredPiece {
+                        block: 3,
+                        offset: 0,
+                        len: each
+                    },
+                ],
+                vec![StoredPiece {
+                    block: 4,
+                    offset: 0,
+                    len: each
+                }],
+            ]
+        );
+    }
+
+    #[test]
+    fn assembling_the_stored_form_gives_the_built_passages() {
+        // Two sections, a block split into pieces that are not at its start,
+        // text that is not ASCII, a printed page and two changes of EPUB file.
+        let long = (0..50)
+            .map(|i| format!("Sentence number {i} über naïve café has exactly ten words."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let doc = document(vec![
+            epub_block("Before any heading.", 0),
+            epub_heading(1, "One", 0),
+            on_print_page("12", epub_block("Ünïcode ‘quotes’ — a first paragraph.", 0)),
+            epub_block(&long, 0),
+            epub_block(&words(10), 0),
+            epub_heading(2, "Two", 1),
+            epub_block(&words(10), 1),
+            epub_block(&words(10), 2),
+        ]);
+        let places = Places::new(&doc);
+        let built = build_passages(&doc, &places);
+        assert!(built.len() > 5);
+        assert!(built.iter().any(|p| p.blocks[0].block_offset > 0));
+        assert!(built.iter().any(|p| p.blocks.len() > 1));
+
+        assert_eq!(
+            assemble(&doc, &places, &stored_form(&built)).unwrap(),
+            built
+        );
+    }
+
+    #[test]
+    fn assembling_a_pdf_gives_the_built_passages_with_their_page_labels() {
+        let doc = labelled(
+            document(vec![
+                heading(1, "A"),
+                pdf_block(&words(100), 1),
+                spanning(1, 2, &words(150)),
+                pdf_block(&words(150), 2),
+                pdf_block(&words(10), 3),
+            ]),
+            &[(1, "i"), (2, "ii"), (3, "iii")],
+        );
+        let places = Places::new(&doc);
+        let built = build_passages(&doc, &places);
+        assert!(built.len() > 2);
+
+        assert_eq!(
+            assemble(&doc, &places, &stored_form(&built)).unwrap(),
+            built
+        );
+    }
+
+    #[test]
+    fn a_book_without_passages_assembles_to_none() {
+        let doc = document(Vec::new());
+        assert!(assemble(&doc, &Places::new(&doc), &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_piece_outside_its_block_is_an_index_error_with_the_remedy() {
+        let doc = document(vec![pdf_block(&words(10), 1)]);
+        let places = Places::new(&doc);
+        let stored = vec![vec![StoredPiece {
+            block: 0,
+            offset: 0,
+            len: 10_000,
+        }]];
+
+        let error = assemble(&doc, &places, &stored).unwrap_err();
+
+        assert!(matches!(error, crate::Error::Index(_)), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("passages.json.lz4"), "{message}");
+        assert!(message.contains("cache clear"), "{message}");
+    }
+
+    #[test]
+    fn every_kind_of_bad_stored_piece_is_an_index_error_and_never_a_panic() {
+        let doc = document(vec![pdf_block("Café au lait", 1)]);
+        let places = Places::new(&doc);
+        let piece = |block, offset, len| StoredPiece { block, offset, len };
+        let bad = [
+            ("a block that is not there", vec![vec![piece(1, 0, 4)]]),
+            (
+                "a piece that starts after the block",
+                vec![vec![piece(0, 99, 1)]],
+            ),
+            (
+                "a piece that runs past the block",
+                vec![vec![piece(0, 8, 10)]],
+            ),
+            (
+                "a length that overflows",
+                vec![vec![piece(0, 1, usize::MAX)]],
+            ),
+            // The é of "Café" takes bytes 3 and 4.
+            ("a start inside a character", vec![vec![piece(0, 4, 2)]]),
+            ("an end inside a character", vec![vec![piece(0, 0, 4)]]),
+            ("a passage without pieces", vec![Vec::new()]),
+            (
+                "a bad piece after good ones",
+                vec![vec![piece(0, 0, 3)], vec![piece(0, 0, 3), piece(2, 0, 1)]],
+            ),
+        ];
+        for (what, stored) in bad {
+            let error = assemble(&doc, &places, &stored).unwrap_err();
+            assert!(matches!(error, crate::Error::Index(_)), "{what}: {error}");
+            let message = error.to_string();
+            assert!(message.contains("passages.json.lz4"), "{what}: {message}");
+            assert!(message.contains("cache clear"), "{what}: {message}");
+        }
     }
 }

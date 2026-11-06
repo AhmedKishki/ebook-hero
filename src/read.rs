@@ -51,6 +51,9 @@ pub struct PassageRef {
     pub section: Vec<String>,
     /// Where it is in the book.
     pub locator: PassageLocator,
+    /// The ids of the blocks it covers, in order, each once. A block that
+    /// the passage holds only a piece of is listed too.
+    pub blocks: Vec<u32>,
 }
 
 /// One page of a read. `next_cursor` is the id of the first passage of the
@@ -212,6 +215,7 @@ fn read_passages(document: &Document, passages: &[Passage], p: &ReadParams) -> R
             passage_id: passage.id,
             section: passage.section.clone(),
             locator: passage.locator.clone(),
+            blocks: block_ids(passage),
         });
         next += 1;
     }
@@ -221,6 +225,14 @@ fn read_passages(document: &Document, passages: &[Passage], p: &ReadParams) -> R
         passages: refs,
         next_cursor: (next <= last).then(|| passages[next].id),
     })
+}
+
+/// The ids of the blocks `passage` takes text from, in order, each once. The
+/// pieces of one block are next to each other, so dropping repeats is enough.
+fn block_ids(passage: &Passage) -> Vec<u32> {
+    let mut ids: Vec<u32> = passage.blocks.iter().map(|range| range.block_id).collect();
+    ids.dedup();
+    ids
 }
 
 /// Markdown blocks are separated by a blank line.
@@ -798,6 +810,33 @@ mod tests {
         assert_eq!(at(ReadAt::Passage(4), 0, 10), 4..=4);
         assert_eq!(at(ReadAt::Passage(2), 10, 10), 0..=4);
         assert_eq!(at(ReadAt::Outline(3), 1, 1), 1..=4);
+    }
+
+    #[test]
+    fn a_read_passage_names_its_blocks_once_each_in_order() {
+        // Passage 1 holds two pieces of block 2 and the start of block 3;
+        // passage 2 holds the rest of block 3 and block 4.
+        let passages = vec![
+            passage(0, "a", &[], &[0, 1]),
+            passage(1, "b c d", &[], &[2, 2, 3]),
+            passage(2, "e", &[], &[3, 4]),
+        ];
+        let document = document(Format::Pdf, Vec::new());
+        let read_blocks = |params: &ReadParams| -> Vec<Vec<u32>> {
+            let result = read_passages(&document, &passages, params).unwrap();
+            result.passages.into_iter().map(|p| p.blocks).collect()
+        };
+
+        assert_eq!(read_blocks(&params(ReadAt::Passage(1))), [[2, 3]]);
+        let neighbours = ReadParams {
+            before: 1,
+            after: 1,
+            ..params(ReadAt::Passage(1))
+        };
+        assert_eq!(
+            read_blocks(&neighbours),
+            [vec![0, 1], vec![2, 3], vec![3, 4]]
+        );
     }
 
     #[test]

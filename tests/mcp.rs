@@ -534,6 +534,10 @@ async fn read_adds_no_neighbours_by_default() {
     };
     assert_eq!(ids(&alone), [2]);
     assert_eq!(ids(&widened), [1, 2, 3]);
+    assert_eq!(
+        alone.structured_content.as_ref().unwrap()["passages"][0]["blocks"],
+        json!([8, 9, 10])
+    );
 }
 
 /// `mode` reaches a client as a plain string enum. A client that cannot

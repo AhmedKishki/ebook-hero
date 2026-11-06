@@ -272,7 +272,7 @@ AGENTS.md sets the boundary: readers turn a file into a `Document`, and everythi
 
 ### Locators per format
 
-A PDF places text by physical page, printed label and box. An EPUB places it by file, element id, paragraph and printed page. An EPUB has no physical pages, and a PDF has no files or element ids, so the model gives each format its own variant and no shared fields. Each consumer handles both variants explicitly. `PassageLocator` in `src/passages.rs` keeps the split. `locator_text` in `src/read.rs` prints `p. 12–13 (xii–xiii)` for a PDF and `CHAPTER I ¶3–5, print p. 45` for an EPUB. `gui/book.js` matches an EPUB passage to its blocks exactly by `href` and `para`, while a PDF passage names only pages and is narrowed by its text.
+A PDF places text by physical page, printed label and box. An EPUB places it by file, element id, paragraph and printed page. An EPUB has no physical pages, and a PDF has no files or element ids, so the model gives each format its own variant and no shared fields. Each consumer handles both variants explicitly. `PassageLocator` in `src/passages.rs` keeps the split. `locator_text` in `src/read.rs` prints `p. 12–13 (xii–xiii)` for a PDF and `CHAPTER I ¶3–5, print p. 45` for an EPUB. `gui/book.js` handles neither variant, because `read --json` gives each passage the ids of its blocks (`PassageRef.blocks` in `src/read.rs`, taken from the passage's `BlockRange`s) and the window marks those.
 
 ### Furniture kept apart
 

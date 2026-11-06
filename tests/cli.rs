@@ -318,6 +318,18 @@ fn read_by_passage_and_outline() {
 }
 
 #[test]
+fn read_json_names_the_blocks_of_each_passage() {
+    let env = Env::new();
+
+    let result = json(&env.stdout(&["read", SAMPLE_PDF, "1", "--json"]));
+
+    assert_eq!(
+        result["passages"][0]["blocks"],
+        serde_json::json!([4, 5, 6])
+    );
+}
+
+#[test]
 fn read_needs_exactly_one_address() {
     let env = Env::new();
 

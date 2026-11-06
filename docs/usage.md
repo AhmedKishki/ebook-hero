@@ -419,7 +419,7 @@ Entropy measures how much surprise a source of messages carries. …
 Joint entropy is the entropy of two variables taken together. …
 ```
 
-With `--json` it prints the [`read`](#read-1) result: the `markdown` above, the `passages` it holds, each with `passage_id`, `section` and `locator`, and `next_cursor`, `null` when the range is done.
+With `--json` it prints the [`read`](#read-1) result: the `markdown` above, the `passages` it holds, each with `passage_id`, `section`, `locator` and `blocks`, and `next_cursor`, `null` when the range is done. `blocks` lists, in order and each once, the ids that [`extract`](#extract) gives to the blocks the passage takes text from, including a block of which it holds only a piece. A program that shows the book can therefore mark exactly the blocks of a passage.
 
 The command and the MCP tool share these messages, so they name the arguments by their MCP names:
 
@@ -860,14 +860,14 @@ Reads passages as Markdown. It is the MCP form of [`read`](#read), with `outline
 | `after` | integer | `0` | Passages to add after the range, at most 10. |
 | `cursor` | integer | the start of the range | The passage to continue at: the `next_cursor` of the previous call. |
 
-Exactly one of `passage_id`, `page` and `outline_id` must be given. The result holds at most about 8000 characters of `markdown`, the `passages` it holds, each with `passage_id`, `section` and `locator`, and `next_cursor`. When `next_cursor` is set, the same call with `cursor` set to it gives the next part.
+Exactly one of `passage_id`, `page` and `outline_id` must be given. The result holds at most about 8000 characters of `markdown`, the `passages` it holds, each with `passage_id`, `section`, `locator` and `blocks`, and `next_cursor`. `blocks` is the same list as in the command's `--json` output. When `next_cursor` is set, the same call with `cursor` set to it gives the next part.
 
 ```json
 {"path": "/home/me/books/alice.epub", "passage_id": 99}
 ```
 
 ```json
-{"markdown":"## Alice’s Adventures in Wonderland › CHAPTER VIII. The Queen’s Croquet-Ground\n\n<!-- passage 99 · CHAPTER VIII. The Queen’s Croquet-Ground ¶42–43 -->\n\nThe chief difficulty Alice found at first was in managing her flamingo: …\n","passages":[{"passage_id":99,"section":["Alice’s Adventures in Wonderland","CHAPTER VIII. The Queen’s Croquet-Ground"],"locator":{…}}],"next_cursor":null}
+{"markdown":"## Alice’s Adventures in Wonderland › CHAPTER VIII. The Queen’s Croquet-Ground\n\n<!-- passage 99 · CHAPTER VIII. The Queen’s Croquet-Ground ¶42–43 -->\n\nThe chief difficulty Alice found at first was in managing her flamingo: …\n","passages":[{"passage_id":99,"section":["Alice’s Adventures in Wonderland","CHAPTER VIII. The Queen’s Croquet-Ground"],"locator":{…},"blocks":[481,482]}],"next_cursor":null}
 ```
 
 ### verify_quote

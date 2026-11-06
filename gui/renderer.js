@@ -157,10 +157,8 @@ async function showBook(path, passage) {
     open.note = open.title;
   }
   if (passage !== undefined) {
-    const found = viewer.mark(reply.ids);
-    open.note = reply.precise && found > 0
-      ? `${open.title} · passage ${passage}`
-      : `${open.title} · passage ${passage}: its page is marked, because its exact paragraphs could not be told apart`;
+    viewer.mark(reply.ids);
+    open.note = `${open.title} · passage ${passage}`;
   }
   say('book', open.note);
 }

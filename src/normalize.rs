@@ -8,7 +8,7 @@
 use std::cmp::Reverse;
 use std::ops::Range;
 
-use unicode_normalization::char::canonical_combining_class;
+use unicode_normalization::char::{canonical_combining_class, decompose_canonical};
 use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
 
 use crate::document::{Span, SpanKind};
@@ -173,9 +173,9 @@ fn compose(expanded: &str, positions: &[usize]) -> (String, Vec<usize>) {
 fn compose_piece(piece: &mut String, composed: &mut String) -> usize {
     let mut chars = piece.chars();
     let written = match (chars.next(), chars.next()) {
-        // A piece of one character that starts a piece, as most are, is NFC
-        // already.
-        (Some(c), None) if starts_piece(c) => {
+        // A piece of one character that passes the NFC quick check, as most
+        // pieces are, is NFC already.
+        (Some(c), None) if quick_check(c) == IsNormalized::Yes => {
             composed.push(c);
             1
         }
@@ -189,16 +189,42 @@ fn compose_piece(piece: &mut String, composed: &mut String) -> usize {
     written
 }
 
-/// Whether NFC composes the text before `c` and the text from `c` on apart:
-/// `c` has canonical combining class 0 and passes the NFC quick check, so it
-/// is a starter that composes with nothing before it. Its decomposition then
-/// starts with such a starter as well, which a test checks for every
-/// character, so nothing before `c` is composed with or reordered across
-/// anything from `c` on.
+/// Whether NFC composes the text before `c` and the text from `c` on apart.
+/// It does when `c` has canonical combining class 0 and its canonical
+/// decomposition starts with a [lone starter](is_lone_starter), since nothing
+/// before that starter is then composed with or reordered across it. A
+/// character that passes the NFC quick check decomposes so, which a test
+/// checks for every character, so only a character that fails it is
+/// decomposed here: U+212B ANGSTROM SIGN starts a piece, as its decomposition
+/// starts with `A`, while U+0F73 does not, as its decomposition starts with a
+/// mark.
 fn starts_piece(c: char) -> bool {
-    c.is_ascii()
-        || (canonical_combining_class(c) == 0
-            && is_nfc_quick(std::iter::once(c)) == IsNormalized::Yes)
+    if c.is_ascii() {
+        return true;
+    }
+    match (canonical_combining_class(c), quick_check(c)) {
+        (0, IsNormalized::Yes) => true,
+        (0, IsNormalized::No) => {
+            let mut first = None;
+            decompose_canonical(c, |d| {
+                first.get_or_insert(d);
+            });
+            first.is_some_and(is_lone_starter)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `c` is a starter that composes with nothing before it: its
+/// canonical combining class is 0 and its NFC quick check is not `Maybe`, the
+/// answer for a character that can be the second of a composed pair.
+fn is_lone_starter(c: char) -> bool {
+    canonical_combining_class(c) == 0 && quick_check(c) != IsNormalized::Maybe
+}
+
+/// The NFC quick check of `c` alone.
+fn quick_check(c: char) -> IsNormalized {
+    is_nfc_quick(std::iter::once(c))
 }
 
 /// Where an offset of the raw text lands in the normalized text.
@@ -290,8 +316,6 @@ fn is_dropped(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use unicode_normalization::char::decompose_canonical;
-
     use super::*;
     use crate::document::{Block, BlockKind, Locator, span_errors};
 
@@ -477,17 +501,28 @@ mod tests {
             "a\u{0307}\u{0323} a\u{0323}\u{0307} q\u{0307}\u{0323}",
             "\u{2126} \u{0F73} \u{212B}\u{0301} \u{1E9B}\u{0323}",
             "ﬁ\u{0301} e\u{00AD}\u{0301} a\u{2000}b",
+            "λόγος\u{0387} \u{037E} x\u{212B}\u{030A} a\u{095B}\u{093C} \u{F900}\u{0301}",
         ] {
             assert_eq!(normalize(text), in_one_pass(text), "{text:?}");
         }
     }
 
+    #[test]
+    fn a_character_that_nfc_replaces_starts_a_piece_when_its_decomposition_does() {
+        for c in ['\u{0387}', '\u{037E}', '\u{212B}', '\u{095B}', '\u{F900}'] {
+            assert!(starts_piece(c), "{c:?}");
+        }
+        // U+0F73 decomposes to U+0F71 U+0F72, which starts with a mark.
+        assert!(!starts_piece('\u{0F73}'));
+    }
+
     /// NFC leaves the text before a character that [`starts_piece`] and the
     /// text from it on independent: the character's decomposition starts
-    /// with a starter that composes with nothing before it, so nothing before
-    /// it composes past it or is reordered across it.
+    /// with a lone starter, so nothing before it composes past it or is
+    /// reordered across it. `starts_piece` takes that on trust for a
+    /// character that passes the quick check, and this checks it.
     #[test]
-    fn every_character_that_starts_a_piece_decomposes_to_such_a_starter() {
+    fn every_character_that_starts_a_piece_decomposes_to_a_lone_starter() {
         for c in (0..=0x10FFFF).filter_map(char::from_u32) {
             if !starts_piece(c) {
                 continue;
@@ -496,13 +531,7 @@ mod tests {
             decompose_canonical(c, |d| {
                 first.get_or_insert(d);
             });
-            let first = first.unwrap();
-            assert_eq!(canonical_combining_class(first), 0, "{c:?}");
-            assert_ne!(
-                is_nfc_quick(std::iter::once(first)),
-                IsNormalized::Maybe,
-                "{c:?}"
-            );
+            assert!(first.is_some_and(is_lone_starter), "{c:?}");
         }
     }
 

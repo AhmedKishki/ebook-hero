@@ -202,7 +202,7 @@ The kind decides what happens downstream. `build_passages` packs paragraphs, lis
 
 `section` is the index in `sections` of the section the block is in. A block before the first heading has none, and [Sections](#sections) explains how the others get theirs. `within` lists the containers the block sits in, and [Containers](#containers) explains how to read it. `locator` says where the block is in the file, with the fields that [Locators](#locators) lists.
 
-`ids` holds the element ids of an EPUB block: the ids of the elements that start in the block, its own included, and of the empty elements met since the block before. The EPUB reader resolves a table-of-contents fragment to the first block whose `ids` hold it. The Markdown reader gives a heading the id GitHub gives it and resolves a `#` link through `ids` the same way. The PDF reader writes none.
+`ids` holds the element ids of an EPUB block: the ids of the elements that start in the block, its own included, and of the empty elements met since the block before. The EPUB reader resolves a table-of-contents fragment to the first block whose `ids` hold it. The Markdown reader gives a heading the id GitHub gives it, taken from the heading's text as written, and resolves a `#` link through `ids` the same way. The PDF reader writes none.
 
 `spans` marks ranges of `text` without changing it. A `Span` covers `start..end`, counted in Unicode code points of `text`, and its `SpanKind` says what the range is:
 

@@ -1,6 +1,6 @@
 # Reading a Markdown file
 
-`src/extract/markdown.rs` reads a Markdown file into the `Document` model described in `docs/document-model.md`. pulldown-cmark parses the file as CommonMark, and one pass over its events writes the blocks in reading order. Each block records the containers it sits in, such as a list item or a table cell, and the lines of the file it covers, and its inline markup becomes spans over its text. Once every block is read, headings get the ids GitHub gives them and every link is resolved to where it leads. Passages, search, reading and quote checks then work on that `Document` as they do on one read from a PDF or an EPUB.
+`src/extract/markdown.rs` reads a Markdown file into the `Document` model described in `docs/document-model.md`. pulldown-cmark parses the file as CommonMark, and one pass over its events writes the blocks in reading order. Each block records the containers it sits in, such as a list item or a table cell, and the lines of the file it covers, and its inline markup becomes spans over its text. A heading gets the id GitHub gives it, and once every block is read, every link is resolved to where it leads. Passages, search, reading and quote checks then work on that `Document` as they do on one read from a PDF or an EPUB.
 
 ## Pipeline
 
@@ -20,12 +20,11 @@ flowchart TD
     front -->|yes| warn["UnreadablePart warning,<br/>parse the text after it"]
     front -->|no| parse["pulldown-cmark with tables,<br/>strikethrough and footnotes"]
     warn --> parse
-    parse --> walk["Walk the events: blocks, containers and spans,<br/>HTML blocks left out with a warning"]
+    parse --> walk["Walk the events: blocks, containers, spans<br/>and heading ids, HTML blocks left out with a warning"]
     walk --> any{"A block with text?"}
     any -->|no| err["Error: Unreadable,<br/>no readable text"]
     any -->|yes| sections["assign_sections"]
-    sections --> ids["give_headings_ids:<br/>GitHub's heading ids"]
-    ids --> links["resolve_links:<br/>targets, BrokenLink warnings"]
+    sections --> links["resolve_links:<br/>targets, BrokenLink warnings"]
     links --> outline["Outline from the headings"]
     outline --> doc(["Document"])
 ```
@@ -160,7 +159,7 @@ A block's text must equal `normalize` of itself, since search and quote verifica
 Each step takes the offsets the spans need, in ascending order, and records where each one lands in its output:
 
 1. `expand` writes the letters of the Latin ligatures and drops soft hyphens and invisible characters. An offset lands before the output of the character at it, so a span that starts at a dropped character starts at the next one.
-2. `compose` cuts the text into pieces before each starter that composes with nothing before it, a character with canonical combining class 0 that passes the NFC quick check, and composes each piece to NFC alone. NFC of the whole text is then the pieces laid end to end, because such a starter's decomposition starts with a starter of the same kind, so nothing before it is composed with or reordered across it. `every_character_that_starts_a_piece_decomposes_to_such_a_starter` checks that for every code point. An offset at the start of a piece lands at the start of its output, and an offset inside a piece lands past its output, so emphasis around the `e` of `e` and U+0301 covers the composed `é`.
+2. `compose` cuts the text into pieces and composes each piece to NFC alone. A piece starts at a character with canonical combining class 0 whose canonical decomposition starts with a lone starter, a character of class 0 that is not NFC quick check `Maybe` and so composes with nothing before it. Nothing before such a character is then composed with or reordered across it, so NFC of the whole text is the pieces laid end to end. A character that passes the quick check decomposes this way, which `every_character_that_starts_a_piece_decomposes_to_a_lone_starter` checks for every code point, so `starts_piece` decomposes only a character that fails it. U+212B ANGSTROM SIGN fails it and starts a piece, because it decomposes to `A` and a ring, while U+0F73 starts none, because its decomposition starts with a mark of class 129. An offset at the start of a piece lands at the start of its output, and an offset inside a piece lands past its output, so emphasis around the `e` of `e` and U+0301 covers the composed `é`. A character that NFC replaces, such as U+0387 GREEK ANO TELEIA, which becomes U+00B7, starts a piece of its own, so emphasis that ends before it still ends there.
 3. `collapse` turns every whitespace run into one space and trims the ends. An offset at the first character of a run lands on the space, one further into the run lands past the space, and one in a trimmed run lands where the text then is.
 
 No step reverses two offsets, so spans that nested in the raw text still nest, and spans that did not overlap still do not. A span that covered only what the steps removed comes out empty and is dropped, such as a link with no text, emphasis around an image, or a code span of one space between spaces. A `NoteRef` stays, since it marks a point. A `Break` marks the space that its whitespace run becomes, wherever its own space was in the run, unless trimming removes the run, which drops the break.
@@ -171,7 +170,7 @@ The positions count code points, so in `😀 *x*` the emphasis runs from 2 to 3,
 
 ### Paragraphs left without text
 
-Images and inline tags can be all a paragraph holds. A paragraph that they leave with neither text nor a span is not written when it sits in no container, since it would add a block without words and nothing else. Inside a container it is kept, because a container exists only through its blocks, so an item holding only an image keeps its place in its list. A heading left without text is kept too, because its level still divides the sections, although the outline leaves it out.
+Images and inline tags can be all a paragraph holds. A paragraph that they leave with neither text nor a span is not written, since it would add a block without words and nothing else. A container that is left without a block gets the placeholder paragraph that [Containers](#containers) describes, because a container exists only through its blocks. An item holding only an image therefore keeps its place in its list, while an item holding an image and a paragraph of text holds the text alone. A heading left without text is kept, because its level still divides the sections, although the outline leaves it out.
 
 ### HTML blocks
 
@@ -199,7 +198,7 @@ Of the document's other tables, the reader fills `sections`, `containers` and `w
 
 ## Heading ids
 
-`give_headings_ids` runs once every block is read and gives each heading, in reading order, the id GitHub gives it, which goes into the heading block's `ids`. The rule is `heading_id`, ported from `slugger` in `gui/markdown.js`, which the window uses for the usage guide's headings: the heading's text in lower case, without the characters other than letters, marks, numbers, connector punctuation, spaces and `-`, and with each space turned into `-`. The general categories that `\p{L}`, `\p{M}`, `\p{N}` and `\p{Pc}` name in the JavaScript come from the `unicode-properties` crate. The test `heading_id_gives_what_slugger_in_gui_markdown_js_gives` checks the port against the ids that `render` in `gui/markdown.js` gave for the same texts.
+The walk gives each heading, as it closes the heading, the id GitHub gives it, which goes into the heading block's `ids`. The rule is `heading_id`, ported from `slugger` in `gui/markdown.js`, which the window uses for the usage guide's headings: the heading's text in lower case, without the characters other than letters, marks, numbers, connector punctuation, spaces and `-`, and with each space turned into `-`. The text is the heading as written, which is what GitHub takes: the characters of its text and inline code before normalization, with nothing for the line break of a setext heading. `## Step&nbsp;1` therefore gives `step1`, because the no-break space is not a space, `## x  y` gives `x--y`, and an `e` followed by U+0301 stays two characters in the id while the block's text composes them into `é`. The general categories that `\p{L}`, `\p{M}`, `\p{N}` and `\p{Pc}` name in the JavaScript come from the `unicode-properties` crate. The test `heading_id_gives_what_slugger_in_gui_markdown_js_gives` checks the port against the ids that `render` in `gui/markdown.js` gave for the same texts.
 
 A repeated id gets `-1`, `-2` and so on, counted for the id that repeats. A numbered id that a heading already took is passed over, as `a-1` is in the last row:
 
@@ -215,7 +214,7 @@ The rule is GitHub's because `docs/usage.md`, like most Markdown files, was writ
 
 ## Links
 
-`resolve_links` runs after the ids are given, because a link may lead to a heading further down. It sets the `to` of every `Link` span from the `href` the file wrote:
+`resolve_links` runs once every block is read, because a link may lead to a heading further down. It sets the `to` of every `Link` span from the `href` the file wrote:
 
 | `href` | `to` |
 |---|---|
@@ -248,7 +247,7 @@ The walk writes each block when it closes and never returns to it, and the stack
 
 ### Resolve once everything is read
 
-A link can lead to a heading that the walk has not reached yet. The walk therefore writes each link with its target open, and two passes over the finished blocks then give the headings their ids and the links their targets, so the walk itself never looks ahead.
+A link can lead to a heading that the walk has not reached yet. The walk therefore writes each link with its target open, and one pass over the finished blocks then gives the links their targets, so the walk itself never looks ahead. A heading's id needs no such pass, because it depends only on the headings before it.
 
 ### Leave out and report
 
@@ -256,7 +255,6 @@ HTML blocks and front matter may hold text that the model cannot store, so each 
 
 ## Limits
 
-- Heading ids from normalized text. GitHub takes a heading's text as written, while the reader takes its normalized text, so a heading with two spaces in a row, a ligature or a soft hyphen gets an id that differs from GitHub's: `x  y` gives `x-y` here and `x--y` there.
 - Links out of the document. The reader checks neither that a `File` link's path names a file nor that an `Address` exists. A link's title, as in `[a](x.md "Title")`, is not kept.
 - HTML. Neither an HTML block nor an inline tag is read. The text of an HTML block is left out with a warning, and the text inside inline tags is kept without the tags. An element id in HTML, such as `<a id="x">`, is not an id of the document, so a link to `#x` is broken.
 - Front matter. Its fields, a title among them, are not read.

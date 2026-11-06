@@ -4,8 +4,9 @@
 //! footnotes, after it has found whether the file starts with front matter,
 //! which the reader leaves out. One pass over its events writes the blocks in
 //! reading order, and a stack of the containers open at each event gives a
-//! block its `within`. Inline markup becomes spans over the block's text.
-//! Once every block is read, headings get GitHub's ids and links are resolved.
+//! block its `within`. Inline markup becomes spans over the block's text, and
+//! each heading gets the id GitHub gives it. Once every block is read, the
+//! links are resolved.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -128,7 +129,6 @@ pub(crate) fn markdown_document(text: &str, source: Source) -> Result<Document> 
         });
     }
     let sections = assign_sections(&mut blocks);
-    give_headings_ids(&mut blocks);
     warnings.extend(resolve_links(&mut blocks, &containers));
     Ok(Document {
         schema_version: SCHEMA_VERSION,
@@ -318,6 +318,10 @@ struct OpenBlock {
     spans: Vec<RawSpan>,
     /// The spans still open, innermost last, as indexes into `spans`.
     open_spans: Vec<usize>,
+    /// For a heading, its text as written, without normalization and with
+    /// nothing for a line break, which is the text GitHub takes its id from.
+    /// Empty for any other block.
+    written: String,
     /// The bytes of the text it covers.
     range: Range<usize>,
 }
@@ -329,7 +333,16 @@ impl OpenBlock {
             raw: String::new(),
             spans: Vec::new(),
             open_spans: Vec::new(),
+            written: String::new(),
             range,
+        }
+    }
+
+    /// Adds the `text` of a text or code event to `written`, if the block is
+    /// a heading.
+    fn push_written(&mut self, text: &str) {
+        if matches!(self.kind, BlockKind::Heading { .. }) {
+            self.written.push_str(text);
         }
     }
 }
@@ -357,6 +370,8 @@ struct Walk {
     /// out, as the EPUB reader leaves out images.
     image_depth: usize,
     html_block: Option<HtmlBlock>,
+    /// The heading ids given so far, with their counts, for [`heading_id`].
+    heading_ids: HashMap<String, u32>,
 }
 
 impl Walk {
@@ -370,6 +385,7 @@ impl Walk {
             block: None,
             image_depth: 0,
             html_block: None,
+            heading_ids: HashMap::new(),
         }
     }
 
@@ -395,20 +411,28 @@ impl Walk {
         match event {
             Event::Start(tag) => self.start(tag, range),
             Event::End(tag) => self.end(tag),
-            Event::Text(text) => self.inline(range).raw.push_str(&text),
-            Event::Code(text) => self.push_span(&text, SpanKind::Code, range),
+            Event::Text(text) => {
+                let block = self.inline(range);
+                block.raw.push_str(&text);
+                block.push_written(&text);
+            }
+            Event::Code(text) => self
+                .push_span(&text, SpanKind::Code, range)
+                .push_written(&text),
             Event::SoftBreak => self.inline(range).raw.push(' '),
-            Event::HardBreak => self.push_span(" ", SpanKind::Break { lines: 1 }, range),
+            Event::HardBreak => {
+                self.push_span(" ", SpanKind::Break { lines: 1 }, range);
+            }
             // A footnote reference adds no characters; `resolve_links` finds
             // its note once every block is read.
-            Event::FootnoteReference(label) => self.push_span(
-                "",
-                SpanKind::NoteRef {
-                    marker: label.to_string(),
+            Event::FootnoteReference(label) => {
+                let marker = label.to_string();
+                let kind = SpanKind::NoteRef {
+                    marker,
                     block: None,
-                },
-                range,
-            ),
+                };
+                self.push_span("", kind, range);
+            }
             // An inline tag is dropped while the text between tags is kept.
             Event::InlineHtml(_) | Event::Html(_) => {
                 self.inline(range);
@@ -533,8 +557,8 @@ impl Walk {
     }
 
     /// Adds `text` to the open block as a span of `kind`, for the inline event
-    /// at `range`.
-    fn push_span(&mut self, text: &str, kind: SpanKind, range: Range<usize>) {
+    /// at `range`, and returns the block.
+    fn push_span(&mut self, text: &str, kind: SpanKind, range: Range<usize>) -> &mut OpenBlock {
         let block = self.inline(range);
         let start = block.raw.len();
         block.raw.push_str(text);
@@ -543,6 +567,7 @@ impl Walk {
             range: covered,
             kind,
         });
+        block
     }
 
     /// Opens a span of `kind` where the open block's text ends, for the
@@ -573,6 +598,7 @@ impl Walk {
             kind,
             mut raw,
             spans,
+            written,
             range,
             ..
         }) = self.block.take()
@@ -588,16 +614,22 @@ impl Walk {
             }
             _ => normalize_with_spans(&raw, spans),
         };
-        // A paragraph that dropped images and tags leave without text is not
-        // written, unless it sits in a container, which it then keeps.
-        if kind == BlockKind::Paragraph
-            && text.is_empty()
-            && spans.is_empty()
-            && self.open.is_empty()
-        {
+        // A paragraph that dropped images and tags leave with neither text
+        // nor a span is not written. A container that then holds no block
+        // gets an empty paragraph as its placeholder when it closes.
+        if kind == BlockKind::Paragraph && text.is_empty() && spans.is_empty() {
             return;
         }
+        // Each heading takes its id in reading order, so that a repeat is
+        // numbered as on GitHub. An empty id, as for `!!!`, names nothing and
+        // is not kept, but it still counts as given, as in `gui/markdown.js`.
+        let id = matches!(kind, BlockKind::Heading { .. })
+            .then(|| heading_id(&written, &mut self.heading_ids))
+            .filter(|id| !id.is_empty());
         self.push_block(kind, text, spans, range);
+        if let (Some(id), Some(block)) = (id, self.blocks.last_mut()) {
+            block.ids.push(id);
+        }
     }
 
     fn push_block(&mut self, kind: BlockKind, text: String, spans: Vec<Span>, range: Range<usize>) {
@@ -688,26 +720,10 @@ fn outline(blocks: &[Block]) -> Vec<OutlineEntry> {
         .collect()
 }
 
-/// Gives each heading, in reading order, the id GitHub gives it, so that a
-/// repeat is numbered as on GitHub. A heading whose id comes out empty, such
-/// as `!!!`, keeps none, since an empty id names nothing, but the id still
-/// counts as given, as it does in `gui/markdown.js`.
-fn give_headings_ids(blocks: &mut [Block]) {
-    let mut seen = HashMap::new();
-    for block in blocks {
-        if matches!(block.kind, BlockKind::Heading { .. }) {
-            let id = heading_id(&block.text, &mut seen);
-            if !id.is_empty() {
-                block.ids.push(id);
-            }
-        }
-    }
-}
-
-/// The id GitHub gives a heading whose text is `text`, ported from `slugger`
-/// in `gui/markdown.js`: `text` in lower case without the characters other
-/// than letters, marks, numbers, connector punctuation, spaces and `-`, with
-/// each space turned into `-`. `seen` holds the ids given so far, with a count
+/// The id GitHub gives a heading whose text as written is `text`, ported
+/// from `slugger` in `gui/markdown.js`: `text` in lower case without the
+/// characters other than letters, marks, numbers, connector punctuation,
+/// spaces and `-`, with each space turned into `-`. `seen` holds the ids given so far, with a count
 /// for each, and a repeated id gets `-1`, `-2` and so on.
 pub(crate) fn heading_id(text: &str, seen: &mut HashMap<String, u32>) -> String {
     let base: String = text
@@ -1122,13 +1138,61 @@ mod tests {
     }
 
     #[test]
-    fn a_paragraph_that_dropping_leaves_empty_is_written_only_in_a_container() {
-        let d = doc("![a](i.png)\n\n<b></b>\n\n# ![h](i.png)\n\n> ![q](i.png)\n\nText.\n");
+    fn an_empty_paragraph_is_written_only_as_its_container_s_placeholder() {
+        let d = doc(
+            "![a](i.png)\n\n<b></b>\n\n# ![h](i.png)\n\n> ![q](i.png)\n\n\
+             - ![i](i.png)\n\n  Item text.\n\nText.\n",
+        );
+        // The quote holds no other block, so its empty paragraph stays as its
+        // placeholder; the item holds its text, so its empty paragraph goes.
         assert_eq!(
             kinds_and_texts(&d),
-            [(heading(1), ""), (para(), ""), (para(), "Text.")]
+            [
+                (heading(1), ""),
+                (para(), ""),
+                (para(), "Item text."),
+                (para(), "Text.")
+            ]
         );
-        assert_eq!(withins(&d), [vec![], vec![0], vec![]]);
+        assert_eq!(withins(&d), [vec![], vec![0], vec![1, 2], vec![]]);
+    }
+
+    #[test]
+    fn heading_ids_come_from_the_text_as_written() {
+        // GitHub's ids, from the text before normalization: the no-break
+        // space and the line breaks of a setext heading give nothing, two
+        // spaces give two dashes, and e with U+0301 stays decomposed.
+        let d = doc("## Step&nbsp;1\n\n## x  y\n\n## e\u{0301}x\n\nA *b*\nc\n===\n\nA\\\nb\n---\n");
+        assert_eq!(texts(&d), ["Step 1", "x y", "éx", "A b c", "A b"]);
+        assert_eq!(
+            ids(&d),
+            [
+                vec!["step1"],
+                vec!["x--y"],
+                vec!["e\u{0301}x"],
+                vec!["a-bc"],
+                vec!["ab"]
+            ]
+        );
+    }
+
+    #[test]
+    fn a_span_keeps_its_bounds_at_characters_that_nfc_replaces() {
+        // NFC replaces U+0387 GREEK ANO TELEIA with U+00B7, U+212B ANGSTROM
+        // SIGN with U+00C5, and U+095B DEVANAGARI LETTER ZA with U+091C U+093C.
+        let d = doc("*λόγος*\u{0387} x *\u{212B}* a *\u{095B}रूर*\n");
+        assert_eq!(
+            d.blocks[0].text,
+            "λόγος\u{00B7} x \u{00C5} a \u{091C}\u{093C}रूर"
+        );
+        assert_eq!(
+            spans(&d.blocks[0]),
+            [
+                (0, 5, emphasis()),
+                (9, 10, emphasis()),
+                (13, 18, emphasis())
+            ]
+        );
     }
 
     fn slugs(texts: &[&str]) -> Vec<String> {
@@ -1622,8 +1686,10 @@ mod tests {
             }
             assert_eq!(span_errors(block), Vec::<String>::new());
         }
-        // The heading's id comes from its normalized text.
-        assert_eq!(ids(&d)[0], ["fine-title"]);
+        // The heading's id comes from its text as written, as on GitHub: the
+        // ligature stays, two spaces give two dashes, and the soft hyphen, a
+        // format character, is dropped.
+        assert_eq!(ids(&d)[0], ["ﬁne--title"]);
     }
 
     #[test]

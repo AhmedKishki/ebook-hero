@@ -97,8 +97,10 @@ fn check_size(path: &Path, size: u64) -> Result<()> {
 /// Reads the Markdown `text`, which holds no byte-order mark, into a
 /// [`Document`]. Text whose tables could hold more than [`MAX_TABLE_CELLS`]
 /// cells, and text that leaves no block with text, are an
-/// [`Error::Unreadable`] that names the file of `source`.
-pub(crate) fn markdown_document(text: &str, source: Source) -> Result<Document> {
+/// [`Error::Unreadable`] that names the file of `source`. It reads what
+/// [`document_to_markdown`](crate::document::markdown::document_to_markdown)
+/// writes back into the same blocks, containers and spans.
+pub fn markdown_document(text: &str, source: Source) -> Result<Document> {
     let text = with_line_feeds(text);
     check_table_cells(Path::new(&source.file_name), &text)?;
     let mut walk = Walk::new(Lines::new(&text));

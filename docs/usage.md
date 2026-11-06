@@ -571,9 +571,9 @@ Prints the whole book as the reader extracted it.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--format <format>` | `markdown` | `markdown` prints the text with the book's headings as Markdown headings; `json` prints the document: metadata, outline, and every block with its kind, section and locator. `--json` is the same as `--format json`. |
+| `--format <format>` | `markdown` | `markdown` prints the book as Markdown, with the headings, lists, quotes, tables, code blocks, notes and inline marks that the reader found; `json` prints the document: metadata, outline, and every block with its kind, section and locator. `--json` is the same as `--format json`. |
 
-`extract` reads the file on every call and neither reads nor writes the index, so it works on a book that was never indexed. The Markdown starts with the title as a `#` heading. A heading of level n gets n `#`, at most six, a list item starts with `- `, and a note is a `>` quote, with its label in brackets when it has one. A PDF marks each new page with `<!-- page N -->`. Running heads, page numbers and other lines the PDF reader set apart as page furniture are left out.
+`extract` reads the file on every call and neither reads nor writes the index, so it works on a book that was never indexed. The Markdown starts with the title as a `#` heading when the file gives one, which a Markdown file does not. A heading of level n gets n `#`, at most six. Text that would read as Markdown syntax is escaped with `\`, so that a paragraph starting `1. ` stays a paragraph. The output of a Markdown file therefore reads back as the same blocks, containers and inline marks, with only the line numbers changed. A PDF marks each new page with `<!-- page N -->`. Running heads, page numbers and other lines the PDF reader set apart as page furniture are left out. [document-model.md](document-model.md) lists what each block and mark becomes, and what does not read back the same.
 
 ```console
 $ ebook-hero extract tests/fixtures/alice.epub
@@ -1092,7 +1092,7 @@ passage 103 · CHAPTER VIII. The Queen’s Croquet-Ground ¶61–63
 Exact in passage 85
 ```
 
-`read::locator_text` prints a locator as the command line does. Beside `Session`, three functions serve programs that work with a whole book: `extract::extract` reads a file into a `Document` without the cache, `document::markdown::document_to_markdown` writes one as `extract` prints it, and `index::cache::sha256_file` gives the hash that `extract` takes.
+`read::locator_text` prints a locator as the command line does. Beside `Session`, four functions serve programs that work with a whole book: `extract::extract` reads a file into a `Document` without the cache, `extract::markdown::markdown_document` reads Markdown text a program already holds, `document::markdown::document_to_markdown` writes a `Document` as `extract` prints it, and `index::cache::sha256_file` gives the hash that `extract` takes.
 
 ## Recipes
 
@@ -1142,7 +1142,7 @@ ebook-hero extract book.pdf > book.md
 ebook-hero extract book.pdf --format json > book.json
 ```
 
-The Markdown keeps the headings, paragraphs, list items and notes, and drops page furniture. The JSON adds every block's kind, section and locator, and keeps the furniture in a list of its own. A program that already has a session can write the cached document instead, which is the same document:
+The Markdown keeps the headings, lists, quotes, tables, code blocks, notes and inline marks that the reader found, and drops page furniture. The JSON adds every block's kind, section and locator, and keeps the furniture in a list of its own. A program that already has a session can write the cached document instead, which is the same document:
 
 ```rust
 use ebook_hero::document::markdown::document_to_markdown;

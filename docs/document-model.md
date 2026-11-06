@@ -490,41 +490,100 @@ The `Document` holds one pair of offsets itself, `Span.start` and `Span.end`. Th
 
 ## Markdown rendering
 
-`src/document/markdown.rs` writes a `Document` as Markdown for `ebook-hero extract` when JSON is not asked for. `document_to_markdown` writes `# {title}` when `metadata.title` is known, then the blocks. `blocks_to_markdown` separates blocks with a blank line and ends the text with one newline. With no blocks it writes nothing but the title line, if there is a title.
+`src/document/markdown.rs` writes a `Document` as Markdown for `ebook-hero extract` when JSON is not asked for. It writes each block inside the containers that hold it, marks the spans over its text and escapes the text, so that the Markdown reader reads the output back as the document it was written from. For a document read from a Markdown file, reading `document_to_markdown` of it gives the same blocks in order, with the same kind, text, `within` and spans, and the same containers. Only the locators differ, because lines move. Three tests in `tests/markdown.rs` check this: `every_doc_reads_back_the_same` on every file in `docs/`, `generated_documents_read_back_the_same` on 500 documents that a seeded generator builds, and `generated_markdown_reads_back_the_same` on what the reader makes of 500 generated Markdown texts.
 
-| Block | Markdown |
+`document_to_markdown` writes `# {title}` when `metadata.title` is known, then the blocks, with a blank line between one element and the next. A Markdown file defines no title, so its output starts with its first block, and reading it back adds no heading. A PDF block on a new page is preceded by `<!-- page N -->`, where N is the physical page; the reader drops comments, so these marks are gone on reading back. The writer writes nothing for `furniture`, `outline`, `warnings`, `sections`, `files` or `page_labels`, nor for a block's `section` and `ids`, which the reader derives again from the headings. The title and a level-1 heading both get one `#`, so a book whose chapters are `h1` shows its chapter headings at the title's level.
+
+### Blocks and containers
+
+A container writes its prefix before each line of the blocks inside it, so prefixes stack as containers nest: a paragraph in an item of a list inside a quote is written `> - text`.
+
+| Kind or container | Markdown |
 |---|---|
-| `Heading { level }` | `#` repeated `level` times, clamped to 1 to 6, a space, the text |
-| `Paragraph` | The text |
-| `ListItem` | `- ` and the text |
-| `Note { label }` | `> [label] text`, or `> text` without a label; each line of the text gets its own `> ` |
-| `Code { .. }`, `Rule` | The text as it is, as for a paragraph: a code block's lines without a fence, and for a rule nothing between its blank lines. The renderer ignores containers and spans. |
+| `Heading { level }` | `#` repeated `level` times, clamped to 1 to 6, a space and the text. Only a setext heading, of level 1 or 2, can hold a line break, so such a heading that holds a `Break` is written as its lines underlined by `===` or `---`, and a deeper heading writes its breaks as spaces. |
+| `Paragraph` | Its text, a `Break` ending the line with `\`. |
+| `Code { language }` | A fence of at least three backticks, one more than the longest run of backticks in the code, with the language after it. A backtick fence cannot name a language that holds a backtick, so such a language gets a fence of tildes. |
+| `Rule` | `---`. As the first line of a list item it is `___`, because `- ---` reads as one rule across the line. |
+| `List { ordered, start }`, `Item` | The item's first line after `-`, or after its number and `.` counted from `start`, and its other lines indented to where the first line's content starts. Markdown reads two lists side by side as one list unless their markers differ, so a list right after a list of its kind takes `*` or `)`. A blank line separates the items only when one of them holds more than one block, because Markdown needs one there. |
+| `Quote` | `> ` before each line, and `>` alone on a blank one. |
+| `Note { label }` | `[^label]:` before the first line and four spaces before the others, where the note stands. A note without a label takes the marker of the first reference to it, or else its number among the notes. |
+| `Table`, `Row`, `Cell` | A GFM pipe table, one row per line, so a cell of several blocks has them on its line, separated by a space. GFM requires a header line, so a table whose first row is no header row gets an empty one. |
+| `ListItem` and `Note` blocks | The PDF and EPUB readers write these without containers: a list item as `- ` and its text, a note as a paragraph. |
 
-A PDF block whose `page` differs from the previous PDF block's is preceded by `<!-- page N -->`, where N is the physical page. EPUB blocks get no page comments, printed pages included. The renderer writes nothing for `furniture`, `outline`, `warnings`, `sections`, `files` or `page_labels`, nor for a block's `section`, `ids` or `spans`.
-
-From the tests, a PDF with the title "Test Book" and one paragraph renders as:
-
-```markdown
-# Test Book
-
-<!-- page 1 -->
-
-One.
-```
-
-An EPUB list item, a labelled note and an unlabelled note render as:
+From the tests, this Markdown reads back as written:
 
 ```markdown
-- First
+> 1. a
+>
+>    - b
+>
+>    c
 
-> [1] See chapter 2.
+- x
+- y
 
-> Aside.
+* z
+
+3. n
+
+[^n]: Note.
+
+    More.
 ```
+
+A table with no header row and a cell of two paragraphs, `A` and `B`, is written:
+
+```markdown
+|  |  |
+| --- | --- |
+| A B | C |
+```
+
+### Spans
+
+| Span | Markdown |
+|---|---|
+| `Emphasis`, `Strong` | `*` and `**`, or `_` and `__` where [Delimiters of emphasis and strong](#delimiters-of-emphasis-and-strong) says. |
+| `Strikethrough` | `~~` |
+| `Code` | Backticks, one more than the longest run of backticks in the code, with a space inside each end when the code starts or ends with a backtick, or starts and ends with a space, since CommonMark strips one space from each end. |
+| `Link { href }` | `[text](href)`. A destination that holds a space or a control character goes in angle brackets, and the parentheses of a bare one are escaped unless they pair up. |
+| `Break { lines }` | `\` at the end of the line, once for each line. |
+| `NoteRef { marker }` | `[^marker]`, or the label of the note it leads to when the two differ in more than case. The reader matches a reference to its note ignoring case, so a marker that differs only in case reads back as written and still leads to the note. |
+| `PageBreak`, `Math` | Nothing; a formula's text is written as text. |
+
+### Escaping
+
+The writer escapes a character with `\` only where it could start syntax, so that prose stays readable: `snake_case, 2 * 3 < 4 and 5 ~ 6` is written as it is. It writes the text between two delimiters as one piece without knowing what comes next, so a character at either end of a piece is escaped whenever what may be written beside it could make it syntax. It escapes:
+
+- `` ` `` and `[` everywhere, and `]` in a link's text;
+- `*` and `~` unless the run they belong to has a space on each side, where it can neither open nor close;
+- `_` unless its run stands between two spaces, or between two letters or digits, as in `snake_case`;
+- `\` before ASCII punctuation and at the end of a piece;
+- `<` unless a space follows it, since an HTML tag or an autolink starts with `<` and another character, and the reader drops HTML tags;
+- `&` where it starts what looks like an entity, such as `&amp;`;
+- `|` in a table cell, even inside a code span or a link destination;
+- `!` before a link or a note reference, which it would turn into an image;
+- at the start of a paragraph's line, what would start a block there or change the line above: the `#` of a heading, `>`, a list marker such as `-`, `+` or `1.`, a line of `-` or `=`, which would underline the line above as a heading, a line that reads as a table's delimiter row, and `:` after note references, which would define the note;
+- in a heading, a run of `#` that ends the text, which would close the heading.
+
+A note reference changes what may follow it. `[^1](b)` reads as a link, so a `(` after a reference is escaped. `[^1]\[` and `[^1][b](c)` both undo the reference, so the writer puts an empty comment, `<!---->`, between a reference and a `[` after it; the reader drops comments. The same comment separates two code spans or two strikethroughs that touch, whose delimiters would otherwise join one run.
+
+### Delimiters of emphasis and strong
+
+pulldown-cmark decides from the characters beside a run of `*` or `_` whether the run can open or close emphasis, and pairs runs under CommonMark's rule of three, which counts the length of whole runs. Writing every span with `*` therefore fails in two ways. Delimiters side by side join one run, which splits from the inside out, strong first: `***a***` reads as emphasis around strong, so strong around emphasis over the same text has to be written `**_a_**`. And a run between two punctuation characters can both open and close: in `(*a *“b”**)` the run `**` closes neither span, while `(*a _“b”_*)` reads as emphasis inside emphasis.
+
+The writer therefore writes each delimiter of emphasis and strong as a placeholder, and chooses its character once the whole block is written and what stands beside every delimiter is known. It takes the spans in the order they open, so that the spans around one are chosen before it, and gives each `*` unless its delimiters would then not pair as written, in which case it gives `_`. A span that fits neither sends the search back to try the other character for an earlier span. After 10,000 tries in one block the search gives way to taking, span by span, the first character that fits, or `*`. The test of a fit follows pulldown-cmark's rules: which characters beside a run let it open or close, how a joined run splits, and when the rule of three keeps two runs from pairing. Trying `*` first keeps the usual forms: emphasis around strong comes out as `***a***`, and strong around emphasis as `**_a_**`.
+
+A note reference reads back at the same point on either side of a delimiter, so the writer chooses the side. It writes the reference outside, as in `[^1]*a*`, because after a letter `*[^1]a*` can no longer open. A span whose text starts or ends with a space next to a reference, as `__[^1] (d)__` gives, keeps the reference inside, beside the delimiter, since no delimiter opens before a space or closes after one. After such a closer the writer adds a space, which normalization joins to the space the span ends with.
+
+### What does not read back the same
+
+- A heading whose text as written differs from its normalized text, such as one with a ligature, a no-break space, two spaces in a row or a decomposed accent. The reader takes a heading's id from its text as written, as GitHub does, but the document stores only the normalized text, so the heading gets another id after a round trip and a `#` link to it leads elsewhere. No heading in `docs/` is such a heading.
+- Structure that Markdown cannot write, which only a PDF or EPUB document holds: a cell of several blocks becomes one paragraph, a list or code block in a cell becomes inline text, a `Break` in a cell or in a heading below level 2 becomes a space, and a `PageBreak` or `Math` span leaves no mark.
+- Some emphasis and strong nested three deep along a shared edge, next to punctuation and note references. Of 20,000 generated Markdown texts that nest delimiters three deep around punctuation, 22 read back with a different structure. `generated_documents_read_back_the_same` therefore nests emphasis and strong only two deep. `generated_markdown_reads_back_the_same` runs the first 500 of the generated texts, all of which read back the same.
+- Emphasis inside emphasis inside emphasis over the same punctuation, such as `“q”`. No Markdown gives it, since the innermost `*` or `_` closes the outermost, so the reader never produces it either.
 
 The `read` tool does not use this file. It writes its own Markdown from passages (`render` in `src/read.rs`), with a `<!-- passage N · locator -->` comment before each passage.
-
-The title and a level-1 heading both get one `#`, so a book whose chapters are `h1` shows its chapter headings at the title's level. Block text is written without escaping. A paragraph that starts with `# ` or `1. ` renders as a heading or a numbered list in a Markdown viewer, and text such as `<b>` is read as HTML.
 
 ## Limits
 

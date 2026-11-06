@@ -17,7 +17,7 @@ use zip::ZipArchive;
 use crate::document::{Block, BlockKind, Document, Format, Section, Source};
 use crate::error::{Error, Result};
 
-/// How far into a file the `%PDF-` marker may start.
+/// How far into a file that is not text the `%PDF-` marker may start.
 const PDF_MARKER_WINDOW: u64 = 1024;
 const PDF_MARKER: &[u8] = b"%PDF-";
 const EPUB_MIMETYPE: &str = "application/epub+zip";
@@ -25,16 +25,22 @@ const EPUB_CONTAINER: &str = "META-INF/container.xml";
 /// How many bytes the UTF-8 check reads at a time.
 const UTF8_CHUNK: u64 = 64 * 1024;
 
-/// Tells the format of a file from its content, never from its name.
+/// Tells the format of a file from its content, never from its name. The
+/// tests run in this order:
 ///
-/// A file with `%PDF-` in its first 1024 bytes is a PDF. A ZIP archive whose
-/// `mimetype` entry reads `application/epub+zip`, or which holds
-/// `META-INF/container.xml`, is an EPUB. A file that is neither is Markdown
-/// when its bytes are UTF-8, after an optional byte-order mark, because every
-/// UTF-8 text is a CommonMark document; a plain text file is therefore
-/// Markdown. Only the first [`MAX_MARKDOWN_BYTES`](markdown::MAX_MARKDOWN_BYTES)
-/// are checked, so that a longer text file reaches the reader and fails there
-/// with its size. Anything else is unsupported.
+/// 1. A file that starts with `%PDF-` is a PDF.
+/// 2. A ZIP archive whose `mimetype` entry reads `application/epub+zip`, or
+///    which holds `META-INF/container.xml`, is an EPUB.
+/// 3. A file whose bytes are UTF-8, after an optional byte-order mark, is
+///    Markdown, because every UTF-8 text is a CommonMark document; a plain
+///    text file is therefore Markdown. Only the first
+///    [`MAX_MARKDOWN_BYTES`](markdown::MAX_MARKDOWN_BYTES) are checked, so
+///    that a longer text file reaches the reader and fails there with its
+///    size.
+/// 4. A file with `%PDF-` later in its first 1024 bytes is a PDF, since a PDF
+///    may have bytes before its header. Text is tested first, so a Markdown
+///    file that mentions the marker stays Markdown.
+/// 5. Anything else is unsupported.
 pub fn detect_format(path: &Path) -> Result<Format> {
     let metadata = fs::metadata(path).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => Error::NotFound {
@@ -53,7 +59,7 @@ pub fn detect_format(path: &Path) -> Result<Format> {
         .take(PDF_MARKER_WINDOW)
         .read_to_end(&mut head)
         .map_err(|e| unreadable(path, &e))?;
-    if head.windows(PDF_MARKER.len()).any(|w| w == PDF_MARKER) {
+    if head.starts_with(PDF_MARKER) {
         return Ok(Format::Pdf);
     }
     if is_epub_archive(&file) {
@@ -63,6 +69,9 @@ pub fn detect_format(path: &Path) -> Result<Format> {
     // The byte-order mark is UTF-8 itself, so it needs no case of its own.
     if is_utf8(&file, markdown::MAX_MARKDOWN_BYTES).map_err(|e| unreadable(path, &e))? {
         return Ok(Format::Markdown);
+    }
+    if head.windows(PDF_MARKER.len()).any(|w| w == PDF_MARKER) {
+        return Ok(Format::Pdf);
     }
     Err(Error::Unsupported {
         path: path.to_path_buf(),

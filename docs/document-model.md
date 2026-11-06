@@ -167,7 +167,7 @@ A `Document` holds the text as two lists of blocks: `blocks` for the reading tex
 |---|---|
 | `sha256` | The SHA-256 of the file's bytes as 64 hex digits, from `sha256_file` in `src/index/cache.rs`. It names the book's cache directory. |
 | `file_name` | The last component of the path, converted to UTF-8 with invalid bytes replaced. |
-| `format` | `"pdf"`, `"epub"` or `"markdown"`, decided from the file's content by `detect_format` in `src/extract/mod.rs`. A file that is neither a PDF nor an EPUB is Markdown when its bytes are UTF-8. |
+| `format` | `"pdf"`, `"epub"` or `"markdown"`, decided from the file's content by `detect_format` in `src/extract/mod.rs`, whose tests `docs/markdown-reading.md` lists in order. |
 
 ### Metadata
 

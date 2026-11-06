@@ -350,8 +350,9 @@ fn detects_formats() {
 
     let pdf = write("a.pdf", b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n1 0 obj\n");
     assert_eq!(detect(&pdf).unwrap(), Format::Pdf);
-    // The name does not matter, and the marker may follow a short preamble.
-    let mut padded = vec![b' '; 1000];
+    // The name does not matter, and the marker may follow a short preamble
+    // that is not text.
+    let mut padded = vec![0xFF; 1000];
     padded.extend_from_slice(b"%PDF-1.4");
     assert_eq!(detect(&write("noext", &padded)).unwrap(), Format::Pdf);
     // A binary preamble, since text would be Markdown.
@@ -407,6 +408,63 @@ fn detects_formats() {
         detect(&missing),
         Err(Error::NotFound { path }) if path == missing
     ));
+}
+
+/// Whether `%PDF-` stands in the first kilobyte of `bytes`, where a PDF
+/// reader looks for it.
+fn marked_as_pdf(bytes: &[u8]) -> bool {
+    bytes[..bytes.len().min(1024)]
+        .windows(5)
+        .any(|w| w == b"%PDF-")
+}
+
+#[test]
+fn text_that_mentions_the_pdf_marker_after_its_start_is_markdown() {
+    for doc in ["docs/markdown-reading.md", "docs/epub-reading.md"] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(doc);
+        assert!(marked_as_pdf(&fs::read(&path).unwrap()), "{doc}");
+
+        assert_eq!(detect_format(&path).unwrap(), Format::Markdown, "{doc}");
+    }
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("notes.md");
+    fs::write(
+        &path,
+        format!("{}`%PDF-1.4` starts a PDF.\n", "# Notes\n\n".repeat(10)),
+    )
+    .unwrap();
+    assert_eq!(detect_format(&path).unwrap(), Format::Markdown);
+}
+
+#[test]
+fn the_pdf_marker_makes_a_pdf_at_the_start_or_after_bytes_that_are_not_text() {
+    let dir = TempDir::new().unwrap();
+    let write = |name: &str, bytes: &[u8]| -> PathBuf {
+        let path = dir.path().join(name);
+        fs::write(&path, bytes).unwrap();
+        path
+    };
+
+    let header = write("header.txt", b"%PDF-1.4\nplain text\n");
+    assert_eq!(detect_format(&header).unwrap(), Format::Pdf);
+    let mut junk = vec![0xFF; 100];
+    junk.extend_from_slice(b"%PDF-1.4\n");
+    assert_eq!(
+        detect_format(&write("junk.bin", &junk)).unwrap(),
+        Format::Pdf
+    );
+
+    // An EPUB archive whose second entry holds the marker.
+    let epub = dir.path().join("marked.epub");
+    write_zip(
+        &epub,
+        &[
+            ("mimetype", b"application/epub+zip"),
+            ("a.txt", b"%PDF-1.4"),
+        ],
+    );
+    assert!(marked_as_pdf(&fs::read(&epub).unwrap()));
+    assert_eq!(detect_format(&epub).unwrap(), Format::Epub);
 }
 
 #[test]

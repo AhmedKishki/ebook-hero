@@ -7,7 +7,7 @@
 ```mermaid
 flowchart TD
     file["Book file"] --> detect{"detect_format<br/>src/extract/mod.rs"}
-    detect -->|"%PDF- in the first 1024 bytes"| pdf["PDF reader"]
+    detect -->|"%PDF- at byte 0, or in the first<br/>1024 bytes of a file that is not text"| pdf["PDF reader"]
     detect -->|"UTF-8 text"| markdown["Markdown reader"]
     detect -->|"anything else"| unsupported["Error: Unsupported"]
     detect -->|"ZIP with META-INF/container.xml<br/>or mimetype application/epub+zip"| open["rbook opens the package:<br/>metadata, manifest, spine, table of contents"]
@@ -38,10 +38,11 @@ flowchart TD
 `extract` in `src/extract/mod.rs` calls `detect_format`, which decides from the file's content and never from its name.
 
 1. A missing path is `NotFound`, and a path that is not a regular file is `NotAFile`.
-2. A file with `%PDF-` anywhere in its first 1024 bytes (`PDF_MARKER_WINDOW`) is a PDF. This test runs first, so a file that passes it never reaches the EPUB test.
-3. Otherwise a ZIP archive is an EPUB when it holds `META-INF/container.xml`, or when its `mimetype` entry, read up to 64 bytes and trimmed of whitespace, equals `application/epub+zip`.
+2. A file that starts with `%PDF-` is a PDF.
+3. Otherwise a ZIP archive is an EPUB when it holds `META-INF/container.xml`, or when its `mimetype` entry, read up to 64 bytes and trimmed of whitespace, equals `application/epub+zip`. The marker counts before this test only at byte 0, so an archive that holds `%PDF-` in an early entry is still an EPUB.
 4. Otherwise a file whose bytes are UTF-8 is a Markdown file, which `docs/markdown-reading.md` describes.
-5. Anything else is `Unsupported`, with the message "unsupported format; expected a PDF, an EPUB or a UTF-8 text file".
+5. Otherwise a file with `%PDF-` anywhere in its first 1024 bytes (`PDF_MARKER_WINDOW`) is a PDF, since a PDF may carry binary bytes before its header.
+6. Anything else is `Unsupported`, with the message "unsupported format; expected a PDF, an EPUB or a UTF-8 text file".
 
 The test does not check that `mimetype` is the archive's first entry and stored uncompressed, as the EPUB container format requires. An archive that breaks those rules still passes, and opening the package decides whether it can be read. `extract` then builds the `Source` from the SHA-256 its caller passes, the file name and the format, and calls `read_epub`.
 

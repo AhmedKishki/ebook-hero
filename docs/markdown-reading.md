@@ -7,10 +7,11 @@
 ```mermaid
 flowchart TD
     file["Book file"] --> detect{"detect_format<br/>src/extract/mod.rs"}
-    detect -->|"%PDF- in the first 1024 bytes"| pdf["PDF reader"]
-    detect -->|"EPUB archive"| epub["EPUB reader"]
-    detect -->|"UTF-8 in the first 64 MiB"| size{"At most 64 MiB?"}
-    detect -->|"anything else"| unsupported["Error: Unsupported"]
+    detect -->|"1. %PDF- at byte 0"| pdf["PDF reader"]
+    detect -->|"2. EPUB archive"| epub["EPUB reader"]
+    detect -->|"3. UTF-8 in the first 64 MiB"| size{"At most 64 MiB?"}
+    detect -->|"4. not text, %PDF- in<br/>the first 1024 bytes"| pdf
+    detect -->|"5. anything else"| unsupported["Error: Unsupported"]
     size -->|no| big["Error: Unreadable,<br/>with the size and the cap"]
     size -->|yes| prepare["Strip a byte-order mark,<br/>write every line ending as LF"]
     prepare --> cells{"Tables hold at most<br/>250,000 cells?"}
@@ -29,7 +30,17 @@ flowchart TD
 
 ## Detecting the format
 
-`extract` in `src/extract/mod.rs` calls `detect_format`, which decides from the file's content and never from its name. Its first two tests are the ones `docs/epub-reading.md` describes: `%PDF-` in the first 1024 bytes makes a PDF, and an EPUB archive makes an EPUB. A file that passes neither is Markdown when its bytes are UTF-8, because every UTF-8 text is a valid CommonMark document. A plain `.txt` file therefore opens as Markdown, and so does an empty file, which the reader then refuses for having no text. A UTF-8 byte-order mark needs no test of its own, since its three bytes are UTF-8 themselves. Every other file is `Unsupported`, with the message "unsupported format; expected a PDF, an EPUB or a UTF-8 text file". Text in another encoding fails this way, such as a Latin-1 file with an accented letter or a UTF-16 file, whose byte-order mark is not UTF-8.
+`extract` in `src/extract/mod.rs` calls `detect_format`, which decides from the file's content and never from its name. It runs five tests in order:
+
+1. A file that starts with `%PDF-` is a PDF.
+2. A ZIP archive that holds `META-INF/container.xml`, or whose `mimetype` entry reads `application/epub+zip`, is an EPUB.
+3. A file whose bytes are UTF-8 is Markdown, because every UTF-8 text is a valid CommonMark document.
+4. A file with `%PDF-` later in its first 1024 bytes is a PDF.
+5. Every other file is `Unsupported`, with the message "unsupported format; expected a PDF, an EPUB or a UTF-8 text file".
+
+The marker test is split around the text test because a PDF may carry bytes before its header, while a Markdown file may mention that header in its text. This document names `%PDF-` in its first kilobyte, and when the marker counted anywhere in that kilobyte before any other test, it read as a broken PDF. The tolerance for bytes before the header is there for binary junk, so it applies only to a file that is not text, and a text file is a PDF only when it starts with the marker. The test `text_that_mentions_the_pdf_marker_after_its_start_is_markdown` reads this document and `docs/epub-reading.md` as Markdown.
+
+By test 3, a plain `.txt` file opens as Markdown, and so does an empty file, which the reader then refuses for having no text. A UTF-8 byte-order mark needs no test of its own, since its three bytes are UTF-8 themselves. Text in another encoding fails test 3 and is `Unsupported`, such as a Latin-1 file with an accented letter or a UTF-16 file, whose byte-order mark is not UTF-8.
 
 `is_utf8` reads the file 64 KiB at a time (`UTF8_CHUNK`), so detection holds one chunk in memory however long the file is. The bytes of a character that a read cuts in two are carried into the next read. The check stops at the first byte that is not UTF-8, so a binary file is usually refused within its first chunk. It reads no more than `MAX_MARKDOWN_BYTES`, so a longer text file passes detection and reaches the reader, whose error gives the file's size and the cap instead of "unsupported format".
 
@@ -179,6 +190,7 @@ HTML blocks and front matter may hold text that the model cannot store, so each 
 - Weak structure. A column's alignment and whether a list is tight or loose are not stored.
 - Images. An image gives no text, and its alt text is left out.
 - Encodings. Only UTF-8 is read, so a text file in another encoding is `Unsupported`.
+- Detection by the PDF marker. A text file that starts with `%PDF-` is read as a PDF and fails as one, and a PDF whose header follows text instead of binary bytes reads as Markdown.
 - Extensions. Task lists, math, superscript, subscript, definition lists and heading attributes read as plain CommonMark, and their markers stay in the text.
 - Size. A file over 64 MiB is refused.
 - Table cells. A file whose tables could hold more than 250,000 cells is refused, because the size cap does not bound the memory pulldown-cmark spends on the cells it adds to short rows: 120 KB of wide tables took 500 MB. The count errs toward refusing, so a file with hundreds of delimiter-like lines in a row, such as in a code block, can be refused although it holds no such table.

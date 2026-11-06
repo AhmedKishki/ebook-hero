@@ -47,7 +47,7 @@ The locator of a PDF block has three fields:
 
 ```mermaid
 flowchart TD
-    A["PDF file"] --> B["1. detect_format<br/>PDF marker in the first 1024 bytes"]
+    A["PDF file"] --> B["1. detect_format<br/>PDF marker at byte 0, or in the first<br/>1024 bytes of a file that is not text"]
     B --> C["2. read_pdf<br/>open with pdf_oxide, refuse a locked file"]
     C --> D["3. read_page, split_line<br/>lines rebuilt from pdf_oxide's words"]
     D --> E{"4. looks_glued<br/>did the words run together?"}
@@ -81,7 +81,7 @@ flowchart TD
 
 ### 1. Format detection
 
-`detect_format` decides the format from the file's content and never from its name, so a PDF saved as `book.bin` still reads as a PDF. A file with the marker `%PDF-` anywhere in its first `PDF_MARKER_WINDOW` = 1024 bytes is a PDF. A file without the marker goes on to the EPUB test and then to the UTF-8 test that makes it a Markdown file, and a file that passes none of them fails with `Unsupported`. `extract` hands a PDF to `read_pdf` with a `Source` that holds the file's SHA-256, its name and the format.
+`detect_format` decides the format from the file's content and never from its name, so a PDF saved as `book.bin` still reads as a PDF. A file that starts with the marker `%PDF-` is a PDF. Any other file goes on to the EPUB test and then to the UTF-8 test that makes it a Markdown file. A file that passes neither is a PDF when the marker stands anywhere in its first `PDF_MARKER_WINDOW` = 1024 bytes, because a PDF may carry binary bytes before its header. Text is tested before this wider window, so a Markdown file that mentions `%PDF-` is not read as a PDF. A file that passes none of these tests fails with `Unsupported`. `extract` hands a PDF to `read_pdf` with a `Source` that holds the file's SHA-256, its name and the format.
 
 ### 2. Opening the file
 

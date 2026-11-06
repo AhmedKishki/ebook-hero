@@ -62,16 +62,11 @@ Three kinds of difference are outside the promise. The first two carry no inform
 
 ### Containers
 
-A block gets `within: Vec<Container>`, the containers it sits in, outermost first, in the way `section` lists the headings above it. JSON leaves `within` out when it is empty.
+The `Document` gains `containers: Vec<Container>`, each container stored once, its id being its index. A block gets `within: Vec<u32>`, the ids of the containers it sits in, outermost first, in the way `section` lists the headings above it. JSON leaves either list out when it is empty. Storing each container once keeps a block's path to a few numbers: a table of 1,000 cells would otherwise repeat its table and row in every cell.
 
 ```rust
-pub struct Container {
-    pub id: u32,
-    pub kind: ContainerKind,
-}
-
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ContainerKind {
+pub enum Container {
     /// `start` is the first number of an ordered list, kept because readers
     /// cite an item by its number.
     List { ordered: bool, start: Option<u64> },
@@ -86,11 +81,34 @@ pub enum ContainerKind {
 }
 ```
 
-Ids count from 0 in the order the containers open, so two adjacent lists differ by id. A paragraph in an item of a list inside a quote has `within` like `[quote 0, list 1, item 3]`, and a cell's paragraph has `within` like `[table 4, row 5, cell 6]`. A table is therefore built like a list, and its cells hold ordinary blocks.
+Containers are stored in the order they open, so two adjacent lists differ by id. A paragraph in an item of a list inside a quote has `within` like `[0, 1, 3]` for quote 0, list 1 and item 3. A table is built like a list, and its cells hold ordinary blocks:
+
+```markdown
+## Registers
+
+| Register | Address |
+|----------|---------|
+| STATUS   | 0x1A    |
+| CONTROL  |         |
+```
+
+gives `containers` `[table, row (header), cell, cell, row, cell, cell, row, cell, cell]` with ids 0 to 9, and these blocks, all under the section `Registers`:
+
+| id | kind | text | within | line |
+|---|---|---|---|---|
+| 0 | heading 2 | Registers | | 1 |
+| 1 | paragraph | Register | 0, 1, 2 | 3 |
+| 2 | paragraph | Address | 0, 1, 3 | 3 |
+| 3 | paragraph | STATUS | 0, 4, 5 | 5 |
+| 4 | paragraph | 0x1A | 0, 4, 6 | 5 |
+| 5 | paragraph | CONTROL | 0, 7, 8 | 6 |
+| 6 | paragraph | (empty) | 0, 7, 9 | 6 |
+
+An EPUB cell holding two paragraphs gives two blocks with the same `within`.
 
 A container exists only through the blocks inside it, so an empty one would vanish. A reader therefore writes an empty `Paragraph` into a container that would otherwise hold no block, such as an empty cell or an empty list item.
 
-Three models of nesting were weighed. A tree, as in Pandoc's AST or mdast, holds the same structure, but a block's id would stop being its index in `blocks`, and every reader of the `Document` would have to walk the tree. Docling's DoclingDocument keeps a flat list with references to parents, so a consumer follows links to learn where a block sits. The path puts that answer on the block, and the view opens and closes containers by comparing the paths of neighbouring blocks in one pass.
+Three models of nesting were weighed. A tree, as in Pandoc's AST or mdast, holds the same structure, but a block's id would stop being its index in `blocks`, and every reader of the `Document` would have to walk the tree. Docling's DoclingDocument keeps a flat list with references to parents, so a consumer follows links to learn where a block sits. The path puts that answer on the block, and the view opens and closes containers by comparing the paths of neighbouring blocks in one pass. The containers' kinds sit in one list beside the blocks, so the path costs a few ids per block.
 
 ### Block kinds
 
@@ -250,7 +268,7 @@ Images stay out, as now. A link is resolved by the rule that a missing target in
 
 ## The window
 
-- **book.js** sets `MIN_SCHEMA_VERSION` to 3. `viewOf` passes `within`, `spans` and the outline to the page.
+- **book.js** sets `MIN_SCHEMA_VERSION` to 3. `viewOf` passes `containers`, each block's `within` and `spans`, and the outline to the page.
 - **viewer.js** becomes a factory, `createViewer(element)`, so that the Book and Help tabs each hold their own instance of one view. It draws the blocks in one pass with a stack of open container elements. For each block it compares the block's `within` with the stack, closes the containers that differ, opens the new ones (`ol` with `start`, `ul`, `li`, `blockquote`, `table`, `tr`, `th` in a header row and `td` elsewhere), and draws the block with its spans as nested inline elements. Text goes in only through `textContent`, so a book cannot add markup to the window. Span offsets count code points, so the view converts them to UTF-16 indexes once per block.
 - **Links.** The view acts on `to`. `Block` scrolls to the block, as a passage link does, and a `NoteRef` with a block does the same. `File` opens the file in the same view, resolved against the open document's directory. An `Address` with http or https opens in the browser through `openLink`. Any other address, and `Nowhere`, is drawn as text.
 - **Contents.** Both instances build their contents list from the `Document`'s outline, by one rule for every document.
@@ -263,7 +281,7 @@ Images stay out, as now. A link is resolved by the rule that a missing target in
 - `docs/markdown-reading.md` is new and explains the reader's algorithm.
 - `docs/epub-reading.md` describes the structure the EPUB reader now keeps.
 - `docs/usage.md` says that Markdown files are read and how they are detected, gives the new `Unsupported` message and the Markdown locator form, and describes what `extract` writes.
-- AGENTS.md's scope says "one PDF, EPUB or Markdown file per call". Its lines on `gui/markdown.js` and `gui/help.js` go, and its line on the fields `gui/book.js` reads gains `within`, `spans` and `outline`.
+- AGENTS.md's scope says "one PDF, EPUB or Markdown file per call". Its lines on `gui/markdown.js` and `gui/help.js` go, and its line on the fields `gui/book.js` reads gains `containers`, `within`, `spans` and `outline`.
 - `docs/pdf-reading.md` says that a note is a `Note` container.
 - Versions: `SCHEMA_VERSION` 3, `MARKDOWN_READER_VERSION` 1, and `PDF_READER_VERSION`, `EPUB_READER_VERSION` and `PASSAGES_VERSION` up by one. `Cargo.toml` goes to 0.6.0 with a `CHANGELOG.md` entry, and `gui/package.json` goes to 0.3.0.
 - Commits. Each step of the order of work is a commit on the branch, and the last one bumps the versions and adds the changelog entry. Before the pull request the commits are squashed into one release commit, so that main receives one change with its version bump, as AGENTS.md requires and as the 0.5.0 branch landed.

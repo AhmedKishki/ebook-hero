@@ -4,23 +4,27 @@
 //! footnotes, after it has found whether the file starts with front matter,
 //! which the reader leaves out. One pass over its events writes the blocks in
 //! reading order, and a stack of the containers open at each event gives a
-//! block its `within`.
+//! block its `within`. Inline markup becomes spans over the block's text.
+//! Once every block is read, headings get GitHub's ids and links are resolved.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd};
+use unicase::UniCase;
+use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory};
 
 use super::assign_sections;
 use crate::document::{
-    Block, BlockKind, Container, Document, Locator, Metadata, OutlineEntry, SCHEMA_VERSION, Source,
-    Warning,
+    Block, BlockKind, Container, Document, LinkTarget, Locator, Metadata, OutlineEntry,
+    SCHEMA_VERSION, Source, Span, SpanKind, Warning,
 };
 use crate::error::{Error, Result};
-use crate::normalize::normalize;
+use crate::normalize::{RawSpan, normalize_with_spans};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -114,7 +118,7 @@ pub(crate) fn markdown_document(text: &str, source: Source) -> Result<Document> 
     let Walk {
         mut blocks,
         containers,
-        warnings,
+        mut warnings,
         ..
     } = walk;
     if blocks.iter().all(|block| block.text.is_empty()) {
@@ -124,6 +128,8 @@ pub(crate) fn markdown_document(text: &str, source: Source) -> Result<Document> 
         });
     }
     let sections = assign_sections(&mut blocks);
+    give_headings_ids(&mut blocks);
+    warnings.extend(resolve_links(&mut blocks, &containers));
     Ok(Document {
         schema_version: SCHEMA_VERSION,
         source,
@@ -306,10 +312,26 @@ struct OpenContainer {
 /// The block that inline events add their text to.
 struct OpenBlock {
     kind: BlockKind,
-    /// The text as the events give it, before `normalize`.
+    /// The text as the events give it, before normalization.
     raw: String,
+    /// The spans over `raw`, in the order they open.
+    spans: Vec<RawSpan>,
+    /// The spans still open, innermost last, as indexes into `spans`.
+    open_spans: Vec<usize>,
     /// The bytes of the text it covers.
     range: Range<usize>,
+}
+
+impl OpenBlock {
+    fn new(kind: BlockKind, range: Range<usize>) -> OpenBlock {
+        OpenBlock {
+            kind,
+            raw: String::new(),
+            spans: Vec::new(),
+            open_spans: Vec::new(),
+            range,
+        }
+    }
 }
 
 /// An HTML block, which the reader leaves out.
@@ -322,7 +344,7 @@ struct HtmlBlock {
 }
 
 /// One pass over the parser's events. Block events open and close blocks and
-/// containers, and inline events add to the open block's text.
+/// containers, and inline events add to the open block's text and spans.
 struct Walk {
     lines: Lines,
     containers: Vec<Container>,
@@ -373,16 +395,27 @@ impl Walk {
         match event {
             Event::Start(tag) => self.start(tag, range),
             Event::End(tag) => self.end(tag),
-            Event::Text(text) | Event::Code(text) => self.inline(range).push_str(&text),
-            Event::SoftBreak | Event::HardBreak => self.inline(range).push(' '),
-            // A footnote reference adds no characters, and an inline tag is
-            // dropped while the text between tags is kept.
-            Event::FootnoteReference(_) | Event::InlineHtml(_) | Event::Html(_) => {
+            Event::Text(text) => self.inline(range).raw.push_str(&text),
+            Event::Code(text) => self.push_span(&text, SpanKind::Code, range),
+            Event::SoftBreak => self.inline(range).raw.push(' '),
+            Event::HardBreak => self.push_span(" ", SpanKind::Break { lines: 1 }, range),
+            // A footnote reference adds no characters; `resolve_links` finds
+            // its note once every block is read.
+            Event::FootnoteReference(label) => self.push_span(
+                "",
+                SpanKind::NoteRef {
+                    marker: label.to_string(),
+                    block: None,
+                },
+                range,
+            ),
+            // An inline tag is dropped while the text between tags is kept.
+            Event::InlineHtml(_) | Event::Html(_) => {
                 self.inline(range);
             }
             Event::Rule => {
                 self.finish_block();
-                self.push_block(BlockKind::Rule, String::new(), range);
+                self.push_block(BlockKind::Rule, String::new(), Vec::new(), range);
             }
             // Math and task lists are options the reader leaves off.
             Event::InlineMath(_) | Event::DisplayMath(_) | Event::TaskListMarker(_) => {}
@@ -428,8 +461,24 @@ impl Walk {
                 });
             }
             Tag::Image { .. } => self.image_depth = 1,
-            Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. } => {
-                self.inline(range);
+            Tag::Emphasis => self.open_span(SpanKind::Emphasis, range),
+            Tag::Strong => self.open_span(SpanKind::Strong, range),
+            Tag::Strikethrough => self.open_span(SpanKind::Strikethrough, range),
+            Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            } => {
+                // CommonMark makes an email autolink's destination `mailto:`
+                // and the address.
+                let href = match link_type {
+                    LinkType::Email => format!("mailto:{dest_url}"),
+                    _ => dest_url.to_string(),
+                };
+                // `resolve_links` decides where it leads once every block is
+                // read.
+                let to = LinkTarget::Nowhere;
+                self.open_span(SpanKind::Link { href, to }, range);
             }
             // Options the reader leaves off.
             Tag::MetadataBlock(_)
@@ -452,7 +501,9 @@ impl Walk {
             | TagEnd::TableHead
             | TagEnd::TableRow
             | TagEnd::TableCell => self.close_container(),
-            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {}
+            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                self.close_span()
+            }
             // `event` meets these while it leaves an image or an HTML block
             // out; the rest are options the reader leaves off.
             TagEnd::Image
@@ -468,24 +519,51 @@ impl Walk {
 
     fn open_block(&mut self, kind: BlockKind, range: Range<usize>) {
         self.finish_block();
-        self.block = Some(OpenBlock {
+        self.block = Some(OpenBlock::new(kind, range));
+    }
+
+    /// The open block, for an inline event at `range`. Inline content outside
+    /// a paragraph, as in a table cell or an item of a tight list, opens one.
+    fn inline(&mut self, range: Range<usize>) -> &mut OpenBlock {
+        let block = self
+            .block
+            .get_or_insert_with(|| OpenBlock::new(BlockKind::Paragraph, range.clone()));
+        block.range.end = block.range.end.max(range.end);
+        block
+    }
+
+    /// Adds `text` to the open block as a span of `kind`, for the inline event
+    /// at `range`.
+    fn push_span(&mut self, text: &str, kind: SpanKind, range: Range<usize>) {
+        let block = self.inline(range);
+        let start = block.raw.len();
+        block.raw.push_str(text);
+        let covered = start..block.raw.len();
+        block.spans.push(RawSpan {
+            range: covered,
             kind,
-            raw: String::new(),
-            range,
         });
     }
 
-    /// The text of the open block, for an inline event at `range`. Inline
-    /// content outside a paragraph, as in a table cell or an item of a tight
-    /// list, opens one.
-    fn inline(&mut self, range: Range<usize>) -> &mut String {
-        let block = self.block.get_or_insert_with(|| OpenBlock {
-            kind: BlockKind::Paragraph,
-            raw: String::new(),
-            range: range.clone(),
+    /// Opens a span of `kind` where the open block's text ends, for the
+    /// inline event at `range`.
+    fn open_span(&mut self, kind: SpanKind, range: Range<usize>) {
+        let block = self.inline(range);
+        let at = block.raw.len();
+        block.open_spans.push(block.spans.len());
+        block.spans.push(RawSpan {
+            range: at..at,
+            kind,
         });
-        block.range.end = block.range.end.max(range.end);
-        &mut block.raw
+    }
+
+    /// Closes the innermost open span where the open block's text ends.
+    fn close_span(&mut self) {
+        if let Some(block) = &mut self.block
+            && let Some(index) = block.open_spans.pop()
+        {
+            block.spans[index].range.end = block.raw.len();
+        }
     }
 
     /// Writes the open block, if there is one. Every block event closes the
@@ -494,24 +572,35 @@ impl Walk {
         let Some(OpenBlock {
             kind,
             mut raw,
+            spans,
             range,
+            ..
         }) = self.block.take()
         else {
             return;
         };
-        let text = match kind {
+        let (text, spans) = match kind {
             BlockKind::Code { .. } => {
                 if raw.ends_with('\n') {
                     raw.pop();
                 }
-                raw
+                (raw, Vec::new())
             }
-            _ => normalize(&raw),
+            _ => normalize_with_spans(&raw, spans),
         };
-        self.push_block(kind, text, range);
+        // A paragraph that dropped images and tags leave without text is not
+        // written, unless it sits in a container, which it then keeps.
+        if kind == BlockKind::Paragraph
+            && text.is_empty()
+            && spans.is_empty()
+            && self.open.is_empty()
+        {
+            return;
+        }
+        self.push_block(kind, text, spans, range);
     }
 
-    fn push_block(&mut self, kind: BlockKind, text: String, range: Range<usize>) {
+    fn push_block(&mut self, kind: BlockKind, text: String, spans: Vec<Span>, range: Range<usize>) {
         for container in &mut self.open {
             container.holds_block = true;
         }
@@ -519,7 +608,7 @@ impl Walk {
             id: self.blocks.len() as u32,
             kind,
             text,
-            spans: Vec::new(),
+            spans,
             ids: Vec::new(),
             within: self.open.iter().map(|container| container.id).collect(),
             section: None,
@@ -555,7 +644,12 @@ impl Walk {
             {
                 start = row.range.start;
             }
-            self.push_block(BlockKind::Paragraph, String::new(), start..start);
+            self.push_block(
+                BlockKind::Paragraph,
+                String::new(),
+                Vec::new(),
+                start..start,
+            );
         }
         self.open.pop();
     }
@@ -594,6 +688,168 @@ fn outline(blocks: &[Block]) -> Vec<OutlineEntry> {
         .collect()
 }
 
+/// Gives each heading, in reading order, the id GitHub gives it, so that a
+/// repeat is numbered as on GitHub. A heading whose id comes out empty, such
+/// as `!!!`, keeps none, since an empty id names nothing, but the id still
+/// counts as given, as it does in `gui/markdown.js`.
+fn give_headings_ids(blocks: &mut [Block]) {
+    let mut seen = HashMap::new();
+    for block in blocks {
+        if matches!(block.kind, BlockKind::Heading { .. }) {
+            let id = heading_id(&block.text, &mut seen);
+            if !id.is_empty() {
+                block.ids.push(id);
+            }
+        }
+    }
+}
+
+/// The id GitHub gives a heading whose text is `text`, ported from `slugger`
+/// in `gui/markdown.js`: `text` in lower case without the characters other
+/// than letters, marks, numbers, connector punctuation, spaces and `-`, with
+/// each space turned into `-`. `seen` holds the ids given so far, with a count
+/// for each, and a repeated id gets `-1`, `-2` and so on.
+pub(crate) fn heading_id(text: &str, seen: &mut HashMap<String, u32>) -> String {
+    let base: String = text
+        .to_lowercase()
+        .chars()
+        .filter(|&c| c == ' ' || c == '-' || in_heading_id(c))
+        .map(|c| if c == ' ' { '-' } else { c })
+        .collect();
+    let mut slug = base.clone();
+    while seen.contains_key(&slug) {
+        // The first slug tried is `base`, so `base` is in `seen` here.
+        let count = seen.entry(base.clone()).or_insert(0);
+        *count += 1;
+        slug = format!("{base}-{count}");
+    }
+    seen.insert(slug.clone(), 0);
+    slug
+}
+
+/// Whether a heading id keeps `c`: a letter, a mark, a number or connector
+/// punctuation, `\p{L}\p{M}\p{N}\p{Pc}` in the regular expression of
+/// `slugger`.
+fn in_heading_id(c: char) -> bool {
+    matches!(
+        c.general_category_group(),
+        GeneralCategoryGroup::Letter | GeneralCategoryGroup::Mark | GeneralCategoryGroup::Number
+    ) || c.general_category() == GeneralCategory::ConnectorPunctuation
+}
+
+/// Decides where each link and footnote reference of `blocks` leads, once
+/// every block is read, and returns a [`Warning::BrokenLink`] for each one
+/// into the document that leads nowhere.
+///
+/// A footnote reference leads to the first block of the first note whose
+/// label matches its own as pulldown-cmark matches them, ignoring case.
+/// pulldown-cmark makes a reference only when such a note exists, so a
+/// broken one cannot come from a file.
+fn resolve_links(blocks: &mut [Block], containers: &[Container]) -> Vec<Warning> {
+    let mut by_id: HashMap<String, u32> = HashMap::new();
+    let mut notes: HashMap<UniCase<&str>, u32> = HashMap::new();
+    for block in blocks.iter() {
+        for id in &block.ids {
+            by_id.entry(id.clone()).or_insert(block.id);
+        }
+        for &container in &block.within {
+            if let Container::Note { label: Some(label) } = &containers[container as usize] {
+                notes
+                    .entry(UniCase::new(label.as_str()))
+                    .or_insert(block.id);
+            }
+        }
+    }
+    let mut warnings = Vec::new();
+    for block in blocks.iter_mut() {
+        for span in &mut block.spans {
+            let broken = match &mut span.kind {
+                SpanKind::Link { href, to } => {
+                    *to = link_target(href, &by_id);
+                    (*to == LinkTarget::Nowhere && href.starts_with('#')).then(|| href.clone())
+                }
+                SpanKind::NoteRef {
+                    marker,
+                    block: note,
+                } => {
+                    *note = notes.get(&UniCase::new(marker.as_str())).copied();
+                    note.is_none().then(|| format!("[^{marker}]"))
+                }
+                _ => None,
+            };
+            if let Some(href) = broken {
+                warnings.push(Warning::BrokenLink {
+                    href,
+                    block: block.id,
+                });
+            }
+        }
+    }
+    warnings
+}
+
+/// Where a link to `href` leads. A `#` fragment leads to the first block
+/// whose `ids` hold it, after its percent escapes are decoded as
+/// `gui/markdown.js` decodes them, and an empty one to the top of the
+/// document, as in HTML. An address with a scheme leads out of the document,
+/// and a relative path, without its query or fragment, to the file it names.
+/// A fragment that no block holds, an absolute path and an empty `href` lead
+/// nowhere.
+fn link_target(href: &str, ids: &HashMap<String, u32>) -> LinkTarget {
+    if let Some(fragment) = href.strip_prefix('#') {
+        if fragment.is_empty() {
+            return LinkTarget::Block { block: 0 };
+        }
+        let id = percent_decoded(fragment).unwrap_or_else(|| fragment.to_string());
+        return match ids.get(&id) {
+            Some(&block) => LinkTarget::Block { block },
+            None => LinkTarget::Nowhere,
+        };
+    }
+    if has_scheme(href) {
+        return LinkTarget::Address;
+    }
+    let path = href.split(['?', '#']).next().unwrap_or_default();
+    if path.is_empty() || path.starts_with('/') {
+        return LinkTarget::Nowhere;
+    }
+    LinkTarget::File {
+        path: percent_decoded(path).unwrap_or_else(|| path.to_string()),
+    }
+}
+
+/// Whether `href` starts with a URI scheme and its colon, such as `https:` or
+/// `mailto:`.
+fn has_scheme(href: &str) -> bool {
+    let Some((scheme, _)) = href.split_once(':') else {
+        return false;
+    };
+    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// `text` with its percent escapes decoded, or `None` when an escape is not
+/// `%` and two hex digits or the decoded bytes are not UTF-8, which is where
+/// JavaScript's `decodeURIComponent` fails too.
+fn percent_decoded(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let hex = |at: usize| (*bytes.get(at)? as char).to_digit(16);
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            decoded.push((hex(at + 1)? * 16 + hex(at + 2)?) as u8);
+            at += 3;
+        } else {
+            decoded.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
 /// The language a fence names: the first word of its info string, as
 /// CommonMark has it.
 fn language(kind: &CodeBlockKind) -> Option<String> {
@@ -629,7 +885,10 @@ mod tests {
 
     use super::*;
     use crate::document::Container::*;
-    use crate::document::{BlockKind, Format, Warning, span_errors};
+    // The variants shadow the `Block` struct, which the helpers name as
+    // `super::Block`.
+    use crate::document::LinkTarget::{Address, Block, File, Nowhere};
+    use crate::document::{BlockKind, Format, LinkTarget, SpanKind, Warning, span_errors};
     use crate::normalize::normalize;
 
     fn source() -> Source {
@@ -693,6 +952,323 @@ mod tests {
                 other => panic!("not an unreadable part: {other:?}"),
             })
             .collect()
+    }
+
+    fn spans(b: &super::Block) -> Vec<(usize, usize, SpanKind)> {
+        b.spans
+            .iter()
+            .map(|s| (s.start, s.end, s.kind.clone()))
+            .collect()
+    }
+
+    fn emphasis() -> SpanKind {
+        SpanKind::Emphasis
+    }
+
+    fn strong() -> SpanKind {
+        SpanKind::Strong
+    }
+
+    fn code() -> SpanKind {
+        SpanKind::Code
+    }
+
+    fn strike() -> SpanKind {
+        SpanKind::Strikethrough
+    }
+
+    fn brk(lines: u32) -> SpanKind {
+        SpanKind::Break { lines }
+    }
+
+    fn noteref(marker: &str, block: Option<u32>) -> SpanKind {
+        SpanKind::NoteRef {
+            marker: marker.to_string(),
+            block,
+        }
+    }
+
+    fn link(href: &str, to: LinkTarget) -> SpanKind {
+        SpanKind::Link {
+            href: href.to_string(),
+            to,
+        }
+    }
+
+    fn ids(d: &Document) -> Vec<Vec<String>> {
+        d.blocks.iter().map(|b| b.ids.clone()).collect()
+    }
+
+    fn targets(b: &super::Block) -> Vec<LinkTarget> {
+        b.spans
+            .iter()
+            .filter_map(|s| match &s.kind {
+                SpanKind::Link { to, .. } => Some(to.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn emphasis_strong_code_and_strikethrough_are_spans_over_normalised_text() {
+        let b = &doc("Ah,  *that’s*  the **great** `puzzle` ~~x~~.\n").blocks[0];
+        assert_eq!(b.text, "Ah, that’s the great puzzle x.");
+        assert_eq!(
+            spans(b),
+            [
+                (4, 10, emphasis()),
+                (15, 20, strong()),
+                (21, 27, code()),
+                (28, 29, strike())
+            ]
+        );
+        assert!(span_errors(b).is_empty());
+    }
+
+    #[test]
+    fn hard_breaks_are_counted_breaks_on_one_space() {
+        let b = &doc("one\\\ntwo\\\n\\\nthree\n").blocks[0];
+        assert_eq!(b.text, "one two three");
+        assert_eq!(spans(b), [(3, 4, brk(1)), (7, 8, brk(2))]);
+    }
+
+    // Review Focus 2
+    #[test]
+    fn spans_count_code_points_after_an_emoji() {
+        let b = &doc("😀 *x*\n").blocks[0];
+        assert_eq!(spans(b), [(2, 3, emphasis())]);
+    }
+
+    #[test]
+    fn heading_ids_follow_github_and_repeat_with_numbers() {
+        // The cases of 'headings get GitHub ids…' in gui/markdown.test.js.
+        assert_eq!(
+            ids(&doc("## Outline\n\n## Outline\n## `cache` list!\n")),
+            [vec!["outline"], vec!["outline-1"], vec!["cache-list"]]
+        );
+    }
+
+    #[test]
+    fn links_resolve_to_blocks_files_addresses_or_nowhere() {
+        let d = doc("# Top\n\n[a](#top) [b](search.md) [c](https://x.org) [d](#gone)\n");
+        assert_eq!(
+            targets(&d.blocks[1]),
+            [
+                Block { block: 0 },
+                File {
+                    path: "search.md".into()
+                },
+                Address,
+                Nowhere
+            ]
+        );
+        assert_eq!(
+            d.warnings,
+            [Warning::BrokenLink {
+                href: "#gone".into(),
+                block: 1
+            }]
+        );
+    }
+
+    #[test]
+    fn a_footnote_reference_is_an_empty_noteref_to_the_note() {
+        let d = doc("Claim[^1] goes.\n\n[^1]: Source.\n");
+        assert_eq!(d.blocks[0].text, "Claim goes.");
+        assert_eq!(spans(&d.blocks[0]), [(5, 5, noteref("1", Some(1)))]);
+    }
+
+    #[test]
+    fn images_and_inline_tags_leave_their_text_and_nothing_else() {
+        assert_eq!(
+            doc("a ![pic](x.png) <kbd>Ctrl</kbd> b\n").blocks[0].text,
+            "a Ctrl b"
+        );
+    }
+
+    #[test]
+    fn spans_nest_and_reach_headings_and_cells() {
+        let d = doc("## *A* [**b** c](#a-b-c)\n\n| `x` | ~~y~~ |\n|---|---|\n\n*a\\\nb* ***c***\n");
+        assert_eq!(texts(&d), ["A b c", "x", "y", "a b c"]);
+        assert_eq!(
+            spans(&d.blocks[0]),
+            [
+                (0, 1, emphasis()),
+                (2, 5, link("#a-b-c", Block { block: 0 })),
+                (2, 3, strong())
+            ]
+        );
+        assert_eq!(spans(&d.blocks[1]), [(0, 1, code())]);
+        assert_eq!(spans(&d.blocks[2]), [(0, 1, strike())]);
+        assert_eq!(
+            spans(&d.blocks[3]),
+            [
+                (0, 3, emphasis()),
+                (1, 2, brk(1)),
+                (4, 5, emphasis()),
+                (4, 5, strong())
+            ]
+        );
+        for block in &d.blocks {
+            assert_eq!(span_errors(block), Vec::<String>::new());
+        }
+    }
+
+    #[test]
+    fn a_span_left_without_text_is_dropped() {
+        let d = doc("a [](x.md) *![i](i.png)* ` ` b\n");
+        assert_eq!(texts(&d), ["a b"]);
+        assert_eq!(spans(&d.blocks[0]), []);
+    }
+
+    #[test]
+    fn a_paragraph_that_dropping_leaves_empty_is_written_only_in_a_container() {
+        let d = doc("![a](i.png)\n\n<b></b>\n\n# ![h](i.png)\n\n> ![q](i.png)\n\nText.\n");
+        assert_eq!(
+            kinds_and_texts(&d),
+            [(heading(1), ""), (para(), ""), (para(), "Text.")]
+        );
+        assert_eq!(withins(&d), [vec![], vec![0], vec![]]);
+    }
+
+    fn slugs(texts: &[&str]) -> Vec<String> {
+        let mut seen = HashMap::new();
+        texts
+            .iter()
+            .map(|text| heading_id(text, &mut seen))
+            .collect()
+    }
+
+    #[test]
+    fn heading_id_gives_what_slugger_in_gui_markdown_js_gives() {
+        // Each expected list is what `render` in gui/markdown.js gives
+        // headings with these texts.
+        assert_eq!(
+            slugs(&[
+                "Using ebook-hero",
+                "Where files are kept?",
+                "outline",
+                "outline",
+                "book_info",
+                "The read command",
+                "six"
+            ]),
+            [
+                "using-ebook-hero",
+                "where-files-are-kept",
+                "outline",
+                "outline-1",
+                "book_info",
+                "the-read-command",
+                "six"
+            ]
+        );
+        assert_eq!(slugs(&["a", "a", "a-1", "a"]), ["a", "a-1", "a-1-1", "a-2"]);
+        assert_eq!(slugs(&["a-1", "a", "a"]), ["a-1", "a", "a-2"]);
+        assert_eq!(
+            slugs(&[
+                "Ünïcödé Straße",
+                "日本語 見出し",
+                "a_b‿c",
+                "x  y",
+                "!!!",
+                "!!!",
+                "Ⅻ ½ ٣"
+            ]),
+            [
+                "ünïcödé-straße",
+                "日本語-見出し",
+                "a_b‿c",
+                "x--y",
+                "",
+                "-1",
+                "ⅻ-½-٣"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_heading_id_is_not_kept_but_counts() {
+        let d = doc("# !!!\n\n# !!!\n\nText.\n");
+        assert_eq!(ids(&d), [vec![], vec!["-1"], vec![]]);
+    }
+
+    #[test]
+    fn fragments_are_decoded_and_paths_lose_their_query_and_fragment() {
+        let d = doc(
+            "# Café\n\n[a](#caf%C3%A9) [b](#) [c](my%20notes.md#part) [d](x.md?raw=1) \
+             [e](/abs.md) [f](mailto:a@b.co) <a@b.co> [g](#bad%zz)\n",
+        );
+        assert_eq!(d.blocks[1].text, "a b c d e f a@b.co g");
+        assert_eq!(
+            spans(&d.blocks[1]),
+            [
+                (0, 1, link("#caf%C3%A9", Block { block: 0 })),
+                (2, 3, link("#", Block { block: 0 })),
+                (
+                    4,
+                    5,
+                    link(
+                        "my%20notes.md#part",
+                        File {
+                            path: "my notes.md".into()
+                        }
+                    )
+                ),
+                (
+                    6,
+                    7,
+                    link(
+                        "x.md?raw=1",
+                        File {
+                            path: "x.md".into()
+                        }
+                    )
+                ),
+                (8, 9, link("/abs.md", Nowhere)),
+                (10, 11, link("mailto:a@b.co", Address)),
+                (12, 18, link("mailto:a@b.co", Address)),
+                (19, 20, link("#bad%zz", Nowhere))
+            ]
+        );
+        assert_eq!(
+            d.warnings,
+            [Warning::BrokenLink {
+                href: "#bad%zz".into(),
+                block: 1
+            }]
+        );
+    }
+
+    #[test]
+    fn a_footnote_reference_finds_its_note_whatever_the_case_of_its_label() {
+        let d = doc("A[^Note] b[^note].\n\n[^note]: First.\n\n    Second.\n");
+        assert_eq!(texts(&d), ["A b.", "First.", "Second."]);
+        assert_eq!(
+            spans(&d.blocks[0]),
+            [
+                (1, 1, noteref("Note", Some(1))),
+                (3, 3, noteref("note", Some(1)))
+            ]
+        );
+        assert!(d.warnings.is_empty(), "{:?}", d.warnings);
+    }
+
+    #[test]
+    fn a_reference_to_a_missing_note_leads_nowhere_with_a_warning() {
+        // pulldown-cmark writes a reference only when its note exists, so the
+        // note is taken away after reading.
+        let mut d = doc("Claim[^1].\n\n[^1]: Source.\n");
+        d.blocks.truncate(1);
+        let warnings = resolve_links(&mut d.blocks, &d.containers);
+        assert_eq!(spans(&d.blocks[0]), [(5, 5, noteref("1", None))]);
+        assert_eq!(
+            warnings,
+            [Warning::BrokenLink {
+                href: "[^1]".into(),
+                block: 0
+            }]
+        );
     }
 
     #[test]
@@ -1019,7 +1595,7 @@ mod tests {
 
     #[test]
     fn inline_html_and_images_are_dropped_and_the_text_between_kept() {
-        let d = doc("A ![alt *t*](i.png) b <b>bold</b> <!-- x --> c\\\nd *e* [f](#g) `h  i`\n");
+        let d = doc("A ![alt *t*](i.png) b <b>bold</b> <!-- x --> c\\\nd *e* [f](g.md) `h  i`\n");
         assert_eq!(texts(&d), ["A b bold c d e f h i"]);
         assert!(d.warnings.is_empty());
     }
@@ -1032,7 +1608,7 @@ mod tests {
     }
 
     #[test]
-    fn every_text_but_code_is_normalized_and_no_spans_are_written() {
+    fn every_text_but_code_is_normalized() {
         let d = doc(
             "# ﬁne  Ti\u{00AD}tle\n\nCafe\u{0301}   au\tlait.\n\n| x\u{200B}y |\n|---|\n\n```\n\u{00AD}  keep\n```\n",
         );
@@ -1045,8 +1621,9 @@ mod tests {
                 assert_eq!(block.text, normalize(&block.text));
             }
             assert_eq!(span_errors(block), Vec::<String>::new());
-            assert!(block.spans.is_empty() && block.ids.is_empty());
         }
+        // The heading's id comes from its normalized text.
+        assert_eq!(ids(&d)[0], ["fine-title"]);
     }
 
     #[test]

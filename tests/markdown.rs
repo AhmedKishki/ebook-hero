@@ -6,12 +6,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ebook_hero::Error;
-use ebook_hero::document::{BlockKind, Container, Format, Locator, span_errors};
+use ebook_hero::document::{
+    BlockKind, Container, Format, LinkTarget, Locator, SpanKind, Warning, span_errors,
+};
 use ebook_hero::extract::{detect_format, extract};
 use ebook_hero::normalize::normalize;
 use tempfile::TempDir;
 
 const USAGE_GUIDE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/usage.md");
+
+/// The Markdown files in `docs/`, the usage guide among them.
+fn docs() -> Vec<PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|e| e == "md"))
+        .collect();
+    files.sort();
+    files
+}
 
 fn write(dir: &TempDir, name: &str, bytes: &[u8]) -> PathBuf {
     let path = dir.path().join(name);
@@ -112,8 +126,8 @@ fn a_text_file_over_the_cap_reaches_the_reader_and_fails_with_its_size() {
 }
 
 /// The rules every Markdown document keeps, checked on the usage guide: text
-/// normalized outside code, no spans yet, lines that rise, and containers that
-/// each hold a block and nest in the order they open.
+/// normalized outside code, well-formed spans, lines that rise, and containers
+/// that each hold a block and nest in the order they open.
 #[test]
 fn the_usage_guide_reads_with_its_structure() {
     let doc = extract(Path::new(USAGE_GUIDE), "abc").unwrap();
@@ -147,7 +161,6 @@ fn the_usage_guide_reads_with_its_structure() {
             assert_eq!(block.text, normalize(&block.text), "block {}", block.id);
         }
         assert_eq!(span_errors(block), Vec::<String>::new());
-        assert!(block.spans.is_empty(), "block {}", block.id);
         let Locator::Markdown { line, line_end } = block.locator else {
             panic!("block {} has {:?}", block.id, block.locator);
         };
@@ -164,4 +177,74 @@ fn the_usage_guide_reads_with_its_structure() {
     }
     let every: BTreeSet<u32> = (0..doc.containers.len() as u32).collect();
     assert_eq!(held, every, "every container holds a block");
+}
+
+#[test]
+fn the_usage_guide_has_no_broken_link() {
+    let d = extract(Path::new(USAGE_GUIDE), "abc").unwrap();
+
+    assert!(
+        !d.warnings
+            .iter()
+            .any(|w| matches!(w, Warning::BrokenLink { .. })),
+        "{:?}",
+        d.warnings
+    );
+    let into_the_guide = d
+        .blocks
+        .iter()
+        .flat_map(|b| &b.spans)
+        .filter(|s| {
+            matches!(
+                s.kind,
+                SpanKind::Link {
+                    to: LinkTarget::Block { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert!(into_the_guide > 0);
+}
+
+#[test]
+fn every_file_link_in_docs_names_a_file_that_exists() {
+    let mut links = 0;
+    for file in docs() {
+        let d = extract(&file, "abc").unwrap();
+        for block in &d.blocks {
+            for span in &block.spans {
+                if let SpanKind::Link {
+                    to: LinkTarget::File { path },
+                    ..
+                } = &span.kind
+                {
+                    links += 1;
+                    assert!(
+                        file.parent().unwrap().join(path).exists(),
+                        "{}, block {}: {path} does not exist",
+                        file.display(),
+                        block.id
+                    );
+                }
+            }
+        }
+    }
+    assert!(links > 0);
+}
+
+#[test]
+fn every_block_of_every_doc_has_well_formed_spans() {
+    for file in docs() {
+        let d = extract(&file, "abc").unwrap();
+        for block in &d.blocks {
+            assert_eq!(
+                span_errors(block),
+                Vec::<String>::new(),
+                "{}, block {}",
+                file.display(),
+                block.id
+            );
+        }
+    }
 }

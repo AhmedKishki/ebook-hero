@@ -198,11 +198,11 @@ A block is one unit of reading text: a heading, a paragraph, a list item, a note
 
 The kind decides what happens downstream. `build_passages` packs paragraphs, list items, notes and code blocks into passages. A heading opens a section, through which it reaches the passages under it as their section path. A rule closes the passage being built as a heading does, but opens no section, because a rule separates parts of a text without naming a new one. A block without words, such as a rule or an empty table cell, goes into no passage and does not close the one being built.
 
-`text` is the block's text after `normalize` in `src/normalize.rs`: Latin ligatures expanded, soft hyphens, zero-width spaces, byte-order marks and non-whitespace control characters dropped, composed to NFC, every whitespace run collapsed to one space, and trimmed. It is a single line without markup. A code block is the one exception. Collapsing its whitespace would change the code, so its `text` keeps its lines and indentation as written, without the final newline. Quote verification still finds a quote in it, because `find_exact` in `src/verify.rs` collapses the whitespace of the text it searches.
+`text` is the block's text after `normalize` in `src/normalize.rs`: Latin ligatures expanded, soft hyphens, zero-width spaces, byte-order marks and non-whitespace control characters dropped, composed to NFC, every whitespace run collapsed to one space, and trimmed. It is a single line without markup. A code block is the one exception. Collapsing its whitespace would change the code, so its `text` keeps its lines and indentation as written, without the final newline. Quote verification still finds a quote in it, because `find_exact` in `src/verify.rs` collapses the whitespace of the text it searches. The markup that the model names survives as spans over `text`, so a reader that marks spans normalizes through `normalize_with_spans`, which takes the same steps and moves the spans onto the normalized text, as `docs/markdown-reading.md` describes.
 
 `section` is the index in `sections` of the section the block is in. A block before the first heading has none, and [Sections](#sections) explains how the others get theirs. `within` lists the containers the block sits in, and [Containers](#containers) explains how to read it. `locator` says where the block is in the file, with the fields that [Locators](#locators) lists.
 
-`ids` holds the element ids of an EPUB block: the ids of the elements that start in the block, its own included, and of the empty elements met since the block before. The EPUB reader resolves a table-of-contents fragment to the first block whose `ids` hold it. The PDF and Markdown readers write none.
+`ids` holds the element ids of an EPUB block: the ids of the elements that start in the block, its own included, and of the empty elements met since the block before. The EPUB reader resolves a table-of-contents fragment to the first block whose `ids` hold it. The Markdown reader gives a heading the id GitHub gives it and resolves a `#` link through `ids` the same way. The PDF reader writes none.
 
 `spans` marks ranges of `text` without changing it. A `Span` covers `start..end`, counted in Unicode code points of `text`, and its `SpanKind` says what the range is:
 
@@ -210,11 +210,11 @@ The kind decides what happens downstream. `build_passages` packs paragraphs, lis
 |---|---|---|
 | `PageBreak { label }` | `{"type": "page_break", "label": "45"}` | A point where a page of the printed edition starts. The EPUB reader puts each break at offset 0 of the first block whose text starts on the new page. |
 | `Math { latex }` | `{"type": "math", "latex": "H"}` | A formula. Reserved: no reader writes one. |
-| `Emphasis`, `Strong`, `Strikethrough` | `{"type": "emphasis"}` | Text in that style. No reader writes them yet. |
-| `Code` | `{"type": "code"}` | Inline code. No reader writes it yet. |
-| `Link { href, to }` | `{"type": "link", "href": "#setup", "to": {"type": "block", "block": 12}}` | A link. `href` is the target as the file wrote it, and `to` is where the reader found that it leads. No reader writes one yet. |
-| `Break { lines }` | `{"type": "break", "lines": 2}` | The space in `text` that stands for line breaks. `lines` counts them, so 2 leaves a blank line, as between two stanzas of a poem. No reader writes it yet. |
-| `NoteRef { marker, block }` | `{"type": "note_ref", "marker": "1", "block": 7}` | A footnote reference, as a point. `marker` is what the reference shows and `block` the note's first block, or null when the reader did not find the note. No reader writes it yet. |
+| `Emphasis`, `Strong`, `Strikethrough` | `{"type": "emphasis"}` | Text in that style. The Markdown reader writes them. |
+| `Code` | `{"type": "code"}` | Inline code. The Markdown reader writes it. |
+| `Link { href, to }` | `{"type": "link", "href": "#setup", "to": {"type": "block", "block": 12}}` | A link. `href` is the target as the file wrote it, and `to` is where the reader found that it leads. The Markdown reader writes one for each link with text, and `docs/markdown-reading.md` gives the rules it resolves `to` by. |
+| `Break { lines }` | `{"type": "break", "lines": 2}` | The space in `text` that stands for line breaks. `lines` counts them, so 2 leaves a blank line, as between two stanzas of a poem. The Markdown reader writes one for each run of hard breaks. |
+| `NoteRef { marker, block }` | `{"type": "note_ref", "marker": "1", "block": 7}` | A footnote reference, as a point. `marker` is what the reference shows and `block` the note's first block, or null when the reader did not find the note. The Markdown reader writes one for each footnote reference, with its label as `marker`. |
 
 `LinkTarget` is the `to` of a link. The reader decides what a link is, so the window acts on `to` and never on the book's format.
 
@@ -392,7 +392,7 @@ The EPUB and Markdown readers write an empty list. Nothing after the readers rea
 | `PagesWithoutText` | `pages_without_text` | `pages` | PDF: the pages that were read and hold no text |
 | `UnreadableContent` | `unreadable_content` | `href`, `reason` | EPUB: a spine item that was skipped, named by its href, or by its `idref` when the manifest lacks it |
 | `UnreadablePart` | `unreadable_part` | `part`, `reason` | PDF: a part left out or replaced, named `page 7`, `page labels`, `outline` or `word spacing`. Markdown: an HTML block or the front matter left out, named by its line, such as `HTML block at line 12` |
-| `BrokenLink` | `broken_link` | `href`, `block` | No reader yet: a link into the document that leads nowhere, with the target as written and the block that holds the link |
+| `BrokenLink` | `broken_link` | `href`, `block` | Markdown: a `#` link that no block's `ids` hold, with the target as written and the block that holds the link |
 
 A warning means the reader left part of the book out and read the rest. A book with no text at all is an error instead: `Unreadable` with "no readable text" for an EPUB or a Markdown file, and `NoTextLayer` ("no text layer; OCR is not supported") or `Unreadable` for a PDF. The warnings reach the `book_info` result (`BookInfo.warnings` in `src/read.rs`) and the output of `ebook-hero info`, which words a broken link as `the link to #setup in block 12 leads nowhere in this document`.
 
@@ -528,10 +528,10 @@ The title and a level-1 heading both get one `#`, so a book whose chapters are `
 
 ## Limits
 
-- Structure the readers do not write. Only the Markdown reader writes containers, code blocks and rules, and no reader writes an inline span other than a page break. The PDF reader writes headings, paragraphs and notes. The EPUB reader also writes list items and page breaks, and it turns table cells, block quotes, code and verse into paragraphs, so `normalize` turns the line breaks of code and verse into spaces.
+- Structure the readers do not write. Only the Markdown reader writes containers, code blocks, rules and inline spans other than page breaks. The PDF reader writes headings, paragraphs and notes. The EPUB reader also writes list items and page breaks, and it turns table cells, block quotes, code and verse into paragraphs, so `normalize` turns the line breaks of code and verse into spaces.
 - No images and no formulas. The model has no field for an image, and the `Math` span that would hold a formula has no writer.
-- No inline markup. Emphasis, links and superscript markup leave no trace in `text`, and the Markdown reader keeps the text inside them without the marks. Characters such as `²` survive, since `normalize` keeps them.
-- No link from a note reference to its note. The model can hold one (`NoteRef` with the note's first block), but the EPUB reader deletes `noteref` elements, an EPUB `Note` keeps only the note element's id as `label`, and a PDF note has no label.
+- Inline markup from Markdown only. The Markdown reader keeps emphasis, strikethrough, inline code, links, line breaks and footnote references as spans, while the PDF and EPUB readers keep the text inside such markup without the marks. Superscript markup leaves no trace in any reader, but characters such as `²` survive, since `normalize` keeps them.
+- A link from a note reference to its note in Markdown only. The EPUB reader deletes `noteref` elements, an EPUB `Note` keeps only the note element's id as `label`, and a PDF note has no label.
 - One box per block. `bbox` covers the block's lines on its first page, and the part of a paragraph that runs on to `page_end` has no box.
 - Levels are `u8`. An outline deeper than 255 levels is capped, and the Markdown renderer writes at most six `#`.
 - Missing per-format facts. A PDF never has a `language`, an EPUB never has a `page_count`, and an EPUB without page-break markers has no page numbers at all.

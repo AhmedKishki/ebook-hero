@@ -960,7 +960,9 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "unicase",
  "unicode-normalization",
+ "unicode-properties",
  "unicode-segmentation",
  "zip",
 ]

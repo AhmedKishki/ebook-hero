@@ -1,6 +1,6 @@
 # Reading a Markdown file
 
-`src/extract/markdown.rs` reads a Markdown file into the `Document` model described in `docs/document-model.md`. pulldown-cmark parses the file as CommonMark, and one pass over its events writes the blocks in reading order. Each block records the containers it sits in, such as a list item or a table cell, and the lines of the file it covers. Passages, search, reading and quote checks then work on that `Document` as they do on one read from a PDF or an EPUB.
+`src/extract/markdown.rs` reads a Markdown file into the `Document` model described in `docs/document-model.md`. pulldown-cmark parses the file as CommonMark, and one pass over its events writes the blocks in reading order. Each block records the containers it sits in, such as a list item or a table cell, and the lines of the file it covers, and its inline markup becomes spans over its text. Once every block is read, headings get the ids GitHub gives them and every link is resolved to where it leads. Passages, search, reading and quote checks then work on that `Document` as they do on one read from a PDF or an EPUB.
 
 ## Pipeline
 
@@ -20,11 +20,13 @@ flowchart TD
     front -->|yes| warn["UnreadablePart warning,<br/>parse the text after it"]
     front -->|no| parse["pulldown-cmark with tables,<br/>strikethrough and footnotes"]
     warn --> parse
-    parse --> walk["Walk the events: blocks and containers,<br/>HTML blocks left out with a warning"]
+    parse --> walk["Walk the events: blocks, containers and spans,<br/>HTML blocks left out with a warning"]
     walk --> any{"A block with text?"}
     any -->|no| err["Error: Unreadable,<br/>no readable text"]
     any -->|yes| sections["assign_sections"]
-    sections --> outline["Outline from the headings"]
+    sections --> ids["give_headings_ids:<br/>GitHub's heading ids"]
+    ids --> links["resolve_links:<br/>targets, BrokenLink warnings"]
+    links --> outline["Outline from the headings"]
     outline --> doc(["Document"])
 ```
 
@@ -84,7 +86,7 @@ Every other extension stays off, and its syntax reads as CommonMark has it: a ta
 
 ## The walk
 
-`Walk` reads the events in order. Block events open and close blocks and containers, while inline events add text to the open block. Three pieces of state carry from one event to the next: the block being read, the stack of open containers, and whether the walk is inside an image or an HTML block, whose events it leaves out.
+`Walk` reads the events in order. Block events open and close blocks and containers, while inline events add text and spans to the open block. Three pieces of state carry from one event to the next: the block being read, with its spans still open, the stack of open containers, and whether the walk is inside an image or an HTML block, whose events it leaves out.
 
 ### Blocks
 
@@ -129,16 +131,47 @@ A footnote definition becomes a `Note` container where it stands in the file, an
 
 A container exists only through the blocks inside it, so one that closes without a block gets an empty `Paragraph` at the line where it starts. An empty table cell, an empty list item `- `, an empty quote `>` and an empty footnote definition keep their place in the document that way, and passages pass over the empty block, since it has no words. GFM fills a row that is shorter than the header with empty cells, and pulldown-cmark gives each added cell an empty range just after its row, at the start of the next line. The reader places the paragraph of such a cell at the start of its row instead.
 
-### Text
+### Text and spans
 
-Inline events add their characters to the open block. The reader writes no spans, so inline markup leaves only its text:
+Inline events add their characters to the open block, and inline markup becomes a span over the characters it marks:
 
-- Emphasis, strong emphasis, strikethrough and a link give their text.
-- Inline code gives its content, which `normalize` then collapses like any other text.
-- A soft or a hard line break gives a space.
-- A footnote reference gives nothing, so `Text.[^n]` reads `Text.`.
-- An inline HTML tag or comment is dropped and the text around it kept, so `<b>bold</b>` reads `bold`.
-- An image is left out with its alt text, as the EPUB reader leaves images out. The walk counts nested images and leaves every event out until the outermost one ends.
+| Markdown | Text | Span |
+|---|---|---|
+| `*a*` or `_a_` | `a` | `Emphasis` |
+| `**a**` or `__a__` | `a` | `Strong` |
+| `~~a~~` or `~a~` | `a` | `Strikethrough` |
+| `` `a` `` | `a` | `Code` |
+| `[a](x.md)`, `[a][ref]` or `<https://x.org>` | `a`, or the address | `Link`, with the destination as `href` |
+| `<me@x.org>` | `me@x.org` | `Link`, with `mailto:me@x.org` as `href`, the destination CommonMark gives an email autolink |
+| A hard break: `\` or two spaces at the end of a line | A space | `Break`, with `lines` 1 |
+| A soft break | A space | None |
+| `[^n]` | Nothing | `NoteRef`, empty, with `n` as `marker` |
+| An inline HTML tag or comment | Nothing | None |
+| An image | Nothing, alt text included | None |
+
+The walk opens a span where the block's text has got to when the markup starts, and a stack of the spans still open lets the markup's end close the innermost one. Spans therefore nest as the markup does, so `[**b** c](#x)` gives a link over `b c` that holds strong emphasis over `b`. Inline code, a hard break and a footnote reference are spans of their own event, with no end to wait for. An image is left out with everything in it, as the EPUB reader leaves images out: the walk counts nested images and leaves every event out until the outermost one ends. An inline HTML tag is dropped while the text between tags is kept, so `<b>bold</b>` reads `bold`.
+
+A link's target is left open until every block is read, because a link may lead to a heading further down; [Links](#links) describes how it is resolved.
+
+### Normalizing with spans
+
+A block's text must equal `normalize` of itself, since search and quote verification rely on it, while its spans count code points of that normalized text. The walk therefore collects the block's raw text with each span as a byte range of it, a `RawSpan`, and `normalize_with_spans` in `src/normalize.rs` normalizes once and moves the spans onto the result. `normalize` takes the same three steps without spans, so a block's text cannot differ from `normalize` of its raw text.
+
+Each step takes the offsets the spans need, in ascending order, and records where each one lands in its output:
+
+1. `expand` writes the letters of the Latin ligatures and drops soft hyphens and invisible characters. An offset lands before the output of the character at it, so a span that starts at a dropped character starts at the next one.
+2. `compose` cuts the text into pieces before each starter that composes with nothing before it, a character with canonical combining class 0 that passes the NFC quick check, and composes each piece to NFC alone. NFC of the whole text is then the pieces laid end to end, because such a starter's decomposition starts with a starter of the same kind, so nothing before it is composed with or reordered across it. `every_character_that_starts_a_piece_decomposes_to_such_a_starter` checks that for every code point. An offset at the start of a piece lands at the start of its output, and an offset inside a piece lands past its output, so emphasis around the `e` of `e` and U+0301 covers the composed `é`.
+3. `collapse` turns every whitespace run into one space and trims the ends. An offset at the first character of a run lands on the space, one further into the run lands past the space, and one in a trimmed run lands where the text then is.
+
+No step reverses two offsets, so spans that nested in the raw text still nest, and spans that did not overlap still do not. A span that covered only what the steps removed comes out empty and is dropped, such as a link with no text, emphasis around an image, or a code span of one space between spaces. A `NoteRef` stays, since it marks a point. A `Break` marks the space that its whitespace run becomes, wherever its own space was in the run, unless trimming removes the run, which drops the break.
+
+Each hard break adds a space, and normalizing leaves one space for a run of them, so the breaks of a run land on one space and become one `Break` whose `lines` adds them up. In `one\`, `two\`, `\`, `three` on four lines, the block reads `one two three` with a break of 1 line after `one` and a break of 2 lines after `two`, the blank line that separates two stanzas of a poem.
+
+The positions count code points, so in `😀 *x*` the emphasis runs from 2 to 3, although `x` starts at byte 5 of the text. The spans then go through a stable sort by start, the longer first, which keeps the outer of two spans over the same text first, as for the emphasis and the strong emphasis of `***c***`.
+
+### Paragraphs left without text
+
+Images and inline tags can be all a paragraph holds. A paragraph that they leave with neither text nor a span is not written when it sits in no container, since it would add a block without words and nothing else. Inside a container it is kept, because a container exists only through its blocks, so an item holding only an image keeps its place in its list. A heading left without text is kept too, because its level still divides the sections, although the outline leaves it out.
 
 ### HTML blocks
 
@@ -162,7 +195,42 @@ CommonMark gives a file no title, authors or language, so the metadata is empty:
 | `page_count` | Null |
 | `spine_count` | Null |
 
-Of the document's other tables, the reader fills `sections`, `containers` and `warnings`. `files`, `page_labels` and `furniture` stay empty, and no block has `ids` or `spans`.
+Of the document's other tables, the reader fills `sections`, `containers` and `warnings`. `files`, `page_labels` and `furniture` stay empty, and only a heading has `ids`.
+
+## Heading ids
+
+`give_headings_ids` runs once every block is read and gives each heading, in reading order, the id GitHub gives it, which goes into the heading block's `ids`. The rule is `heading_id`, ported from `slugger` in `gui/markdown.js`, which the window uses for the usage guide's headings: the heading's text in lower case, without the characters other than letters, marks, numbers, connector punctuation, spaces and `-`, and with each space turned into `-`. The general categories that `\p{L}`, `\p{M}`, `\p{N}` and `\p{Pc}` name in the JavaScript come from the `unicode-properties` crate. The test `heading_id_gives_what_slugger_in_gui_markdown_js_gives` checks the port against the ids that `render` in `gui/markdown.js` gave for the same texts.
+
+A repeated id gets `-1`, `-2` and so on, counted for the id that repeats. A numbered id that a heading already took is passed over, as `a-1` is in the last row:
+
+| Headings | Ids |
+|---|---|
+| `## Outline`, `## Outline`, ``## `cache` list!`` | `outline`, `outline-1`, `cache-list` |
+| `# a`, `# a`, `# a-1`, `# a` | `a`, `a-1`, `a-1-1`, `a-2` |
+| `# a-1`, `# a`, `# a` | `a-1`, `a`, `a-2` |
+
+A heading whose id comes out empty, such as `# !!!`, keeps none, because an empty id names nothing. `slugger` still counts the empty id as given, and the reader follows it, so a second `# !!!` gets `-1`.
+
+The rule is GitHub's because `docs/usage.md`, like most Markdown files, was written to be read on GitHub, so a link such as ``[`outline`](#outline-1)``, which leads to the second heading named `outline`, resolves here where it resolves there. The test `the_usage_guide_has_no_broken_link` checks this on the guide.
+
+## Links
+
+`resolve_links` runs after the ids are given, because a link may lead to a heading further down. It sets the `to` of every `Link` span from the `href` the file wrote:
+
+| `href` | `to` |
+|---|---|
+| `#id` | `Block`, the first block whose `ids` hold the id, after its percent escapes are decoded, so `#caf%C3%A9` leads to the heading `Café` |
+| `#` | `Block` 0, the top of the document, which is where HTML takes an empty fragment |
+| An address with a scheme, such as `https://x.org` or `mailto:me@x.org` | `Address` |
+| A relative path, such as `search.md` or `my%20notes.md#part` | `File`, with the path percent-decoded and without its query or fragment, such as `search.md` or `my notes.md` |
+| An absolute path, such as `/x.md`, or an empty destination | `Nowhere`, because `File` holds a path relative to the file's directory |
+| `#id` that no block holds | `Nowhere`, with a `BrokenLink` warning that names the `href` and the block holding the link |
+
+A scheme is a letter followed by letters, digits, `+`, `-` or `.`, then a colon, as RFC 3986 defines it, so `a/b:c.md` is a path. A percent escape is decoded only when every `%` starts two hex digits and the decoded bytes are UTF-8. Otherwise the text is kept as written, as `gui/markdown.js` keeps it where JavaScript's `decodeURIComponent` fails.
+
+A `NoteRef` leads to the first block of the first `Note` container whose label matches its marker. pulldown-cmark matches footnote labels without regard to case, through the `unicase` crate, so the reader matches them through `unicase` as well, which lets `[^Note]` find `[^note]:`. A reference to no note would get a null `block` and a `BrokenLink` warning whose `href` is `[^label]`, but pulldown-cmark reads such a reference as text, so no file produces one.
+
+`ebook-hero info` words a broken link as `the link to #setup in block 12 leads nowhere in this document`.
 
 ## Reader version
 
@@ -178,14 +246,19 @@ Every UTF-8 text is a valid CommonMark document, so detection needs neither a ma
 
 The walk writes each block when it closes and never returns to it, and the stack of open containers gives the block its `within` at that moment. Reading therefore takes one pass over the events, and the blocks come out as the flat list in reading order that `docs/document-model.md` asks of every reader.
 
+### Resolve once everything is read
+
+A link can lead to a heading that the walk has not reached yet. The walk therefore writes each link with its target open, and two passes over the finished blocks then give the headings their ids and the links their targets, so the walk itself never looks ahead.
+
 ### Leave out and report
 
 HTML blocks and front matter may hold text that the model cannot store, so each one the reader leaves out becomes an `UnreadablePart` warning that names its line. This follows the AGENTS.md rule that nothing falls back silently. A comment holds no text of the document, so leaving one out needs no warning.
 
 ## Limits
 
-- Inline markup. Emphasis, strikethrough, links, inline code, line breaks and footnote references leave only their text, and no block has spans. A heading carries no id, so the document does not record where a link leads.
-- HTML. Neither an HTML block nor an inline tag is read. The text of an HTML block is left out with a warning, and the text inside inline tags is kept without the tags.
+- Heading ids from normalized text. GitHub takes a heading's text as written, while the reader takes its normalized text, so a heading with two spaces in a row, a ligature or a soft hyphen gets an id that differs from GitHub's: `x  y` gives `x-y` here and `x--y` there.
+- Links out of the document. The reader checks neither that a `File` link's path names a file nor that an `Address` exists. A link's title, as in `[a](x.md "Title")`, is not kept.
+- HTML. Neither an HTML block nor an inline tag is read. The text of an HTML block is left out with a warning, and the text inside inline tags is kept without the tags. An element id in HTML, such as `<a id="x">`, is not an id of the document, so a link to `#x` is broken.
 - Front matter. Its fields, a title among them, are not read.
 - Weak structure. A column's alignment and whether a list is tight or loose are not stored.
 - Images. An image gives no text, and its alt text is left out.
@@ -199,5 +272,8 @@ HTML blocks and front matter may hold text that the model cannot store, so each 
 
 - John MacFarlane. "CommonMark Spec", version 0.31.2, 28 January 2024. https://spec.commonmark.org/0.31.2/. Line endings, ATX and setext headings, fenced and indented code blocks and their info strings, block quotes, lists and their tightness, HTML blocks and thematic breaks.
 - "GitHub Flavored Markdown Spec", version 0.29-gfm, 6 April 2019. https://github.github.com/gfm/. Tables, including the empty cells added to a short row, and strikethrough.
-- pulldown-cmark 0.13.5. https://docs.rs/pulldown-cmark/0.13.5/pulldown_cmark/. The parser, its events with their byte ranges, and the options for tables, strikethrough, footnotes and YAML metadata blocks.
+- pulldown-cmark 0.13.5. https://docs.rs/pulldown-cmark/0.13.5/pulldown_cmark/. The parser, its events with their byte ranges, the options for tables, strikethrough, footnotes and YAML metadata blocks, and its matching of footnote labels through unicase.
+- "Unicode Normalization Forms", Unicode Standard Annex #15. https://www.unicode.org/reports/tr15/. NFC, canonical combining classes and the NFC quick check, from which `compose` decides where a piece starts.
+- T. Berners-Lee, R. Fielding and L. Masinter. "Uniform Resource Identifier (URI): Generic Syntax." RFC 3986, Internet Engineering Task Force, January 2005. https://www.rfc-editor.org/rfc/rfc3986. The syntax of a scheme and of percent escapes.
+- "HTML Living Standard", WHATWG, section "Scrolling to a fragment". https://html.spec.whatwg.org/multipage/browsing-the-web.html. Selecting the indicated part of a document, where an empty fragment selects the top of the document.
 - F. Yergeau. "UTF-8, a transformation format of ISO 10646." RFC 3629, Internet Engineering Task Force, November 2003. https://www.rfc-editor.org/rfc/rfc3629. The encoding detection checks for.

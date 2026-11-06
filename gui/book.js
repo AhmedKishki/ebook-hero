@@ -8,7 +8,7 @@
 const { execBinary, failure, locateBook } = require('./runner');
 
 // A later schema only adds fields (see AGENTS.md), so this version and newer read the same.
-const MIN_SCHEMA_VERSION = 2;
+const MIN_SCHEMA_VERSION = 3;
 // How many books stay extracted at once.
 const KEPT_BOOKS = 2;
 
@@ -32,13 +32,13 @@ function parseDocument(text) {
   return document;
 }
 
-/** What the page needs to draw the book: its text in order, without locators. */
+/** What the page needs to draw the book: its text in order, without locators. A block's id is its index. */
 function viewOf(document) {
   return {
     title: document.metadata?.title ?? null,
     format: document.source?.format ?? null,
-    blocks: document.blocks.map((block) => ({
-      id: block.id,
+    blocks: document.blocks.map((block, id) => ({
+      id,
       type: block.kind.type,
       level: block.kind.level ?? null,
       text: block.text,
@@ -58,8 +58,7 @@ function blockIds(document, passage) {
       `passage ${passage?.passage_id} names no blocks in the output of "ebook-hero read"; rebuild the binary with "cargo build --release"`,
     );
   }
-  const known = new Set(document.blocks.map((block) => block.id));
-  const missing = ids.find((id) => !known.has(id));
+  const missing = ids.find((id) => !Number.isInteger(id) || id < 0 || id >= document.blocks.length);
   if (missing !== undefined) {
     throw new BookError(
       `passage ${passage.passage_id} names block ${missing}, which the extracted book does not have; the book may have changed since it was indexed, `

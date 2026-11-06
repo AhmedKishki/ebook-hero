@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::cancel::Cancel;
-use crate::document::Document;
+use crate::document::{Document, Places};
 use crate::embed::Models;
 use crate::extract::extract;
 use crate::graph::{self, GraphResult};
@@ -31,6 +31,8 @@ pub struct Book {
     pub dir: PathBuf,
     /// The book as its reader extracted it.
     pub document: Document,
+    /// Where each block of `document` is, derived when the book is loaded.
+    pub places: Places,
     /// The book's passages, in reading order; a passage's id is its index.
     pub passages: Vec<Passage>,
     /// The tantivy index of the passages.
@@ -315,11 +317,13 @@ fn load_current(dir: &Path, path: &Path, sha256: &str) -> Result<Option<Book>> {
 }
 
 fn load(dir: &Path, path: &Path, sha256: &str) -> Result<Book> {
+    let document: Document = cache::read_lz4_json(&dir.join(DOCUMENT_FILE))?;
     Ok(Book {
         path: path.to_path_buf(),
         sha256: sha256.to_string(),
         dir: dir.to_path_buf(),
-        document: cache::read_lz4_json(&dir.join(DOCUMENT_FILE))?,
+        places: Places::new(&document),
+        document,
         passages: cache::read_lz4_json(&dir.join(PASSAGES_FILE))?,
         lexical: LexicalIndex::open(&dir.join(TANTIVY_DIR))?,
         vectors: OnceLock::new(),
@@ -332,7 +336,7 @@ fn load(dir: &Path, path: &Path, sha256: &str) -> Result<Book> {
 /// is left behind when the build fails.
 fn build(cache_root: &Path, dir: &Path, path: &Path, sha256: &str) -> Result<()> {
     let document = extract(path, sha256)?;
-    let passages = build_passages(&document.blocks);
+    let passages = build_passages(&document, &Places::new(&document));
     let staging = cache::staging_dir(cache_root, sha256);
     fs::create_dir(&staging).map_err(|e| io_error(&staging, e))?;
     let built = write_stage(&staging, &document, &passages)

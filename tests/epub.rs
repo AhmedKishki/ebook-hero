@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use common::{EpubBuilder, EpubVersion};
 use ebook_hero::Error;
-use ebook_hero::document::{BlockKind, Document, Format, Locator, Warning};
+use ebook_hero::document::{Block, BlockKind, Document, Format, Locator, Places, Warning};
 use ebook_hero::extract::{detect_format, extract};
 use tempfile::TempDir;
 
@@ -38,6 +38,14 @@ fn texts(doc: &Document) -> Vec<&str> {
     doc.blocks.iter().map(|b| b.text.as_str()).collect()
 }
 
+/// The content file a block is in.
+fn href<'a>(doc: &'a Document, block: &Block) -> &'a str {
+    match block.locator {
+        Locator::Epub { file } => &doc.files[file as usize],
+        ref other => panic!("not an EPUB locator: {other:?}"),
+    }
+}
+
 #[test]
 fn epub3_metadata_outline_sections_locators() {
     let dir = TempDir::new().unwrap();
@@ -62,17 +70,15 @@ fn epub3_metadata_outline_sections_locators() {
     assert_eq!(titles, [("Chapter One", 1), ("Sub", 2), ("Chapter Two", 1)]);
     let outline_ids: Vec<_> = doc.outline.iter().map(|e| e.id).collect();
     assert_eq!(outline_ids, [0, 1, 2]);
+    let places = Places::new(&doc);
     let beta = doc.blocks.iter().find(|b| b.text == "Beta text.").unwrap();
-    assert_eq!(beta.section, ["Chapter One", "Sub"]);
-    assert_eq!(
-        beta.locator,
-        Locator::Epub {
-            href: "ch1.xhtml".into(),
-            anchor: Some("s".into()),
-            para: 4,
-            print_page: None
-        }
-    );
+    assert_eq!(places.section_path(beta), ["Chapter One", "Sub"]);
+    assert_eq!(href(&doc, beta), "ch1.xhtml");
+    assert_eq!(places.para(beta.id), 4);
+    assert_eq!(places.print_page(beta.id), None);
+    // The id in effect at Beta is the one the heading before it carries.
+    assert!(beta.ids.is_empty());
+    assert_eq!(doc.blocks[beta.id as usize - 1].ids, ["s"]);
     assert_eq!(
         doc.blocks[doc.outline[1].block_id.unwrap() as usize].text,
         "Sub"
@@ -90,19 +96,18 @@ fn epub3_metadata_outline_sections_locators() {
         assert_eq!(block.id as usize, i);
     }
     let gamma = doc.blocks.iter().find(|b| b.text == "Gamma.").unwrap();
-    assert_eq!(gamma.section, ["Chapter Two"]);
-    assert_eq!(
-        gamma.locator,
-        Locator::Epub {
-            href: "ch2.xhtml".into(),
-            anchor: None,
-            para: 2,
-            print_page: None
-        }
-    );
+    assert_eq!(places.section_path(gamma), ["Chapter Two"]);
+    assert_eq!(href(&doc, gamma), "ch2.xhtml");
+    assert_eq!(places.para(gamma.id), 2);
+    assert_eq!(places.print_page(gamma.id), None);
+    // No element of ch2.xhtml up to Gamma has an id.
+    let chapter_two = &doc.blocks[gamma.id as usize - 1];
+    assert!(chapter_two.ids.is_empty() && gamma.ids.is_empty());
     let sub = doc.blocks.iter().find(|b| b.text == "Sub").unwrap();
     assert_eq!(sub.kind, BlockKind::Heading { level: 2 });
-    assert_eq!(sub.section, ["Chapter One", "Sub"]);
+    assert_eq!(places.section_path(sub), ["Chapter One", "Sub"]);
+    assert_eq!(doc.files, ["ch1.xhtml", "ch2.xhtml"]);
+    assert!(doc.page_labels.is_empty());
     assert!(doc.warnings.is_empty());
     assert!(doc.furniture.is_empty());
 }
@@ -135,14 +140,7 @@ fn nonlinear_items_are_read_in_spine_position() {
 
     assert_eq!(texts(&doc), ["First.", "Aside.", "Last."]);
     assert_eq!(doc.metadata.spine_count, Some(3));
-    let hrefs: Vec<_> = doc
-        .blocks
-        .iter()
-        .map(|b| match &b.locator {
-            Locator::Epub { href, .. } => href.as_str(),
-            other => panic!("not an EPUB locator: {other:?}"),
-        })
-        .collect();
+    let hrefs: Vec<_> = doc.blocks.iter().map(|b| href(&doc, b)).collect();
     assert_eq!(hrefs, ["ch1.xhtml", "notes.xhtml", "ch2.xhtml"]);
 }
 
@@ -157,9 +155,10 @@ fn print_page_carries_into_the_next_file() {
             .chapter("ch2.xhtml", "<p>C</p>"),
     );
 
-    let page = |text: &str| match &doc.blocks.iter().find(|b| b.text == text).unwrap().locator {
-        Locator::Epub { print_page, .. } => print_page.clone(),
-        other => panic!("not an EPUB locator: {other:?}"),
+    let places = Places::new(&doc);
+    let page = |text: &str| {
+        let block = doc.blocks.iter().find(|b| b.text == text).unwrap();
+        places.print_page(block.id).map(str::to_string)
     };
     assert_eq!(page("A"), None);
     assert_eq!(page("B"), Some("45".to_string()));
@@ -222,10 +221,11 @@ fn epub_without_toc_has_empty_outline_but_sections() {
         ));
 
         assert!(doc.outline.is_empty(), "{version:?}");
+        let places = Places::new(&doc);
         let sections: Vec<_> = doc
             .blocks
             .iter()
-            .map(|b| (b.text.as_str(), b.section.clone()))
+            .map(|b| (b.text.as_str(), places.section_path(b).to_vec()))
             .collect();
         assert_eq!(
             sections,
@@ -276,13 +276,8 @@ fn percent_encoded_hrefs_and_fragments_are_decoded() {
 
     let targets: Vec<_> = doc.outline.iter().map(|e| e.block_id).collect();
     assert_eq!(targets, [Some(0), Some(1)]);
-    match &doc.blocks[1].locator {
-        Locator::Epub { href, anchor, .. } => {
-            assert_eq!(href, "my chapter.xhtml");
-            assert_eq!(anchor.as_deref(), Some("ب"));
-        }
-        other => panic!("not an EPUB locator: {other:?}"),
-    }
+    assert_eq!(href(&doc, &doc.blocks[1]), "my chapter.xhtml");
+    assert_eq!(doc.blocks[1].ids, ["ب"]);
 }
 
 #[test]

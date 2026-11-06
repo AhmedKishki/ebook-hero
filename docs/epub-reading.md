@@ -54,12 +54,12 @@ The content documents do not come through rbook, which would copy an entry into 
 The reader takes the spine entries in order, non-linear ones included. Each skip below writes an `UnreadableContent` warning.
 
 1. An entry without a manifest item is skipped with "the spine item is not in the manifest". Its `idref` stands in for the href, since there is no path to name.
-2. The item's decoded path is made relative to `package_dir` by `relative_to`, and `without_controls` drops its control characters, which a terminal would act on when a locator is printed. This `href` goes into locators and warnings. A path outside the package directory keeps all its components: `/shared/a.xhtml` under the package directory `/OEBPS` becomes `shared/a.xhtml`.
+2. The item's decoded path is made relative to `package_dir` by `relative_to`, and `without_controls` drops its control characters, which a terminal would act on when a locator is printed. This `href` goes into `Document.files` and into warnings. A path outside the package directory keeps all its components: `/shared/a.xhtml` under the package directory `/OEBPS` becomes `shared/a.xhtml`.
 3. When more than `MAX_BOOK_CONTENT_BYTES` (256 MiB) has been read, the reader writes one warning, "book exceeds 256 MiB of content; the rest is not read", and stops reading the spine.
 4. A content document already read is skipped with "listed again in the spine; read once".
 5. `read_entry` reads the entry. One that holds more than `MAX_CONTENT_BYTES` (32 MiB) once uncompressed is skipped with "content document exceeds 32 MiB". Any other ZIP error is skipped with that error's message.
 6. `decode_text` turns the bytes into a string.
-7. `xhtml_blocks` turns the string into raw blocks, and each becomes a `Block`. Its `id` is the number of blocks read before it in the whole book. Its `Locator::Epub` holds the `href`, the raw block's `anchor` and `print_page`, and `para`, the raw block's 1-based position in this document.
+7. The document's `href` is added to `Document.files`, and `xhtml_blocks` turns the string into raw blocks, each of which becomes a `Block`. Its `id` is the number of blocks read before it in the whole book. Its `Locator::Epub` holds the index of the document in `files`, and its `ids` are the raw block's. When the raw block's `print_page` differs from the previous block's, the block starts with a `PageBreak` span that carries the new label.
 
 For each content document the reader records, in a `FileBlocks` value, the id of its first block and, for every element id a raw block carries, the first block that carries it. The outline resolves against these records.
 
@@ -77,7 +77,7 @@ The code comments state the reasons: the per-entry cap means "a small archive ca
 
 ## From XHTML to blocks
 
-`xhtml_blocks` in `src/extract/xhtml.rs` turns one content document into `RawBlock` values in document order. A `RawBlock` has a `kind`, a `text`, an `anchor`, a list of `ids` and a `print_page`. The EPUB reader adds the id, the section and the locator.
+`xhtml_blocks` in `src/extract/xhtml.rs` turns one content document into `RawBlock` values in document order. A `RawBlock` has a `kind`, a `text`, an `anchor`, a list of `ids` and a `print_page`. The EPUB reader keeps the kind, the text and the ids, turns a change of `print_page` into a page break, and adds the id, the section and the locator.
 
 ### Repairing self-closed tags
 
@@ -124,7 +124,7 @@ When a block ends, `flush` normalizes its text. A block whose text is then empty
 
 A raw block's `anchor` is the last id met at or before its start, the block's own id included. Its `ids` are every id met since the previous emitted block, plus the block's own id and the ids of its descendants. In the test `anchors_and_ids`, `<section id="s1"><h1 id="h">T</h1><p>P</p></section>` gives the heading the anchor `h` and the ids `["s1", "h"]`, and the paragraph the anchor `h` and no ids.
 
-The `anchor` goes into the locator. The `ids` serve only to resolve table-of-contents targets and are not stored in the `Document`.
+The `ids` go into the block, where they resolve table-of-contents targets. The `anchor` is not stored, because a link into the book resolves through the `ids` of the block that holds its target.
 
 ### Notes
 
@@ -134,7 +134,7 @@ A note becomes one `Note` block where it stands in the document, labelled with i
 
 ### Printed pages
 
-`read_epub` holds one `print_page` value for the whole book and passes it to `xhtml_blocks` for each content document in turn. A page-break marker sets it, and the page stays in effect across documents until the next marker. The marker's own content is dropped, so `<p>Before <span epub:type="pagebreak">12</span>after.</p>` gives `Before after.` as its text.
+`read_epub` holds one `print_page` value for the whole book and passes it to `xhtml_blocks` for each content document in turn. A page-break marker sets it, and the page stays in effect across documents until the next marker. The reader stores the page once, as a `PageBreak` span at offset 0 of the first block whose text starts on it, and `Places::print_page` gives each later block the label of the last break before it, in the same document or an earlier one. The marker's own content is dropped, so `<p>Before <span epub:type="pagebreak">12</span>after.</p>` gives `Before after.` as its text.
 
 `page_break` takes the label from the first usable of four candidates:
 
@@ -160,7 +160,7 @@ Composing after the drops means that a combining mark which followed a dropped c
 
 ## Sections
 
-`assign_sections` in `src/extract/mod.rs` gives each block the path of headings above it, across content documents. The PDF reader calls the same function. In an EPUB the heading levels are the numbers of the `h1` to `h6` tags. A heading of level n replaces the entries of level n and deeper, and skipped levels add nothing, so a book whose chapters are all `h2` has a one-entry path per chapter. `docs/document-model.md` works through an example.
+`assign_sections` in `src/extract/mod.rs` opens a section at every heading and gives each block the section it is in, across content documents. The PDF reader calls the same function. In an EPUB the heading levels are the numbers of the `h1` to `h6` tags. A heading of level n closes the sections of level n and deeper, and skipped levels open nothing, so a book whose chapters are all `h2` has a one-entry path per chapter. `docs/document-model.md` works through an example.
 
 ## Metadata
 
@@ -189,7 +189,7 @@ The outline does not depend on the heading blocks. An entry's level is its depth
 
 ## Reader version
 
-`EPUB_READER_VERSION` in `src/settings.rs` is 2. AGENTS.md requires a bump with every change to the reader. `Manifest` in `src/index/cache.rs` records it with the schema, tool, PDF reader, passage and analyzer versions. `is_current_stage1` reuses a cached index only when all of them match the running build. A bump therefore rebuilds every cached index the next time its book is opened, PDF books included, because the comparison covers the whole manifest.
+`EPUB_READER_VERSION` in `src/settings.rs` is 3. AGENTS.md requires a bump with every change to the reader. `Manifest` in `src/index/cache.rs` records it with the schema, tool, PDF reader, passage and analyzer versions. `is_current_stage1` reuses a cached index only when all of them match the running build. A bump therefore rebuilds every cached index the next time its book is opened, PDF books included, because the comparison covers the whole manifest.
 
 ## Design principles
 
@@ -207,7 +207,7 @@ A spine item that cannot be read becomes an `UnreadableContent` warning, and the
 
 ### Locators that cite the book
 
-`href` and `anchor` point into the file, `para` counts blocks within it, and `print_page` names the page of the printed edition when the book marks its page breaks. The passage locator in `src/passages.rs` builds on these, which lets `locator_text` cite an EPUB passage as `CHAPTER I ¶3–5, print p. 45`.
+A block's `file` names its content document, the `para` that `Places` derives counts blocks within it, and the page breaks name the pages of the printed edition when the book marks them. The passage locator in `src/passages.rs` builds on these, which lets `locator_text` cite an EPUB passage as `CHAPTER I ¶3–5, print p. 45`.
 
 ### The book's markup decides, by fixed rules
 

@@ -162,14 +162,14 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
         });
         None
     });
-    let label_of = |page: u32| page_label(&labels, page);
+    let page_count = metadata.page_count.unwrap_or_default();
+    let page_labels = page_labels(&labels, page_count);
 
     let skip = furniture_detection::furniture(&furniture_pages(&pages));
     let laid = paragraphs(&pages, &skip);
-    let page_count = metadata.page_count.unwrap_or_default() as usize;
-    let entries = outline_entries(items.as_deref().unwrap_or_default(), page_count);
-    let (mut blocks, outline) = place_headings(&laid, &entries, &label_of);
-    assign_sections(&mut blocks);
+    let entries = outline_entries(items.as_deref().unwrap_or_default(), page_count as usize);
+    let (mut blocks, outline) = place_headings(&laid, &entries);
+    let sections = assign_sections(&mut blocks);
 
     let mut skipped: Vec<_> = skip.into_iter().collect();
     skipped.sort_unstable();
@@ -187,10 +187,14 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
             id: id as u32,
             kind: BlockKind::Paragraph,
             text,
-            orig: None,
             spans: Vec::new(),
-            section: Vec::new(),
-            locator: pdf_locator(page, None, label_of(page), Some(bbox)),
+            ids: Vec::new(),
+            section: None,
+            locator: Locator::Pdf {
+                page,
+                page_end: None,
+                bbox: Some(bbox),
+            },
         })
         .collect();
 
@@ -199,6 +203,9 @@ fn build_document(path: &Path, source: Source, metadata: Metadata, read: Read) -
         source,
         metadata,
         outline,
+        sections,
+        files: Vec::new(),
+        page_labels,
         blocks,
         furniture: furniture_blocks,
         warnings,
@@ -405,27 +412,16 @@ fn split_line(line: &TextLine, x0: f32, y1: f32) -> Vec<Line> {
         .collect()
 }
 
-/// The printed label of a 1-based page, or `None` when the PDF has no
-/// page-label ranges (the extractor would answer with the physical number).
-fn page_label(ranges: &[PageLabelRange], page: u32) -> Option<String> {
+/// The printed label of each page, page 1 first, or nothing when the PDF has
+/// no page-label ranges (the extractor would answer with the physical
+/// number).
+fn page_labels(ranges: &[PageLabelRange], page_count: u32) -> Vec<Option<String>> {
     if ranges.is_empty() {
-        return None;
+        return Vec::new();
     }
-    Some(PageLabelExtractor::get_label(ranges, page as usize - 1))
-}
-
-fn pdf_locator(
-    page: u32,
-    page_end: Option<u32>,
-    page_label: Option<String>,
-    bbox: Option<[f32; 4]>,
-) -> Locator {
-    Locator::Pdf {
-        page,
-        page_end,
-        page_label,
-        bbox,
-    }
+    (0..page_count as usize)
+        .map(|index| Some(PageLabelExtractor::get_label(ranges, index)))
+        .collect()
 }
 
 /// A bookmark that leads to a page of the book.
@@ -499,11 +495,7 @@ fn find_heading(
 /// A bookmark whose heading is not among its page's paragraphs gets a new
 /// `Heading` block before the first paragraph that starts on or after its
 /// page. The returned outline has the block ids of the final numbering.
-fn place_headings(
-    laid: &[LaidParagraph],
-    entries: &[Entry],
-    label_of: &dyn Fn(u32) -> Option<String>,
-) -> (Vec<Block>, Vec<OutlineEntry>) {
+fn place_headings(laid: &[LaidParagraph], entries: &[Entry]) -> (Vec<Block>, Vec<OutlineEntry>) {
     let mut claims: HashMap<usize, (usize, Claim)> = HashMap::new();
     let mut inserts: HashMap<usize, Vec<usize>> = HashMap::new();
     for (e, entry) in entries.iter().enumerate() {
@@ -537,9 +529,9 @@ fn place_headings(
             id: blocks.len() as u32,
             kind,
             text: text.to_string(),
-            orig: None,
             spans: Vec::new(),
-            section: Vec::new(),
+            ids: Vec::new(),
+            section: None,
             locator,
         });
     }
@@ -547,7 +539,11 @@ fn place_headings(
         for &e in inserts.get(&index).into_iter().flatten() {
             let entry = &entries[e];
             outline[e].block_id = Some(blocks.len() as u32);
-            let locator = pdf_locator(entry.page, None, label_of(entry.page), None);
+            let locator = Locator::Pdf {
+                page: entry.page,
+                page_end: None,
+                bbox: None,
+            };
             push(
                 &mut blocks,
                 BlockKind::Heading { level: entry.level },
@@ -556,12 +552,11 @@ fn place_headings(
             );
         }
         let Some(p) = laid.get(index) else { break };
-        let locator = pdf_locator(
-            p.page,
-            (p.page_end != p.page).then_some(p.page_end),
-            label_of(p.page),
-            Some(p.bbox),
-        );
+        let locator = Locator::Pdf {
+            page: p.page,
+            page_end: (p.page_end != p.page).then_some(p.page_end),
+            bbox: Some(p.bbox),
+        };
         let kind = if p.note {
             BlockKind::Note { label: None }
         } else {
@@ -914,10 +909,6 @@ mod tests {
         }
     }
 
-    fn place(laid: &[LaidParagraph], entries: &[Entry]) -> (Vec<Block>, Vec<OutlineEntry>) {
-        place_headings(laid, entries, &|page| Some(format!("p{page}")))
-    }
-
     fn summary(blocks: &[Block]) -> Vec<(String, Option<u8>)> {
         blocks
             .iter()
@@ -948,7 +939,7 @@ mod tests {
             paragraph("After.", 2),
         ];
 
-        let (blocks, outline) = place(&laid, &[entry("Entropy", 2, 2)]);
+        let (blocks, outline) = place_headings(&laid, &[entry("Entropy", 2, 2)]);
 
         assert_eq!(
             summary(&blocks),
@@ -968,7 +959,7 @@ mod tests {
     fn a_paragraph_that_starts_with_the_title_is_split() {
         let laid = [paragraph("Entropy Entropy measures surprise.", 1)];
 
-        let (blocks, outline) = place(&laid, &[entry("entropy", 1, 1)]);
+        let (blocks, outline) = place_headings(&laid, &[entry("entropy", 1, 1)]);
 
         assert_eq!(
             summary(&blocks),
@@ -986,7 +977,7 @@ mod tests {
             paragraph("Entropy", 1),
         ];
 
-        let (blocks, outline) = place(&laid, &[entry("Entropy", 1, 1)]);
+        let (blocks, outline) = place_headings(&laid, &[entry("Entropy", 1, 1)]);
 
         assert_eq!(
             summary(&blocks),
@@ -1002,7 +993,7 @@ mod tests {
     fn a_title_that_is_only_the_start_of_a_word_is_not_a_prefix_match() {
         let laid = [paragraph("Entropyless text.", 1)];
 
-        let (blocks, _) = place(&laid, &[entry("Entropy", 1, 1)]);
+        let (blocks, _) = place_headings(&laid, &[entry("Entropy", 1, 1)]);
 
         assert_eq!(
             summary(&blocks),
@@ -1018,7 +1009,7 @@ mod tests {
             paragraph("Three.", 2),
         ];
 
-        let (blocks, outline) = place(&laid, &[entry("Chapter", 1, 2)]);
+        let (blocks, outline) = place_headings(&laid, &[entry("Chapter", 1, 2)]);
 
         assert_eq!(
             summary(&blocks),
@@ -1035,7 +1026,6 @@ mod tests {
             Locator::Pdf {
                 page: 2,
                 page_end: None,
-                page_label: Some("p2".to_string()),
                 bbox: None
             }
         );
@@ -1047,7 +1037,8 @@ mod tests {
     fn a_heading_for_a_page_without_text_goes_before_the_next_text() {
         let laid = [paragraph("One.", 1), paragraph("Four.", 4)];
 
-        let (blocks, outline) = place(&laid, &[entry("Plate", 1, 2), entry("Epilogue", 1, 6)]);
+        let (blocks, outline) =
+            place_headings(&laid, &[entry("Plate", 1, 2), entry("Epilogue", 1, 6)]);
 
         assert_eq!(
             summary(&blocks),
@@ -1068,7 +1059,8 @@ mod tests {
         note.note = true;
         let laid = [note, paragraph("Entropy", 1), paragraph("Text.", 1)];
 
-        let (blocks, outline) = place(&laid, &[entry("Entropy", 1, 1), entry("Entropy", 2, 1)]);
+        let (blocks, outline) =
+            place_headings(&laid, &[entry("Entropy", 1, 1), entry("Entropy", 2, 1)]);
 
         // The first bookmark takes the paragraph; the second finds none left
         // and gets a new heading before the page's first block.
@@ -1197,27 +1189,23 @@ mod tests {
             doc.warnings,
             [unreadable_part("page labels", "bad number tree")]
         );
-        assert!(matches!(
-            doc.blocks[0].locator,
-            Locator::Pdf {
-                page_label: None,
-                ..
-            }
-        ));
+        assert!(doc.page_labels.is_empty());
+        assert_eq!(doc.page_label(1), None);
     }
 
     #[test]
-    fn page_label_ranges_label_the_blocks() {
-        let mut read = read_of(vec![Ok(text_page(1))]);
+    fn page_label_ranges_label_every_page() {
+        let mut read = read_of(vec![Ok(text_page(1)), Ok(text_page(2))]);
         read.labels = Ok(vec![PageLabelRange::new(0)]);
 
         let doc = build(read).unwrap();
 
         assert!(doc.warnings.is_empty());
-        assert!(matches!(
-            &doc.blocks[0].locator,
-            Locator::Pdf { page_label: Some(label), .. } if label == "1"
-        ));
+        assert_eq!(
+            doc.page_labels,
+            [Some("1".to_string()), Some("2".to_string())]
+        );
+        assert_eq!(doc.page_label(1), Some("1"));
     }
 
     #[test]

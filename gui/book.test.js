@@ -10,24 +10,34 @@ const { findBinary } = require('./runner');
 
 const FIXTURES = path.join(__dirname, '..', 'tests', 'fixtures');
 
-function epubBlock(id, para, text, href = 'ch1.xhtml', type = 'paragraph') {
-  return { id, kind: { type, ...(type === 'heading' ? { level: 2 } : {}) }, text, section: [], locator: { format: 'epub', href, para } };
+// A block of schema 3: JSON leaves out its id, which is its index, and its locator names a file of `files`.
+function epubBlock(text, file = 0, type = 'paragraph') {
+  return { kind: { type, ...(type === 'heading' ? { level: 2 } : {}) }, text, section: 0, locator: { file } };
 }
 
 function document(blocks, extra = {}) {
-  return { schema_version: 2, source: { format: 'epub' }, metadata: { title: 'T' }, blocks, ...extra };
+  return {
+    schema_version: 3,
+    source: { format: 'epub' },
+    metadata: { title: 'T' },
+    sections: [{ heading: 0, parent: null }],
+    files: ['ch1.xhtml', 'ch2.xhtml'],
+    page_labels: [],
+    blocks,
+    ...extra,
+  };
 }
 
 test('a Document of this schema or a later one is read; an older or broken one is refused with a remedy', () => {
-  assert.equal(parseDocument(JSON.stringify(document([]))).schema_version, 2);
-  assert.equal(parseDocument(JSON.stringify(document([], { schema_version: 3 }))).schema_version, 3);
-  assert.throws(() => parseDocument(JSON.stringify(document([], { schema_version: 1 }))), /schema 1.*schema 2 or later.*cargo build --release/);
+  assert.equal(parseDocument(JSON.stringify(document([]))).schema_version, 3);
+  assert.equal(parseDocument(JSON.stringify(document([], { schema_version: 4 }))).schema_version, 4);
+  assert.throws(() => parseDocument(JSON.stringify(document([], { schema_version: 2 }))), /schema 2.*schema 3 or later.*cargo build --release/);
   assert.throws(() => parseDocument(JSON.stringify({ blocks: [] })), /schema undefined/);
   assert.throws(() => parseDocument('not json'), (error) => error instanceof BookError && /not JSON.*cargo build --release/.test(error.message));
 });
 
-test('the view keeps the text in order and drops the locators', () => {
-  const view = viewOf(document([epubBlock(0, 1, 'Title', 'a', 'heading'), epubBlock(1, 2, 'Body')]));
+test('the view keeps the text in order, numbers the blocks by their index and drops the locators', () => {
+  const view = viewOf(document([epubBlock('Title', 0, 'heading'), epubBlock('Body', 1)]));
   assert.deepEqual(view, {
     title: 'T',
     format: 'epub',
@@ -46,7 +56,7 @@ function tempBook(contents = 'book') {
 }
 
 /** A fake binary: `extract` writes `blocks`, and `read` writes one passage with `passage`'s fields. */
-function fakeExec(calls, { blocks = [epubBlock(0, 1, 'one'), epubBlock(1, 2, 'two')], passage = { blocks: [1] } } = {}) {
+function fakeExec(calls, { blocks = [epubBlock('one'), epubBlock('two')], passage = { blocks: [1] } } = {}) {
   return async (args) => {
     calls.push(args[0]);
     if (args[0] === 'extract') return { ok: true, stdout: JSON.stringify(document(blocks)), stderr: '' };
@@ -59,7 +69,7 @@ test('a passage marks the blocks read --json names', async () => {
   const { dir, file } = tempBook();
   try {
     const exec = fakeExec([], {
-      blocks: [epubBlock(0, 1, 'one'), epubBlock(1, 2, 'two'), epubBlock(2, 3, 'three')],
+      blocks: [epubBlock('one'), epubBlock('two'), epubBlock('three')],
       passage: { blocks: [1, 2] },
     });
     const reply = await createLibrary(exec).open({ path: file, passage: 5 });
@@ -80,6 +90,7 @@ test('a passage whose blocks are missing or not in the book is an error with a r
     assert.match(old.stderr, /passage 5 .*no blocks.*cargo build --release/);
     assert.match((await open({ blocks: [] })).stderr, /passage 5 .*no blocks/);
     assert.match((await open({ blocks: [1, 9] })).stderr, /passage 5 .*block 9.*cache clear/);
+    assert.match((await open({ blocks: [1, 2] })).stderr, /passage 5 .*block 2.*cache clear/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

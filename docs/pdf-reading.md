@@ -1,6 +1,6 @@
 # Reading a PDF
 
-`src/extract/pdf.rs` turns a PDF into the `Document` of `src/document/mod.rs`: the book's text as blocks in reading order, each with a locator that names the page the block is printed on, the printed page label and the block's box on that page. Passages, the search indexes, `read`, `verify` and the concept graph read this `Document` and never change it. The reader therefore decides what text a search can find and which page a result cites.
+`src/extract/pdf.rs` turns a PDF into the `Document` of `src/document/mod.rs`: the book's text as blocks in reading order, each with a locator that names the page the block is printed on and the block's box on that page, beside a table of the pages' printed labels. Passages, the search indexes, `read`, `verify` and the concept graph read this `Document` and never change it. The reader therefore decides what text a search can find and which page a result cites.
 
 ## What the reader writes
 
@@ -11,34 +11,33 @@
 | `metadata.page_count` | the number of pages in the file, with text or without |
 | `metadata.language`, `metadata.spine_count` | always `null` |
 | `outline` | the bookmarks that lead to a page, each with the id of its heading block |
+| `sections` | one per heading, each naming its heading block and the section around it |
+| `files` | always empty |
+| `page_labels` | the printed label of each page, page 1 first; empty when the PDF defines no page labels |
 | `blocks` | headings, paragraphs and notes in reading order, numbered from 0 |
 | `furniture` | running heads, page numbers, stamps and other lines that other pages predict, in page order, numbered from 0 on their own |
 | `warnings` | the pages without text, every part of the file that could not be read, and the pages read with pdf_oxide's own word breaks |
 
-A block's `kind` is `heading` with a `level`, `paragraph`, or `note` with `label: null`. The PDF reader writes no `list_item` blocks and leaves `orig` and `spans` empty, so its JSON has neither field.
+A block's `kind` is `heading` with a `level`, `paragraph`, or `note` with `label: null`. The PDF reader writes no `list_item` blocks and leaves `spans` and `ids` empty, so its JSON has neither field.
 
-The locator of a PDF block has four fields:
+The locator of a PDF block has three fields:
 
 | Field | Meaning |
 |---|---|
 | `page` | the physical page the block starts on, counted from 1 |
 | `page_end` | the page the block ends on, set only when it is later than `page` |
-| `page_label` | the printed label of `page`, such as `xii` or `37`; `null` when the PDF defines no page labels |
 | `bbox` | `[left, top, right, bottom]` in points from the top-left corner of the page's media box, covering the block's lines on `page` only; `null` for a heading the reader inserted |
 
-`ebook-hero extract --format json` prints this paragraph of `tests/fixtures/sample.pdf` (text shortened). It lies on page 2, whose printed label is `1`:
+`ebook-hero extract --format json` prints this paragraph of `tests/fixtures/sample.pdf` (text shortened), block 4. It lies on page 2, whose entry in `page_labels` is `1`, and in section 0, the one the heading `Entropy` opens:
 
 ```json
 {
-  "id": 4,
   "kind": { "type": "paragraph" },
   "text": "Entropy measures how much surprise a source of messages carries. A fair coin ...",
-  "section": ["Entropy"],
+  "section": 0,
   "locator": {
-    "format": "pdf",
     "page": 2,
     "page_end": null,
-    "page_label": "1",
     "bbox": [133.768, 146.62244, 477.4826, 192.45105]
   }
 }
@@ -78,7 +77,7 @@ flowchart TD
 11. `join_lines` joins each paragraph's lines and mends the words hyphenated at line ends.
 12. `normalize` in `src/normalize.rs` cleans the text of every paragraph.
 13. `outline_entries` and `place_headings` turn the bookmarks into heading blocks.
-14. `assign_sections` in `src/extract/mod.rs` gives every block the path of headings above it.
+14. `assign_sections` in `src/extract/mod.rs` gives every heading a section and every block the section it is in.
 
 ### 1. Format detection
 
@@ -134,7 +133,7 @@ An error while reading the page labels or the outline becomes an `UnreadablePart
 
 `furniture` from the furniture-detection crate takes the pages with text, each line as its text and box, and returns the `(page, line index)` pairs of the lines that other pages predict, such as running heads and page numbers (folios). [Furniture detection](furniture-detection.md) explains how it decides. `paragraphs` leaves these lines out of the text, which matters for step 10: the run-on rule reads the first body line of a page, and a running head left in place would be that line.
 
-The reader keeps each furniture line in `Document.furniture` as a `paragraph` block with its normalized text and a locator holding its page, its page label and the line's box. Furniture blocks come in page and line order, numbered from 0 separately from the ids of `blocks`.
+The reader keeps each furniture line in `Document.furniture` as a `paragraph` block with its normalized text and a locator holding its page and the line's box. Furniture blocks come in page and line order, numbered from 0 separately from the ids of `blocks`.
 
 ### 7. Reading order
 
@@ -232,23 +231,23 @@ Composing after the drops lets a combining mark that followed a dropped characte
 
 1. The first paragraph whose text equals the title, ignoring case, becomes a `heading` block with the bookmark's level. It keeps its own text and locator, so the bookmark `Entropy` makes a heading that reads `ENTROPY` when the page prints it that way.
 2. Failing that, the first paragraph that starts with the title, ignoring case, followed by whitespace, is split into a heading with that start and a paragraph with the rest. Both blocks share the paragraph's locator. This case covers a heading that the break rules left joined to the text below it.
-3. Failing both, the reader inserts a new heading with the bookmark's title before the first paragraph that starts on or after the bookmark's page, or at the end of the book when there is none. Its locator has the page and its label but no `bbox`.
+3. Failing both, the reader inserts a new heading with the bookmark's title before the first paragraph that starts on or after the bookmark's page, or at the end of the book when there is none. Its locator has the page but no `bbox`.
 
 A whole match on the page wins over a prefix match earlier on it. A paragraph serves one bookmark at most, so a second bookmark with the same title on the same page needs another matching paragraph or gets an inserted heading. The blocks are numbered once all headings are placed, and every outline entry gets the id of its heading block, so no entry of `outline` lacks a `block_id`. The outline entry keeps the bookmark's title, while the heading block holds the text as the page prints it.
 
 ### 14. Sections
 
-`assign_sections` gives every block its `section`: the texts of the headings above it, outermost first. It keeps a stack of open headings. A heading of level n removes the entries of level n and deeper before it goes on the stack, so a heading's own section ends with its own text. A skipped level adds no empty entry: under a level 1 heading `A`, a level 3 heading `C` has the section `["A", "C"]`.
+`assign_sections` opens a section at every heading and gives every block the index of the section it is in. It keeps a stack of open sections. A heading of level n closes the sections of level n and deeper and opens its own inside the one left on top, so a heading's own section path ends with its own text. A skipped level opens nothing: under a level 1 heading `A`, a level 3 heading `C` has the section path `["A", "C"]`.
 
-A PDF without bookmarks has no headings, so all its blocks have an empty `section`. `src/passages.rs` packs two blocks into one passage only when their sections are equal, so blocks with different heading paths never share a passage.
+A PDF without bookmarks has no headings, so `sections` is empty and no block has a `section`. `src/passages.rs` packs two blocks into one passage only when they are in the same section, so blocks under different headings never share a passage.
 
 ## Page labels
 
-A PDF can give its pages printed labels in ranges, such as `i` to `xii` for the front matter and `1` onward from the first chapter (ISO 32000-1, 12.4.2). pdf_oxide's `PageLabelExtractor` reads the ranges, and `page_label` gives the label of a block's start page. When the PDF defines no ranges, `page_label` returns `None` and the locator holds `null`, because pdf_oxide would answer with the physical page number, which `page` already holds. In `tests/fixtures/sample.pdf` the title page is labelled `i` and the next page `1`.
+A PDF can give its pages printed labels in ranges, such as `i` to `xii` for the front matter and `1` onward from the first chapter (ISO 32000-1, 12.4.2). pdf_oxide's `PageLabelExtractor` reads the ranges, and `page_labels` writes the label of every page into `Document.page_labels`, page 1 first. When the PDF defines no ranges, the list stays empty, because pdf_oxide would answer with the physical page number, which a locator's `page` already holds. In `tests/fixtures/sample.pdf` the title page is labelled `i` and the next page `1`.
 
 ## Reader version
 
-`PDF_READER_VERSION` in `src/settings.rs` is 3. Every cached index records it in its manifest (`expected_stage1` in `src/index/cache.rs`). `load_current` in `src/index/book.rs` does not load an index whose manifest holds another number, so the book is read and indexed again. A change to the reader's output must therefore bump the number, as `AGENTS.md` requires; otherwise cached books keep the text the old reader produced.
+`PDF_READER_VERSION` in `src/settings.rs` is 4. Every cached index records it in its manifest (`expected_stage1` in `src/index/cache.rs`). `load_current` in `src/index/book.rs` does not load an index whose manifest holds another number, so the book is read and indexed again. A change to the reader's output must therefore bump the number, as `AGENTS.md` requires; otherwise cached books keep the text the old reader produced.
 
 ## Principles
 
@@ -258,7 +257,7 @@ The rules compare a line with measures of its own page: a word gap with the font
 
 Headings come from the outline alone. The outline states each heading's title, level and page, while a page's lines carry only text, position and size, from which a level could only be guessed. The reader therefore takes headings and levels from the bookmarks and uses the page text only to find where each heading is printed.
 
-The locator is standoff: it sits beside the text and points into the PDF, and nothing about the position is written into `text`. Search and `verify` thus compare text that holds only the book's words, with no page marker inside a paragraph that crosses a page, while a result can still name its physical page, its printed label and its box. The locator keeps both page numbers because `read --page` and the MCP `read` tool take the physical page, while a citation needs the printed one. Passages map their text back to blocks by offsets (`BlockRange` in `src/passages.rs`) and take their page range from the blocks' locators.
+The locator is standoff: it sits beside the text and points into the PDF, and nothing about the position is written into `text`. Search and `verify` thus compare text that holds only the book's words, with no page marker inside a paragraph that crosses a page, while a result can still name its physical page, its printed label and its box. The model keeps both page numbers, the physical one in the locator and the printed one in `page_labels`, because `read --page` and the MCP `read` tool take the physical page, while a citation needs the printed one. Passages map their text back to blocks by offsets (`BlockRange` in `src/passages.rs`) and take their page range from the blocks' locators.
 
 Failures are named, following the rule in `AGENTS.md` that nothing falls back silently. A part that cannot be read is left out and named in a warning, a book without readable text is an error that names its cause, and the word-spacing fallback is reported with the number of pages it touched. Bookmarks are the exception: `outline_entries` drops a bookmark that leads to no page of the book, or whose title is empty, without a warning.
 

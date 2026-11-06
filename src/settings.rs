@@ -70,10 +70,10 @@ pub const EMBEDDING_DIM: usize = 384;
 pub const RERANKER_MODEL: &str = "jinaai/jina-reranker-v1-turbo-en";
 /// The version of the PDF reader. A change to the reader bumps it, so that
 /// cached indexes are built again.
-pub const PDF_READER_VERSION: u32 = 3;
+pub const PDF_READER_VERSION: u32 = 4;
 /// The version of the EPUB reader. A change to the reader bumps it, so that
 /// cached indexes are built again.
-pub const EPUB_READER_VERSION: u32 = 2;
+pub const EPUB_READER_VERSION: u32 = 3;
 /// The version of passage packing. A change to how blocks become passages
 /// bumps it, so that cached indexes are built again.
 pub const PASSAGES_VERSION: u32 = 2;

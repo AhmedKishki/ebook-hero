@@ -68,13 +68,12 @@ mod tests {
             id: 0,
             kind,
             text: text.to_string(),
-            orig: None,
             spans: Vec::new(),
-            section: Vec::new(),
+            ids: Vec::new(),
+            section: None,
             locator: Locator::Pdf {
                 page,
                 page_end: None,
-                page_label: None,
                 bbox: None,
             },
         }
@@ -105,12 +104,7 @@ mod tests {
 
     fn epub_block(kind: BlockKind, text: &str) -> Block {
         Block {
-            locator: Locator::Epub {
-                href: "ch1.xhtml".to_string(),
-                anchor: None,
-                para: 1,
-                print_page: None,
-            },
+            locator: Locator::Epub { file: 0 },
             ..block(kind, text, 1)
         }
     }
@@ -131,6 +125,9 @@ mod tests {
                 spine_count: None,
             },
             outline: Vec::new(),
+            sections: Vec::new(),
+            files: Vec::new(),
+            page_labels: Vec::new(),
             blocks,
             furniture: Vec::new(),
             warnings: Vec::new(),

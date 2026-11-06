@@ -571,13 +571,13 @@ This eBook is for the use of anyone anywhere in the United States and most other
 …
 ```
 
-The JSON is the document model: `schema_version`, `source` (`sha256`, `file_name`, `format`), `metadata`, `outline`, `blocks`, `furniture` and `warnings`. A block looks like this:
+The JSON is the document model: `schema_version`, `source` (`sha256`, `file_name`, `format`), `metadata`, `outline`, `sections`, `files`, `page_labels`, `blocks`, `furniture` and `warnings`. Each fact is stored once, so a block points into the lists beside it instead of repeating what they hold. Block 41 of Alice looks like this:
 
 ```json
-{"id": 41, "kind": {"type": "paragraph"}, "text": "In another moment down went Alice after it, never once considering how in the world she was to get out again.", "section": ["Alice’s Adventures in Wonderland", "CHAPTER I. Down the Rabbit-Hole"], "locator": {"format": "epub", "href": "4040227324556390537_11-h-1.htm.html", "anchor": "chap01", "para": 5, "print_page": null}}
+{"kind": {"type": "paragraph"}, "text": "In another moment down went Alice after it, never once considering how in the world she was to get out again.", "section": 5, "locator": {"file": 2}}
 ```
 
-[document-model.md](document-model.md) describes every field. Changes to the model only add fields or variants, and each one raises `schema_version`.
+A block's id is its position in `blocks`. Its `section` indexes `sections`, whose chain of parents gives the path `Alice’s Adventures in Wonderland › CHAPTER I. Down the Rabbit-Hole`, and its `file` indexes `files`, here `4040227324556390537_11-h-1.htm.html`. [document-model.md](document-model.md) describes every field and what is derived from it. Each change to the model raises `schema_version`.
 
 ### index
 

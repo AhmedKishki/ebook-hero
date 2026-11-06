@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use ebook_hero::Error;
-use ebook_hero::document::{Block, BlockKind, Document, Format, Locator, Warning};
+use ebook_hero::document::{Block, BlockKind, Document, Format, Locator, Places, Warning};
 use ebook_hero::extract::extract;
 use tempfile::TempDir;
 
@@ -23,11 +23,8 @@ fn page_of(block: &Block) -> u32 {
     }
 }
 
-fn label_of(block: &Block) -> Option<&str> {
-    match &block.locator {
-        Locator::Pdf { page_label, .. } => page_label.as_deref(),
-        other => panic!("not a PDF locator: {other:?}"),
-    }
+fn label_of<'a>(doc: &'a Document, block: &Block) -> Option<&'a str> {
+    doc.page_label(page_of(block))
 }
 
 fn containing<'a>(doc: &'a Document, needle: &str) -> &'a Block {
@@ -57,11 +54,11 @@ fn page_labels() {
 
     let first = &doc.blocks[0];
     assert_eq!(page_of(first), 1);
-    assert_eq!(label_of(first), Some("i"));
+    assert_eq!(label_of(&doc, first), Some("i"));
     let body = doc.blocks.iter().find(|b| page_of(b) == 2).unwrap();
-    assert_eq!(label_of(body), Some("1"));
+    assert_eq!(label_of(&doc, body), Some("1"));
     let last = doc.blocks.iter().find(|b| page_of(b) == 5).unwrap();
-    assert_eq!(label_of(last), Some("4"));
+    assert_eq!(label_of(&doc, last), Some("4"));
 }
 
 #[test]
@@ -105,17 +102,15 @@ fn block_ids_follow_block_order() {
 #[test]
 fn sections_follow_headings() {
     let doc = read("sample.pdf");
+    let places = Places::new(&doc);
+    let section = |needle| places.section_path(containing(&doc, needle));
 
-    let joint = containing(&doc, "Joint entropy is the entropy of two variables");
-    assert_eq!(joint.section, ["Entropy", "Joint entropy"]);
-    let chain = containing(&doc, "The chain rule ties");
-    assert_eq!(chain.section, ["Entropy", "Joint entropy"]);
-    let columns = containing(&doc, "Alpha column");
-    assert_eq!(columns.section, ["Entropy", "Joint entropy"]);
-    let capacity = containing(&doc, "noisy channel coding theorem");
-    assert_eq!(capacity.section, ["Channels"]);
-    let title_page = &doc.blocks[0];
-    assert!(title_page.section.is_empty());
+    let joint = section("Joint entropy is the entropy of two variables");
+    assert_eq!(joint, ["Entropy", "Joint entropy"]);
+    assert_eq!(section("The chain rule ties"), ["Entropy", "Joint entropy"]);
+    assert_eq!(section("Alpha column"), ["Entropy", "Joint entropy"]);
+    assert_eq!(section("noisy channel coding theorem"), ["Channels"]);
+    assert!(places.section_path(&doc.blocks[0]).is_empty());
 }
 
 #[test]
@@ -201,7 +196,6 @@ fn paragraph_locator_has_page_and_bbox() {
     let Locator::Pdf {
         page,
         page_end,
-        page_label,
         bbox: Some([left, top, right, bottom]),
     } = block.locator.clone()
     else {
@@ -209,7 +203,7 @@ fn paragraph_locator_has_page_and_bbox() {
     };
     assert_eq!(page, 2);
     assert_eq!(page_end, None);
-    assert_eq!(page_label.as_deref(), Some("1"));
+    assert_eq!(doc.page_label(page), Some("1"));
     // Letter paper, top-left origin: the text block starts 133.8 pt from the
     // left and is 345 pt wide.
     assert!((left - 133.8).abs() < 1.0, "left {left}");
@@ -249,9 +243,10 @@ fn mixed_pdf_warns_about_pages_without_text() {
     assert_eq!(doc.metadata.page_count, Some(2));
     assert_eq!(doc.warnings, [Warning::PagesWithoutText { pages: vec![2] }]);
     assert!(doc.outline.is_empty());
-    assert!(doc.blocks.iter().all(|b| b.section.is_empty()));
+    assert!(doc.sections.is_empty());
+    assert!(doc.blocks.iter().all(|b| b.section.is_none()));
     assert!(doc.blocks.iter().all(|b| page_of(b) == 1));
-    assert!(doc.blocks.iter().all(|b| label_of(b).is_none()));
+    assert!(doc.blocks.iter().all(|b| label_of(&doc, b).is_none()));
     assert!(
         doc.blocks
             .iter()

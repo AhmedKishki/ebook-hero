@@ -12,7 +12,7 @@ use std::path::Path;
 
 use zip::ZipArchive;
 
-use crate::document::{Block, BlockKind, Document, Format, Source};
+use crate::document::{Block, BlockKind, Document, Format, Section, Source};
 use crate::error::{Error, Result};
 
 /// How far into a file the `%PDF-` marker may start.
@@ -95,63 +95,113 @@ pub fn extract(path: &Path, sha256: &str) -> Result<Document> {
     }
 }
 
-/// Gives every block the path of headings above it, outermost first.
+/// Gives every block its section and returns the sections, one per heading
+/// in reading order.
 ///
-/// A heading of level `n` replaces the entries of level `n` and deeper on the
-/// stack, so a heading's own section ends with its text. Levels that a book
-/// skips add no entries: a book whose chapters are all `h2` has one entry per
-/// section, not a growing list.
-pub(crate) fn assign_sections(blocks: &mut [Block]) {
-    let mut stack: Vec<(u8, &str)> = Vec::new();
-    for block in blocks {
+/// A heading of level `n` closes the open sections of level `n` and deeper
+/// and opens its own inside the one left open, so a heading is in the
+/// section it opens. Levels that a book skips open nothing: a book whose
+/// chapters are all `h2` has one top-level section per chapter, not a growing
+/// path. Blocks before the first heading are in no section.
+pub(crate) fn assign_sections(blocks: &mut [Block]) -> Vec<Section> {
+    let mut sections = Vec::new();
+    let mut open: Vec<(u8, u32)> = Vec::new();
+    for (index, block) in blocks.iter_mut().enumerate() {
         if let BlockKind::Heading { level } = block.kind {
-            while stack.last().is_some_and(|(open, _)| *open >= level) {
-                stack.pop();
+            while open
+                .last()
+                .is_some_and(|&(open_level, _)| open_level >= level)
+            {
+                open.pop();
             }
-            stack.push((level, block.text.as_str()));
+            sections.push(Section {
+                heading: index as u32,
+                parent: open.last().map(|&(_, section)| section),
+            });
+            open.push((level, sections.len() as u32 - 1));
         }
-        block.section = stack.iter().map(|(_, text)| text.to_string()).collect();
+        block.section = open.last().map(|&(_, section)| section);
     }
+    sections
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::Locator;
+    use crate::document::{Locator, Places};
 
     fn block(kind: BlockKind, text: &str) -> Block {
         Block {
             id: 0,
             kind,
             text: text.to_string(),
-            orig: None,
             spans: Vec::new(),
-            section: vec!["stale".to_string()],
-            locator: Locator::Epub {
-                href: "a.xhtml".to_string(),
-                anchor: None,
-                para: 1,
-                print_page: None,
-            },
+            ids: Vec::new(),
+            section: Some(99),
+            locator: Locator::Epub { file: 0 },
         }
     }
 
-    fn sections(blocks: &[Block]) -> Vec<(&str, Vec<&str>)> {
-        blocks
+    /// Each block's text and section path, from the sections `assign_sections` gives.
+    fn sections(blocks: Vec<Block>) -> Vec<(String, Vec<String>)> {
+        let doc = Document::from_blocks(Format::Epub, blocks);
+        let places = Places::new(&doc);
+        doc.blocks
             .iter()
-            .map(|b| {
+            .map(|b| (b.text.clone(), places.section_path(b).to_vec()))
+            .collect()
+    }
+
+    fn paths(expected: &[(&str, Vec<&str>)]) -> Vec<(String, Vec<String>)> {
+        expected
+            .iter()
+            .map(|(text, path)| {
                 (
-                    b.text.as_str(),
-                    b.section.iter().map(String::as_str).collect(),
+                    text.to_string(),
+                    path.iter().map(|title| title.to_string()).collect(),
                 )
             })
             .collect()
     }
 
     #[test]
-    fn a_heading_replaces_its_level_and_deeper() {
+    fn a_heading_opens_a_section_inside_the_one_left_open() {
         let heading = |level, text| block(BlockKind::Heading { level }, text);
         let mut blocks = vec![
+            block(BlockKind::Paragraph, "front"),
+            heading(1, "A"),
+            heading(2, "A.1"),
+            block(BlockKind::Paragraph, "a1"),
+            heading(1, "B"),
+        ];
+
+        let sections = assign_sections(&mut blocks);
+
+        assert_eq!(
+            sections,
+            [
+                Section {
+                    heading: 1,
+                    parent: None
+                },
+                Section {
+                    heading: 2,
+                    parent: Some(0)
+                },
+                Section {
+                    heading: 4,
+                    parent: None
+                },
+            ]
+        );
+        let ids: Vec<_> = blocks.iter().map(|b| b.section).collect();
+        assert_eq!(ids, [None, Some(0), Some(1), Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn a_heading_replaces_its_level_and_deeper() {
+        let heading = |level, text| block(BlockKind::Heading { level }, text);
+        let blocks = vec![
             block(BlockKind::Paragraph, "front"),
             heading(1, "A"),
             block(BlockKind::Paragraph, "a1"),
@@ -164,11 +214,9 @@ mod tests {
             block(BlockKind::Paragraph, "b1"),
         ];
 
-        assign_sections(&mut blocks);
-
         assert_eq!(
-            sections(&blocks),
-            [
+            sections(blocks),
+            paths(&[
                 ("front", vec![]),
                 ("A", vec!["A"]),
                 ("a1", vec!["A"]),
@@ -179,13 +227,13 @@ mod tests {
                 ("a2", vec!["A", "A.2"]),
                 ("B", vec!["B"]),
                 ("b1", vec!["B"]),
-            ]
+            ])
         );
     }
 
     #[test]
     fn h2_only_chapters_are_siblings() {
-        let mut blocks = vec![
+        let blocks = vec![
             block(BlockKind::Heading { level: 2 }, "Ch1"),
             block(BlockKind::Paragraph, "one"),
             block(BlockKind::Heading { level: 2 }, "Ch2"),
@@ -193,23 +241,21 @@ mod tests {
             block(BlockKind::Heading { level: 2 }, "Ch3"),
         ];
 
-        assign_sections(&mut blocks);
-
         assert_eq!(
-            sections(&blocks),
-            [
+            sections(blocks),
+            paths(&[
                 ("Ch1", vec!["Ch1"]),
                 ("one", vec!["Ch1"]),
                 ("Ch2", vec!["Ch2"]),
                 ("two", vec!["Ch2"]),
                 ("Ch3", vec!["Ch3"]),
-            ]
+            ])
         );
     }
 
     #[test]
     fn skipped_levels_replace_deeper_entries() {
-        let mut blocks = vec![
+        let blocks = vec![
             block(BlockKind::Heading { level: 1 }, "A"),
             block(BlockKind::Heading { level: 3 }, "C"),
             block(BlockKind::Heading { level: 3 }, "C2"),
@@ -218,40 +264,36 @@ mod tests {
             block(BlockKind::Heading { level: 2 }, "B2"),
         ];
 
-        assign_sections(&mut blocks);
-
         assert_eq!(
-            sections(&blocks),
-            [
+            sections(blocks),
+            paths(&[
                 ("A", vec!["A"]),
                 ("C", vec!["A", "C"]),
                 ("C2", vec!["A", "C2"]),
                 ("B", vec!["A", "B"]),
                 ("D", vec!["A", "B", "D"]),
                 ("B2", vec!["A", "B2"]),
-            ]
+            ])
         );
     }
 
     #[test]
     fn a_skipped_level_adds_no_empty_entry() {
-        let mut blocks = vec![
+        let blocks = vec![
             block(BlockKind::Heading { level: 2 }, "Deep"),
             block(BlockKind::Paragraph, "p"),
             block(BlockKind::Heading { level: 4 }, "Deeper"),
             block(BlockKind::Heading { level: 1 }, "Top"),
         ];
 
-        assign_sections(&mut blocks);
-
         assert_eq!(
-            sections(&blocks),
-            [
+            sections(blocks),
+            paths(&[
                 ("Deep", vec!["Deep"]),
                 ("p", vec!["Deep"]),
                 ("Deeper", vec!["Deep", "Deeper"]),
                 ("Top", vec!["Top"]),
-            ]
+            ])
         );
     }
 }

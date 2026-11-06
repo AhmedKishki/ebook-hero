@@ -10,7 +10,8 @@ use zip::ZipArchive;
 
 use super::{assign_sections, xhtml::xhtml_blocks};
 use crate::document::{
-    Block, Document, Locator, Metadata, OutlineEntry, SCHEMA_VERSION, Source, Warning,
+    Block, Document, Locator, Metadata, OutlineEntry, SCHEMA_VERSION, Source, Span, SpanKind,
+    Warning,
 };
 use crate::error::{Error, Result};
 use crate::normalize::normalize;
@@ -63,10 +64,12 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
 
     let mut blocks: Vec<Block> = Vec::new();
     let mut warnings = Vec::new();
-    let mut files: HashMap<String, FileBlocks> = HashMap::new();
+    let mut files: Vec<String> = Vec::new();
+    let mut targets: HashMap<String, FileBlocks> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut content_read = 0;
     let mut print_page = None;
+    let mut previous_page = None;
     for entry in epub.spine().iter() {
         let Some(item) = entry.manifest_entry() else {
             warnings.push(Warning::UnreadableContent {
@@ -114,36 +117,44 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
                 continue;
             }
         };
-        let file = files.entry(full_path).or_default();
-        for (index, raw) in xhtml_blocks(&content, &mut print_page)
-            .into_iter()
-            .enumerate()
-        {
+        let file = files.len() as u32;
+        files.push(href);
+        let target = targets.entry(full_path).or_default();
+        for raw in xhtml_blocks(&content, &mut print_page) {
             let id = blocks.len() as u32;
-            file.first.get_or_insert(id);
-            for element_id in raw.ids {
-                file.by_id.entry(element_id).or_insert(id);
+            target.first.get_or_insert(id);
+            for element_id in &raw.ids {
+                target.by_id.entry(element_id.clone()).or_insert(id);
+            }
+            // The printed page is stored once, as a break where it changes.
+            let mut spans = Vec::new();
+            if raw.print_page != previous_page {
+                if let Some(label) = &raw.print_page {
+                    spans.push(Span {
+                        start: 0,
+                        end: 0,
+                        kind: SpanKind::PageBreak {
+                            label: label.clone(),
+                        },
+                    });
+                }
+                previous_page = raw.print_page;
             }
             blocks.push(Block {
                 id,
                 kind: raw.kind,
                 text: raw.text,
-                orig: None,
-                spans: Vec::new(),
-                section: Vec::new(),
-                locator: Locator::Epub {
-                    href: href.clone(),
-                    anchor: raw.anchor,
-                    para: index as u32 + 1,
-                    print_page: raw.print_page,
-                },
+                spans,
+                ids: raw.ids,
+                section: None,
+                locator: Locator::Epub { file },
             });
         }
     }
     if blocks.is_empty() {
         return Err(unreadable("no readable text".to_string()));
     }
-    assign_sections(&mut blocks);
+    let sections = assign_sections(&mut blocks);
 
     let metadata = epub.metadata();
     Ok(Document {
@@ -166,7 +177,10 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
             page_count: None,
             spine_count: Some(epub.spine().len() as u32),
         },
-        outline: outline(&epub, &files),
+        outline: outline(&epub, &targets),
+        sections,
+        files,
+        page_labels: Vec::new(),
         blocks,
         furniture: Vec::new(),
         warnings,
@@ -176,7 +190,7 @@ fn read_epub_within(path: &Path, source: Source, budget: u64) -> Result<Document
 /// The table of contents in reading order, each entry pointing at the first
 /// block of its target: the block carrying the fragment's element id, or the
 /// first block of the file when the fragment is missing or matches none.
-fn outline(epub: &Epub, files: &HashMap<String, FileBlocks>) -> Vec<OutlineEntry> {
+fn outline(epub: &Epub, targets: &HashMap<String, FileBlocks>) -> Vec<OutlineEntry> {
     let Some(contents) = epub.toc().contents() else {
         return Vec::new();
     };
@@ -188,7 +202,7 @@ fn outline(epub: &Epub, files: &HashMap<String, FileBlocks>) -> Vec<OutlineEntry
         }
         let block_id = entry.href().and_then(|href| {
             let path = href.path().decode();
-            let file = files.get(&*path)?;
+            let file = targets.get(&*path)?;
             let decoded = href.decode();
             let fragment = decoded
                 .get(path.len()..)
@@ -420,11 +434,8 @@ mod tests {
         let doc = read_with_budget(&items, &[0], MAX_BOOK_CONTENT_BYTES);
 
         assert_eq!(texts(&doc), ["One."]);
-        assert!(
-            matches!(&doc.blocks[0].locator, Locator::Epub { href, .. } if href == "ch1.xhtml"),
-            "{:?}",
-            doc.blocks[0].locator
-        );
+        assert_eq!(doc.blocks[0].locator, Locator::Epub { file: 0 });
+        assert_eq!(doc.files, ["ch1.xhtml"]);
     }
 
     fn archive(entries: &[(&str, &[u8], CompressionMethod)]) -> ZipArchive<Cursor<Vec<u8>>> {

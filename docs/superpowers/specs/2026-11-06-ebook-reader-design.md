@@ -280,6 +280,14 @@ The tests check one property. For a `Document` D read from Markdown, `read(write
 - **Search, verify and graph.** These read `text`, so they do not change.
 - **CLI and MCP.** Descriptions that say "PDF or EPUB" say "PDF, EPUB or Markdown", and `info` prints the Markdown format.
 
+## Cache files
+
+The index directory's JSON files are compressed with LZ4 through `lz4_flex`, which is pure Rust and already in the dependency tree through tantivy: `document.json.lz4`, `passages.json.lz4` and `graph.json.lz4`. Each name gives both layers, JSON inside LZ4, as `.tar.gz` does. Measured on Alice and on the largest cached book, LZ4 shrinks the files about three times, while decompressing adds about 6% to the time spent parsing the JSON. That fits a project that puts speed first better than brotli, whose files are half the size of LZ4's but whose decompression adds about a quarter.
+
+The files use the LZ4 frame format with its content checksum, through `lz4_flex`'s `frame` feature, which adds the small pure-Rust crate `twox-hash`. The frame's magic number makes a file that is not LZ4 fail at once. Without the checksum, a damaged byte inside a passage of text would decompress into a wrong character inside valid JSON, and the book would change without a sign. A file whose magic number or checksum fails gives an error that names the file and tells the user to run `ebook-hero cache clear`. The frame format is also what the `lz4` command reads, so `lz4 -dc document.json.lz4` shows a cached document.
+
+`manifest.json` stays plain JSON, since it is a few hundred bytes and is read first to decide whether the index is current. `extract --format json` keeps printing plain JSON. The tantivy index compresses itself, and `vectors.f32` holds floats that barely compress, so neither changes. Writes stay atomic: the compressed bytes go to a temporary file that is then renamed.
+
 ## The EPUB reader
 
 `src/extract/xhtml.rs` keeps a stack of open containers as it walks the DOM, and maps elements as follows:
@@ -325,6 +333,7 @@ Images stay out, as now. A link is resolved by the rule that a missing target in
 - `docs/usage.md` says that Markdown files are read and how they are detected, gives the new `Unsupported` message and the Markdown locator form, and describes what `extract` writes.
 - AGENTS.md's scope says "one PDF, EPUB or Markdown file per call". Its lines on `gui/markdown.js` and `gui/help.js` go, and its line on the fields `gui/book.js` reads names `containers`, `blocks[].{kind, text, within, spans}`, `outline` and the `blocks` of a passage in `read --json`. The additive rule stays as written; this change is the exception the user granted, and the changelog marks it as breaking.
 - `docs/pdf-reading.md` says that a note is a `Note` container.
+- `docs/usage.md`'s section on where files are kept names the compressed cache files and how to read one with `lz4 -dc`, and the layout comment at the top of `src/index/cache.rs` names them too.
 - Versions: `SCHEMA_VERSION` 3, `MARKDOWN_READER_VERSION` 1, and `PDF_READER_VERSION`, `EPUB_READER_VERSION` and `PASSAGES_VERSION` up by one. `Cargo.toml` goes to 0.6.0 with a `CHANGELOG.md` entry, and `gui/package.json` goes to 0.3.0.
 - Commits. Each step of the order of work is a commit on the branch, and the last one bumps the versions and adds the changelog entry. Before the pull request the commits are squashed into one release commit, so that main receives one change with its version bump, as AGENTS.md requires and as the 0.5.0 branch landed.
 
@@ -332,7 +341,7 @@ Images stay out, as now. A link is resolved by the rule that a missing target in
 
 Each step leaves `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` and `cd gui && npm test` passing.
 
-1. The schema 3 types, with every `match` updated: sections, files, page labels, `ids` and `PageBreak` stored once, the lookup tables built at load, passages stored as pieces, and `docs/document-model.md`.
+1. The schema 3 types, with every `match` updated: sections, files, page labels, `ids` and `PageBreak` stored once, the lookup tables built at load, passages stored as pieces, the cache files in LZ4 frames, and `docs/document-model.md`.
 2. The Markdown reader, detection, locators, passages and `read`.
 3. The writer and the round-trip tests.
 4. The window: the view, the Help tab, and the removal of `markdown.js`.
@@ -347,6 +356,7 @@ Each step leaves `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings
 - `orig` goes, and so do the `ListItem` and `Note` block kinds.
 - Printed pages become `PageBreak` points, and element ids live on the block where the element is.
 - `read --json` gives each passage's block ids, and the window drops its PDF text matching.
+- The cache files use the LZ4 frame format with its content checksum and end in `.json.lz4`, and `manifest.json` stays plain.
 - Span offsets count code points.
 - Rows and cells are containers, and an empty container holds an empty `Paragraph`.
 - Column alignment, list spacing and merged-cell spans count as weak structure and are not stored.

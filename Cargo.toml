@@ -22,6 +22,7 @@ fastembed = { version = "7.5", default-features = false, features = ["ort-downlo
 fs4 = "1.1"
 furniture-detection = "0.1"
 libc = "0.2"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "frame"] }
 pdf_oxide = "=0.3.78"
 rbook = "0.7.12"
 rmcp = { version = "3.8", features = ["server", "macros", "transport-io", "schemars"] }

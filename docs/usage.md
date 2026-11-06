@@ -36,6 +36,25 @@ A system without a user cache directory gets both in the temporary directory ins
 
 Each book has its own directory in the index cache, named for the SHA-256 of the file's bytes. A copy of a book under another name therefore reuses its index, and a file that changes is indexed again. A new version of ebook-hero rebuilds an index, embeddings included, the first time it opens the book.
 
+A book's directory holds these files:
+
+| File | Holds |
+|---|---|
+| `manifest.json` | what the index was built from, as plain JSON |
+| `document.json.lz4` | the extracted book, the document that [extract](#extract) prints with `--format json` |
+| `passages.json.lz4` | the passages that search runs on |
+| `tantivy/` | the lexical search index |
+| `vectors.f32` | the passage embeddings, written the first time a semantic or hybrid search, or `index`, needs them |
+| `graph.json.lz4` | the concept graph, written the first time `graph` needs it |
+
+A `.json.lz4` file is JSON compressed as one LZ4 frame that ends in a checksum of the whole content. The checksum matters because LZ4 alone decodes a damaged byte into a wrong character inside valid JSON, and the book would change without a sign. With it, a damaged file fails to decode, as does a file that is not an LZ4 frame at all. ebook-hero then builds the index again and logs a warning that names the file. The `lz4` command reads the same frame format, so it shows what a cached file holds:
+
+```console
+$ cd ~/.cache/ebook-hero/indexes/08a2de3a58226311915bd87056e59ed4ee49a284dcb5e722fef415bca4032a4b
+$ lz4 -dc document.json.lz4 | jq -c .metadata
+{"title":"Alice's Adventures in Wonderland","authors":["Lewis Carroll"],"language":"en","page_count":null,"spine_count":14}
+```
+
 The indexes are loaded without being checked, so whoever can write to their directory could plant one. ebook-hero therefore refuses an index directory that is a symbolic link, belongs to another user, or lets group or others write to it:
 
 ```console
@@ -123,6 +142,7 @@ Every command that opens a book can fail in these ways:
 | `<path>: could not be read: <reason>` | The file cannot be opened or parsed, such as a PDF whose reason is `password required`. |
 | `<path>: no text layer; OCR is not supported` | The PDF has no text, as a scan without OCR has none. |
 | `index error: cache directory <dir> is not private (<reason>); set EBOOK_HERO_INDEXES to a private directory` | See [Where files are kept](#where-files-are-kept). |
+| `index error: <file>: not a readable cache file (<reason>); run "ebook-hero cache clear" and try again` | A `.json.lz4` file in the index is not an LZ4 frame or fails its checksum. Opening a book builds the index again by itself and logs this message as a warning, so it ends a command only when a file that build has just written fails the same way. |
 | `index build for <sha256> is held by process <pid>; waited <n>s` | Another process was still building the same book's index after 15 minutes. |
 
 The sections below list only the errors a command adds to these.

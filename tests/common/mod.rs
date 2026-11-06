@@ -2,9 +2,11 @@
 
 #![allow(dead_code)]
 
-use std::fs::File;
-use std::io::Write;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::Path;
+
+use lz4_flex::frame::{FrameDecoder, FrameEncoder, FrameInfo};
 
 use zip::CompressionMethod;
 use zip::ZipWriter;
@@ -21,6 +23,26 @@ pub fn private_tempdir() -> tempfile::TempDir {
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
     dir
+}
+
+/// Writes `bytes` to `path` as the index writes its JSON files: in one LZ4
+/// frame with a content checksum.
+pub fn write_lz4(path: &Path, bytes: &[u8]) {
+    let mut encoder = FrameEncoder::with_frame_info(
+        FrameInfo::new().content_checksum(true),
+        File::create(path).unwrap(),
+    );
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap();
+}
+
+/// What the LZ4 frame in `path` holds, with its checksum checked.
+pub fn read_lz4(path: &Path) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    FrameDecoder::new(fs::read(path).unwrap().as_slice())
+        .read_to_end(&mut bytes)
+        .unwrap();
+    bytes
 }
 
 const IDENTIFIER: &str = "urn:uuid:5f3c8a1e-7b2d-4c6e-9a10-3d2f4b5c6d7e";

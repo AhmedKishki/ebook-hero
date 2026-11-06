@@ -2,13 +2,17 @@
 //! says whether it is current, and the lock that lets one process build it.
 //!
 //! ```text
-//! <root>/<sha>/                    manifest.json, document.json, passages.json, tantivy/,
-//!                                  and, once embedded, vectors.f32
+//! <root>/<sha>/                    manifest.json, document.json.lz4, passages.json.lz4, tantivy/,
+//!                                  and, once built, vectors.f32 and graph.json.lz4
 //! <root>/<sha>.lock                held while building; holds the builder's pid; never deleted
 //! <root>/<sha>.staging-<pid>-<ns>/ a build in progress, renamed to <sha>/ when done
 //! ```
 //!
 //! [`list_indexes`] and [`clear`] are what `cache list` and `cache clear` do.
+//!
+//! A `.json.lz4` file is JSON inside one LZ4 frame with a content checksum, so
+//! a damaged byte gives an error that names the file instead of changed text.
+//! `manifest.json` stays plain JSON.
 //!
 //! The root is trusted: its indexes are loaded without checking them. On Unix
 //! [`ensure_private_dir`] therefore insists it is a real directory that only
@@ -24,6 +28,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fs4::{FileExt, TryLockError};
+use lz4_flex::frame::{FrameDecoder, FrameEncoder, FrameInfo};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -41,11 +46,11 @@ const SHA256_HEX_LEN: usize = 64;
 const ECHO_CHARS: usize = 80;
 
 pub(crate) const MANIFEST_FILE: &str = "manifest.json";
-pub(crate) const DOCUMENT_FILE: &str = "document.json";
-pub(crate) const PASSAGES_FILE: &str = "passages.json";
+pub(crate) const DOCUMENT_FILE: &str = "document.json.lz4";
+pub(crate) const PASSAGES_FILE: &str = "passages.json.lz4";
 pub(crate) const TANTIVY_DIR: &str = "tantivy";
 pub(crate) const VECTORS_FILE: &str = "vectors.f32";
-pub(crate) const GRAPH_FILE: &str = "graph.json";
+pub(crate) const GRAPH_FILE: &str = "graph.json.lz4";
 
 const HASH_CHUNK: usize = 64 * 1024;
 
@@ -526,7 +531,8 @@ struct TitledMetadata {
 /// the file cannot be read.
 fn cached_title(dir: &Path) -> Option<String> {
     let file = File::open(dir.join(DOCUMENT_FILE)).ok()?;
-    let document: TitledDocument = serde_json::from_reader(BufReader::new(file)).ok()?;
+    let document: TitledDocument =
+        serde_json::from_reader(FrameDecoder::new(BufReader::new(file))).ok()?;
     document.metadata.title
 }
 
@@ -544,6 +550,51 @@ pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let bytes = fs::read(path).map_err(|e| io_error(path, e))?;
     serde_json::from_slice(&bytes)
         .map_err(|e| Error::Index(format!("read {}: {e}", path.display())))
+}
+
+/// Writes `value` as JSON in one LZ4 frame with a content checksum, through a
+/// temporary file and a rename, so a reader sees the old file or the new one
+/// and never half of either.
+pub(crate) fn write_lz4_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".tmp");
+    let temp = PathBuf::from(temp);
+    let written = write_lz4_json(&temp, value)
+        .and_then(|()| fs::rename(&temp, path).map_err(|e| io_error(path, e)));
+    if written.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    written
+}
+
+fn write_lz4_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let file = File::create(path).map_err(|e| io_error(path, e))?;
+    let mut encoder = FrameEncoder::with_frame_info(FrameInfo::new().content_checksum(true), file);
+    serde_json::to_writer(&mut encoder, value)
+        .map_err(|e| Error::Index(format!("write {}: {e}", path.display())))?;
+    encoder
+        .finish()
+        .map(drop)
+        .map_err(|e| Error::Index(format!("write {}: {e}", path.display())))
+}
+
+/// Reads a file [`write_lz4_json_atomic`] wrote. The whole frame is decoded,
+/// and its checksum checked, before any of the JSON is parsed.
+pub(crate) fn read_lz4_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let compressed = fs::read(path).map_err(|e| io_error(path, e))?;
+    let mut json = Vec::new();
+    FrameDecoder::new(compressed.as_slice())
+        .read_to_end(&mut json)
+        .map_err(|e| unreadable(path, &e))?;
+    serde_json::from_slice(&json).map_err(|e| unreadable(path, &e))
+}
+
+/// The error for a cache file that is there but does not decode.
+fn unreadable(path: &Path, reason: &dyn std::fmt::Display) -> Error {
+    Error::Index(format!(
+        "{}: not a readable cache file ({reason}); run \"ebook-hero cache clear\" and try again",
+        path.display()
+    ))
 }
 
 /// An I/O error in the cache, as an index error that names the file or
@@ -717,6 +768,75 @@ mod tests {
         let written = write_json_atomic(&manifest, &expected_stage1()).unwrap_err();
 
         assert!(names(&read, &manifest), "{read}");
+        assert!(names(&written, &gone), "{written}");
+    }
+
+    #[test]
+    fn lz4_json_round_trips_and_starts_with_the_frame_magic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.json.lz4");
+
+        write_lz4_json_atomic(&path, &vec!["a", "b"]).unwrap();
+
+        assert_eq!(&fs::read(&path).unwrap()[..4], &[0x04, 0x22, 0x4D, 0x18]);
+        assert_eq!(read_lz4_json::<Vec<String>>(&path).unwrap(), ["a", "b"]);
+        assert!(
+            !dir.path().join("x.json.lz4.tmp").exists(),
+            "the temporary file is renamed away"
+        );
+    }
+
+    #[test]
+    fn a_damaged_lz4_file_names_itself_and_the_remedy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.json.lz4");
+        // Letters and digits from a fixed pseudo-random sequence: LZ4 stores
+        // them nearly as they are, so a byte in the middle of the file is a
+        // character of the text, and changing it leaves valid JSON.
+        let mut state = 7u32;
+        let text: String = (0..10_000)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                char::from(b"abcdefghijklmnopqrstuvwxyz0123456789"[(state >> 16) as usize % 36])
+            })
+            .collect();
+        write_lz4_json_atomic(&path, &text).unwrap();
+        assert_eq!(read_lz4_json::<String>(&path).unwrap(), text);
+        let mut bytes = fs::read(&path).unwrap();
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 0x01;
+        fs::write(&path, bytes).unwrap();
+
+        let message = read_lz4_json::<String>(&path).unwrap_err().to_string();
+
+        assert!(message.contains("x.json.lz4"), "{message}");
+        assert!(message.contains("ebook-hero cache clear"), "{message}");
+    }
+
+    #[test]
+    fn a_file_that_is_not_lz4_is_refused_with_the_remedy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.json.lz4");
+        fs::write(&path, b"{\"plain\": true}").unwrap();
+
+        let message = read_lz4_json::<serde_json::Value>(&path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(message.contains("x.json.lz4"), "{message}");
+        assert!(message.contains("ebook-hero cache clear"), "{message}");
+    }
+
+    #[test]
+    fn lz4_json_that_cannot_be_read_or_written_is_named_in_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let file = gone.join(DOCUMENT_FILE);
+
+        let read = read_lz4_json::<Vec<String>>(&file).unwrap_err();
+        let written = write_lz4_json_atomic(&file, &vec!["a"]).unwrap_err();
+
+        assert!(names(&read, &file), "{read}");
         assert!(names(&written, &gone), "{written}");
     }
 

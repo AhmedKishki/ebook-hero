@@ -24,7 +24,7 @@ flowchart TD
     T --> S
     S --> L["4. Links<br/>NPMI above 0.1, 2 shared passages or more,<br/>3 best partners per concept"]
     L --> M["5. Communities<br/>Louvain on the NPMI weights"]
-    M --> G["GraphResult<br/>cached in graph.json"]
+    M --> G["GraphResult<br/>cached in graph.json.lz4"]
 ```
 
 The passages are the ones search ranks (`build_passages` in `src/passages.rs`): runs of whole paragraphs, list items and notes of at most `PASSAGE_MAX_WORDS` = 220 words that never cross a heading or, in an EPUB, a file. A passage is the unit of co-occurrence. Two concepts occur together when both stand in one passage, wherever they are inside it. Heading blocks reach a passage only as its section path, so their text never enters the graph.
@@ -83,11 +83,11 @@ The Graph tab of the desktop window runs `ebook-hero graph --json --full` and re
 
 ## Caching
 
-`Book::graph` in `src/index/book.rs` builds the graph on the first call and writes it to `graph.json` in the book's cache directory, beside `manifest.json`, `passages.json` and the lexical index. The file holds the full graph and the `GRAPH_VERSION` that made it, now 2. Later calls on the open book use the copy in memory. Any other call, in this process or another, reads the file when its version matches. A file from another version, or one that does not parse, is rebuilt, and a warning on stderr says why. Reading and building happen under the book's build lock, so two processes never build the same graph at once.
+`Book::graph` in `src/index/book.rs` builds the graph on the first call and writes it to `graph.json.lz4` in the book's cache directory, beside `manifest.json`, `passages.json.lz4` and the lexical index. The file holds the full graph and the `GRAPH_VERSION` that made it, now 2. Later calls on the open book use the copy in memory. Any other call, in this process or another, reads the file when its version matches. A file from another version, or one that does not parse, is rebuilt, and a warning on stderr says why. Reading and building happen under the book's build lock, so two processes never build the same graph at once.
 
 The graphs also depend on the concept-map crate, so moving to a version of it whose graphs differ bumps `GRAPH_VERSION`.
 
-When the index itself is stale because a reader, the passage packing, an analyzer, the document schema or the tool version changed, the whole cache directory is rebuilt and `graph.json` goes with it. A cache directory deleted after the book was opened, for example by `ebook-hero cache clear`, gives an error that asks for another call, which builds it again.
+When the index itself is stale because a reader, the passage packing, an analyzer, the document schema or the tool version changed, the whole cache directory is rebuilt and `graph.json.lz4` goes with it. A cache directory deleted after the book was opened, for example by `ebook-hero cache clear`, gives an error that asks for another call, which builds it again.
 
 ## Why it works this way
 

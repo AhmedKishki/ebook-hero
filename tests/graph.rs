@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use common::private_tempdir;
+use common::{private_tempdir, read_lz4, write_lz4};
 use ebook_hero::graph::GraphResult;
 use ebook_hero::session::Session;
 use ebook_hero::settings::GRAPH_VERSION;
@@ -71,12 +71,12 @@ fn the_cached_graph_is_read_and_a_stale_or_corrupt_one_rebuilt() {
     let fresh = || Session::with_cache_root(root.path().to_path_buf());
     let session = fresh();
     let built = session.graph(ALICE, true).unwrap();
-    let file: PathBuf = session.book(ALICE).unwrap().dir.join("graph.json");
+    let file: PathBuf = session.book(ALICE).unwrap().dir.join("graph.json.lz4");
     let write = |version: u64, label: &str| {
-        let mut cached: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        let mut cached: Value = serde_json::from_slice(&read_lz4(&file)).unwrap();
         cached["graph_version"] = version.into();
         cached["result"]["concepts"][0]["label"] = label.into();
-        fs::write(&file, serde_json::to_vec(&cached).unwrap()).unwrap();
+        write_lz4(&file, &serde_json::to_vec(&cached).unwrap());
     };
 
     write(u64::from(GRAPH_VERSION), "planted");

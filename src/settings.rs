@@ -82,7 +82,7 @@ pub const PASSAGES_VERSION: u32 = 2;
 pub const ANALYZERS_VERSION: u32 = 2;
 /// The fewest passages a book needs for a concept graph.
 pub const GRAPH_MIN_BOOK_PASSAGES: usize = 20;
-/// The version of the concept graph. A cached `graph.json` made by another
+/// The version of the concept graph. A cached `graph.json.lz4` made by another
 /// version is built again.
 pub const GRAPH_VERSION: u32 = 2;
 /// How many passage ids each concept and link lists unless the full graph is

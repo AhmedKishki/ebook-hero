@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use assert_cmd::Command;
 use assert_cmd::assert::Assert;
-use common::{EpubBuilder, EpubVersion, private_tempdir};
+use common::{EpubBuilder, EpubVersion, private_tempdir, read_lz4, write_lz4};
 use ebook_hero::document::Document;
 use ebook_hero::index::cache::{list_indexes, with_lock};
 use ebook_hero::search::{Mode, SearchParams};
@@ -504,7 +504,7 @@ fn cache_list_prints_a_line_per_index() {
     ] {
         let dir = env.cache_root().join(sha);
         fs::create_dir(&dir).unwrap();
-        fs::write(dir.join("document.json"), document).unwrap();
+        write_lz4(&dir.join("document.json.lz4"), document.as_bytes());
     }
 
     let listing = env.stdout(&["cache", "list"]);
@@ -534,7 +534,10 @@ fn cache_list_json_gives_the_hash_size_and_title_of_each_index() {
     let untitled = "1".repeat(64);
     let dir = env.cache_root().join(&untitled);
     fs::create_dir(&dir).unwrap();
-    fs::write(dir.join("document.json"), r#"{"metadata":{"title":null}}"#).unwrap();
+    write_lz4(
+        &dir.join("document.json.lz4"),
+        br#"{"metadata":{"title":null}}"#,
+    );
 
     let listing = json(&env.stdout(&["cache", "list", "--json"]));
 
@@ -687,7 +690,7 @@ fn a_cache_that_does_not_load_is_rebuilt_with_one_warning_naming_the_cause() {
     let document = env
         .cache_root()
         .join(&cached[0].sha256)
-        .join("document.json");
+        .join("document.json.lz4");
     fs::write(&document, b"not json").unwrap();
 
     let assert = env.run(&["info", &path]).success();
@@ -700,7 +703,7 @@ fn a_cache_that_does_not_load_is_rebuilt_with_one_warning_naming_the_cause() {
         "{stderr}"
     );
     assert!(
-        String::from_utf8_lossy(&fs::read(&document).unwrap()).starts_with('{'),
+        String::from_utf8_lossy(&read_lz4(&document)).starts_with('{'),
         "the document was written again"
     );
 }

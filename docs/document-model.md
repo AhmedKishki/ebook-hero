@@ -12,14 +12,14 @@ flowchart LR
     epub["EPUB file"] --> epubr["src/extract/epub.rs"]
     pdfr --> doc(["Document"])
     epubr --> doc
-    doc --> cache["document.json in the index cache"]
+    doc --> cache["document.json.lz4 in the index cache"]
     doc --> extract["ebook-hero extract: JSON or Markdown"]
     doc --> direct["book_info, outline, read"]
     doc --> passages["build_passages in src/passages.rs"]
     passages --> tools["search, find, read, verify_quote, concept_graph"]
 ```
 
-`src/index/book.rs` runs the reader once per book, packs the blocks into passages and writes both to the user cache as `document.json` and `passages.json`, in a directory named by the file's SHA-256. Later calls load the cached `Document` instead of reading the file again. `ebook-hero extract` runs the reader on every call and prints the `Document`: as JSON with `--format json` or `--json`, otherwise as Markdown.
+`src/index/book.rs` runs the reader once per book, packs the blocks into passages and writes both to the user cache as `document.json.lz4` and `passages.json.lz4`, in a directory named by the file's SHA-256. Later calls load the cached `Document` instead of reading the file again. `ebook-hero extract` runs the reader on every call and prints the `Document`: as JSON with `--format json` or `--json`, otherwise as Markdown.
 
 ## Structure
 
@@ -244,7 +244,7 @@ The `outline` tool lists these entries. Reading by outline entry starts at the e
 - a PDF locator with the page, its label and the line's box, and `page_end` null;
 - ids counting from 0 inside `furniture`, independent of the ids in `blocks`.
 
-The EPUB reader writes an empty list. Nothing after the readers reads `furniture`, so these lines never enter passages, search hits or the Markdown output. They appear only in `document.json` and in the output of `ebook-hero extract --format json`. `docs/furniture-detection.md` explains how the PDF reader finds them.
+The EPUB reader writes an empty list. Nothing after the readers reads `furniture`, so these lines never enter passages, search hits or the Markdown output. They appear only in `document.json.lz4` and in the output of `ebook-hero extract --format json`. `docs/furniture-detection.md` explains how the PDF reader finds them.
 
 ### Warnings
 
@@ -349,7 +349,7 @@ The title and a level-1 heading both get one `#`, so a book whose chapters are `
 ## References
 
 - F. Yergeau. "UTF-8, a transformation format of ISO 10646." RFC 3629, Internet Engineering Task Force, November 2003. https://www.rfc-editor.org/rfc/rfc3629. The encoding whose bytes the library's offsets count.
-- T. Bray, editor. "The JavaScript Object Notation (JSON) Data Interchange Format." RFC 8259, Internet Engineering Task Force, December 2017. https://www.rfc-editor.org/rfc/rfc8259. The format of `document.json` and of `ebook-hero extract --format json`.
+- T. Bray, editor. "The JavaScript Object Notation (JSON) Data Interchange Format." RFC 8259, Internet Engineering Task Force, December 2017. https://www.rfc-editor.org/rfc/rfc8259. The format of the JSON in `document.json.lz4` and of `ebook-hero extract --format json`.
 - John MacFarlane. "CommonMark Spec", version 0.31.2, 28 January 2024. https://spec.commonmark.org/0.31.2/. ATX headings of one to six `#`, block quotes, bullet list items and HTML comments, which the Markdown renderer writes.
 - ISO 32000-2:2020. "Document management — Portable document format — Part 2: PDF 2.0." International Organization for Standardization, 2020. The page labels, document outline, Info dictionary and media box behind `Locator::Pdf`, `OutlineEntry` and `Metadata`.
 - Matt Garrish, Ivan Herman and Dave Cramer, editors. "EPUB 3.3." W3C Recommendation, 25 May 2023. https://www.w3.org/TR/epub-33/. The package document, spine and navigation document behind `Locator::Epub`, `OutlineEntry` and `Metadata`.

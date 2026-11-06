@@ -14,7 +14,7 @@ Indexing has two stages. Stage 1 extracts the text, packs it into passages and b
 flowchart TD
     file["book file"] --> hash["SHA-256 of its bytes"]
     hash --> current{"manifest in root/sha current?"}
-    current -->|yes| load["load document.json, passages.json, tantivy/"]
+    current -->|yes| load["load document.json.lz4, passages.json.lz4, tantivy/"]
     current -->|no| lock["take root/sha.lock and check again"]
     lock --> extract["reader turns the file into a Document"]
     extract --> pack["build_passages: blocks into passages of at most 220 words"]
@@ -117,11 +117,13 @@ Dropped tokens leave gaps. In "the queen of the tree", `STEMMED` puts `queen` at
 Indexes live under a cache root: `$EBOOK_HERO_INDEXES` if it is set, else `ebook-hero/indexes` in the user cache directory, which is `~/.cache/ebook-hero/indexes` on Linux. Each book has a directory named for the SHA-256 of the file's bytes (`src/index/cache.rs`):
 
 ```text
-<root>/<sha>/                    manifest.json, document.json, passages.json, tantivy/,
-                                 vectors.f32 once embedded, graph.json once the concept graph is built
+<root>/<sha>/                    manifest.json, document.json.lz4, passages.json.lz4, tantivy/,
+                                 vectors.f32 once embedded, graph.json.lz4 once the concept graph is built
 <root>/<sha>.lock                held while building; holds the builder's pid; never deleted
 <root>/<sha>.staging-<pid>-<ns>/ a build in progress, renamed to <sha>/ when done
 ```
+
+A `.json.lz4` file is JSON in one LZ4 frame with a content checksum (`write_lz4_json_atomic` and `read_lz4_json`). The checksum is what stops a damaged byte from decoding into a wrong character inside valid JSON. A file that is not a frame, or fails its checksum, gives an error that names the file and tells the user to run `ebook-hero cache clear`. `manifest.json` stays plain JSON.
 
 Cached indexes are loaded without being checked, so the root must be private. `ensure_private_dir` creates a missing root with mode 0700. On Unix it refuses a root that is a symbolic link, belongs to another user, or lets group or others write to it, because anyone who can write there could plant an index. Every hash that names a path must be 64 lowercase hex digits (`require_sha256`), so no path built from it leads outside the root.
 
@@ -146,10 +148,10 @@ Stage 2 loads `vectors.f32` only when the manifest is stamped with `{model: "BAA
 
 `Book::open` in `src/index/book.rs` opens a book in four steps:
 
-1. If `<sha>/manifest.json` is current, it loads `document.json`, `passages.json` and the tantivy index, and returns.
+1. If `<sha>/manifest.json` is current, it loads `document.json.lz4`, `passages.json.lz4` and the tantivy index, and returns.
 2. Otherwise it takes the book's lock, `<sha>.lock`. While another process holds it, it tries again every `LOCK_POLL` = 200 ms for up to `LOCK_WAIT` = 900 s, then fails with an error that names the pid of the holder.
 3. Holding the lock, it checks the cache again, since another process may have built the index while it waited.
-4. It deletes the stale directory and any staging directory a dead build left, extracts the document, packs the passages, and writes `document.json`, `passages.json` and `tantivy/` into a fresh staging directory. The manifest is written last, and the staging directory is then renamed to `<sha>/`. A build that fails or is killed leaves nothing that reads as an index.
+4. It deletes the stale directory and any staging directory a dead build left, extracts the document, packs the passages, and writes `document.json.lz4`, `passages.json.lz4` and `tantivy/` into a fresh staging directory. The manifest is written last, and the staging directory is then renamed to `<sha>/`. A build that fails or is killed leaves nothing that reads as an index.
 
 A cache that does not load is rebuilt like a stale one, and the reason is logged as a warning.
 

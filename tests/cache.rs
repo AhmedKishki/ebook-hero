@@ -7,7 +7,7 @@ use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use common::{EpubBuilder, EpubVersion, private_tempdir};
+use common::{EpubBuilder, EpubVersion, private_tempdir, read_lz4, write_lz4};
 use ebook_hero::Error;
 use ebook_hero::cancel::Cancel;
 use ebook_hero::index::book::Book;
@@ -147,12 +147,56 @@ fn damaged_cache_is_rebuilt() {
     let setup = Setup::new();
     let (path, sha) = setup.book("Damaged");
     Book::open(setup.root(), &path, &sha).unwrap();
-    fs::remove_file(setup.root().join(&sha).join("passages.json")).unwrap();
+    fs::remove_file(setup.root().join(&sha).join("passages.json.lz4")).unwrap();
 
     let before = build_count();
     let book = Book::open(setup.root(), &path, &sha).unwrap();
     assert_eq!(build_count() - before, 1);
     assert!(!book.passages.is_empty());
+}
+
+#[test]
+fn cache_files_are_lz4_frames_and_the_manifest_stays_plain() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (path, sha) = setup.book("Compressed");
+    setup.session().book(str_of(&path)).unwrap();
+
+    let dir = setup.root().join(&sha);
+
+    for name in ["document.json.lz4", "passages.json.lz4"] {
+        assert!(dir.join(name).is_file(), "{name}");
+        assert_eq!(
+            &fs::read(dir.join(name)).unwrap()[..4],
+            &[0x04, 0x22, 0x4D, 0x18],
+            "{name} starts with the LZ4 frame magic number"
+        );
+        serde_json::from_slice::<serde_json::Value>(&read_lz4(&dir.join(name))).unwrap();
+    }
+    assert!(!dir.join("document.json").exists());
+    assert!(!dir.join("passages.json").exists());
+    serde_json::from_slice::<serde_json::Value>(&fs::read(dir.join("manifest.json")).unwrap())
+        .unwrap();
+}
+
+#[test]
+fn a_damaged_cache_file_is_rebuilt() {
+    let _serial = serial();
+    let setup = Setup::new();
+    let (path, sha) = setup.book("Bitrot");
+    setup.session().book(str_of(&path)).unwrap();
+    let file = setup.root().join(&sha).join("document.json.lz4");
+    let mut bytes = fs::read(&file).unwrap();
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0x01;
+    fs::write(&file, bytes).unwrap();
+
+    let before = build_count();
+    let book = setup.session().book(str_of(&path)).unwrap();
+
+    assert_eq!(build_count() - before, 1);
+    assert!(!book.passages.is_empty());
+    serde_json::from_slice::<serde_json::Value>(&read_lz4(&file)).unwrap();
 }
 
 #[test]
@@ -683,7 +727,7 @@ fn list_indexes_reports_each_cached_book_sorted_by_hash() {
 #[test]
 fn an_index_without_a_readable_title_is_listed_untitled() {
     let root = private_tempdir();
-    let [broken, empty, untitled, missing] = ["1", "2", "3", "4"].map(|n| n.repeat(64));
+    let [broken, empty, untitled, plain, missing] = ["1", "2", "3", "4", "5"].map(|n| n.repeat(64));
     for (sha, document) in [
         (&broken, Some("{not json")),
         (&empty, Some("")),
@@ -697,13 +741,21 @@ fn an_index_without_a_readable_title_is_listed_untitled() {
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join("other.bin"), [0u8; 10]).unwrap();
         if let Some(document) = document {
-            fs::write(dir.join("document.json"), document).unwrap();
+            write_lz4(&dir.join("document.json.lz4"), document.as_bytes());
         }
     }
+    // A title in a file that is not an LZ4 frame is not read.
+    let dir = root.path().join(&plain);
+    fs::create_dir(&dir).unwrap();
+    fs::write(
+        dir.join("document.json.lz4"),
+        r#"{"metadata":{"title":"Plain"}}"#,
+    )
+    .unwrap();
 
     let listed = list_indexes(root.path()).unwrap();
 
-    assert_eq!(listed.len(), 4);
+    assert_eq!(listed.len(), 5);
     assert!(
         listed.iter().all(|index| index.title.is_none()),
         "{listed:?}"

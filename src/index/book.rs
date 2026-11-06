@@ -137,7 +137,7 @@ impl Book {
         Ok(self.vectors.get_or_init(|| vectors))
     }
 
-    /// The book's concept graph: read from `graph.json` in the cache when it
+    /// The book's concept graph: read from `graph.json.lz4` in the cache when it
     /// was made by this `GRAPH_VERSION`, else built and written there, under
     /// the same lock as the index. A file that does not load or is stale is
     /// rebuilt, and why is logged as a warning. A cache directory removed
@@ -169,7 +169,7 @@ impl Book {
                 graph_version: GRAPH_VERSION,
                 result,
             };
-            cache::write_json_atomic(&file, &cached)?;
+            cache::write_lz4_json_atomic(&file, &cached)?;
             Ok(cached.result)
         })?;
         Ok(self.graph.get_or_init(|| graph))
@@ -261,7 +261,7 @@ fn store_vectors(dir: &Path, vectors: &Vectors) -> Result<()> {
     cache::write_json_atomic(&path, &stamped)
 }
 
-/// `graph.json`: a concept graph and the `GRAPH_VERSION` that made it.
+/// `graph.json.lz4`: a concept graph and the `GRAPH_VERSION` that made it.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CachedGraph {
     graph_version: u32,
@@ -273,7 +273,7 @@ fn stored_graph(file: &Path) -> Option<GraphResult> {
     if !file.is_file() {
         return None;
     }
-    match cache::read_json::<CachedGraph>(file) {
+    match cache::read_lz4_json::<CachedGraph>(file) {
         Ok(cached) if cached.graph_version == GRAPH_VERSION => Some(cached.result),
         Ok(cached) => {
             tracing::warn!(
@@ -319,8 +319,8 @@ fn load(dir: &Path, path: &Path, sha256: &str) -> Result<Book> {
         path: path.to_path_buf(),
         sha256: sha256.to_string(),
         dir: dir.to_path_buf(),
-        document: cache::read_json(&dir.join(DOCUMENT_FILE))?,
-        passages: cache::read_json(&dir.join(PASSAGES_FILE))?,
+        document: cache::read_lz4_json(&dir.join(DOCUMENT_FILE))?,
+        passages: cache::read_lz4_json(&dir.join(PASSAGES_FILE))?,
         lexical: LexicalIndex::open(&dir.join(TANTIVY_DIR))?,
         vectors: OnceLock::new(),
         graph: OnceLock::new(),
@@ -346,8 +346,8 @@ fn build(cache_root: &Path, dir: &Path, path: &Path, sha256: &str) -> Result<()>
 }
 
 fn write_stage(staging: &Path, document: &Document, passages: &[Passage]) -> Result<()> {
-    cache::write_json_atomic(&staging.join(DOCUMENT_FILE), document)?;
-    cache::write_json_atomic(&staging.join(PASSAGES_FILE), &passages)?;
+    cache::write_lz4_json_atomic(&staging.join(DOCUMENT_FILE), document)?;
+    cache::write_lz4_json_atomic(&staging.join(PASSAGES_FILE), &passages)?;
     let tantivy = staging.join(TANTIVY_DIR);
     fs::create_dir(&tantivy).map_err(|e| io_error(&tantivy, e))?;
     LexicalIndex::build(&tantivy, passages)?;

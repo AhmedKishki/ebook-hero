@@ -35,9 +35,17 @@ const EXTENSIONS: Options = Options::ENABLE_TABLES
 /// words, more than any book.
 pub(crate) const MAX_MARKDOWN_BYTES: u64 = 64 * MIB;
 
+/// The most table cells a Markdown file may hold, counted before parsing.
+/// GFM fills a row shorter than its header with empty cells, and
+/// pulldown-cmark builds every cell before it gives the first event, so a few
+/// kilobytes of wide tables with short rows would take gigabytes of memory,
+/// which [`MAX_MARKDOWN_BYTES`] does not prevent.
+pub(crate) const MAX_TABLE_CELLS: usize = 250_000;
+
 /// Reads the Markdown file at `path`, UTF-8 with or without a byte-order mark.
 ///
-/// A file over [`MAX_MARKDOWN_BYTES`] and a file with no text in any block are
+/// A file over [`MAX_MARKDOWN_BYTES`], a file whose tables could hold more
+/// than [`MAX_TABLE_CELLS`] cells and a file with no text in any block are
 /// [`Error::Unreadable`]. An HTML block and front matter are left out, each
 /// with a [`Warning::UnreadablePart`] that names its line.
 pub fn read_markdown(path: &Path, source: Source) -> Result<Document> {
@@ -82,10 +90,12 @@ fn check_size(path: &Path, size: u64) -> Result<()> {
 }
 
 /// Reads the Markdown `text`, which holds no byte-order mark, into a
-/// [`Document`]. Text that leaves no block with text is an
+/// [`Document`]. Text whose tables could hold more than [`MAX_TABLE_CELLS`]
+/// cells, and text that leaves no block with text, are an
 /// [`Error::Unreadable`] that names the file of `source`.
 pub(crate) fn markdown_document(text: &str, source: Source) -> Result<Document> {
     let text = with_line_feeds(text);
+    check_table_cells(Path::new(&source.file_name), &text)?;
     let mut walk = Walk::new(Lines::new(&text));
     let body = match front_matter_end(&text) {
         Some(end) => {
@@ -153,6 +163,96 @@ fn front_matter_end(text: &str) -> Option<usize> {
         (Event::Start(Tag::MetadataBlock(_)), range) if range.start == 0 => Some(range.end),
         _ => None,
     }
+}
+
+/// Refuses `text` when its tables could hold more than [`MAX_TABLE_CELLS`]
+/// cells, before pulldown-cmark builds them.
+///
+/// A table starts at a delimiter row under a non-blank line and runs to the
+/// next blank line, so it counts its delimiter row's columns once for the
+/// header and once for every non-blank line after the delimiter row. That
+/// also counts a delimiter row in a code block, and lines after a table that
+/// a heading ends, so the count errs only toward refusing. Every open table
+/// adds at least one cell per line, so besides reading each line once the
+/// scan makes at most [`MAX_TABLE_CELLS`] additions before it refuses.
+fn check_table_cells(path: &Path, text: &str) -> Result<()> {
+    /// A table whose rows are still being counted.
+    struct Table {
+        /// The line of its delimiter row.
+        line: usize,
+        columns: usize,
+        rows: usize,
+    }
+    let refuse = |table: &Table| {
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        Error::Unreadable {
+            path: path.to_path_buf(),
+            reason: format!(
+                "the table whose delimiter row is line {} reaches {} row{} × {} column{}, \
+                 which takes the file past the {MAX_TABLE_CELLS} table cells a Markdown file \
+                 may hold; split the table or the file",
+                table.line,
+                table.rows,
+                plural(table.rows),
+                table.columns,
+                plural(table.columns)
+            ),
+        }
+    };
+    let mut open: Vec<Table> = Vec::new();
+    let mut cells = 0;
+    let mut after_text = false;
+    for (index, line) in text.split('\n').enumerate() {
+        // CommonMark's blank line, which ends a table.
+        if line.bytes().all(|b| b == b' ' || b == b'\t') {
+            open.clear();
+            after_text = false;
+            continue;
+        }
+        for table in &mut open {
+            table.rows += 1;
+            cells += table.columns;
+            if cells > MAX_TABLE_CELLS {
+                return Err(refuse(table));
+            }
+        }
+        // The line above is the new table's header row.
+        if after_text && let Some(columns) = delimiter_columns(line) {
+            let table = Table {
+                line: index + 1,
+                columns,
+                rows: 1,
+            };
+            cells += columns;
+            if cells > MAX_TABLE_CELLS {
+                return Err(refuse(&table));
+            }
+            open.push(table);
+        }
+        after_text = true;
+    }
+    Ok(())
+}
+
+/// How many columns `line` gives a table when it can be a GFM delimiter row,
+/// such as `| :-- | --: |`, or `None` when it cannot. pulldown-cmark takes a
+/// line of spaces, colons, hyphens and at least one pipe and one hyphen, and
+/// each pipe after a leading one closes a column, as does the end of a last
+/// column that holds more than spaces. Block-quote markers and indentation in
+/// front are skipped, and tabs are let through although pulldown-cmark refuses
+/// them, so the test errs toward counting a line.
+fn delimiter_columns(line: &str) -> Option<usize> {
+    let row = line.trim_start_matches([' ', '\t', '>']);
+    let allowed = row
+        .bytes()
+        .all(|b| matches!(b, b'|' | b'-' | b':' | b' ' | b'\t'));
+    if !allowed || !row.contains('|') || !row.contains('-') {
+        return None;
+    }
+    let row = row.strip_prefix('|').unwrap_or(row);
+    let last = row.rsplit('|').next().unwrap_or_default();
+    let open_column = !last.trim_matches([' ', '\t']).is_empty();
+    Some(row.matches('|').count() + usize::from(open_column))
 }
 
 /// `text` with every line ending written as a line feed. CommonMark also ends
@@ -525,6 +625,8 @@ fn only_comments(mut html: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
     use crate::document::Container::*;
     use crate::document::{BlockKind, Format, Warning, span_errors};
@@ -1022,6 +1124,105 @@ mod tests {
             e.to_string(),
             format!("{}: could not be read: no readable text", path.display())
         );
+    }
+
+    /// A table `columns` wide whose `rows` body rows hold one cell each, which
+    /// GFM fills up to the header's width, and a blank line after it.
+    fn wide_table(columns: usize, rows: usize) -> String {
+        format!(
+            "{}|\n{}|\n{}\n",
+            "|a".repeat(columns),
+            "|-".repeat(columns),
+            "x\n".repeat(rows)
+        )
+    }
+
+    #[test]
+    fn tables_that_could_pass_the_cell_cap_are_refused_before_parsing() {
+        // 120 KB of this shape gave pulldown-cmark 10.5 million cells and
+        // 500 MB, so a refusal that comes after parsing takes seconds and
+        // gigabytes, and one that comes before takes neither.
+        let md = wide_table(512, 512).repeat(40);
+        let started = Instant::now();
+
+        let Err(e) = markdown_document(&md, source()) else {
+            panic!("the tables were read");
+        };
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(matches!(e, Error::Unreadable { .. }), "{e:?}");
+        assert_eq!(
+            e.to_string(),
+            "notes.md: could not be read: the table whose delimiter row is line 2 reaches \
+             489 rows × 512 columns, which takes the file past the 250000 table cells a \
+             Markdown file may hold; split the table or the file"
+        );
+    }
+
+    #[test]
+    fn the_cell_cap_counts_every_table_of_the_file() {
+        // Each table is 101 rows of 100 columns and 103 lines long, so 24
+        // tables hold 242,400 cells and the 25th passes the cap at its 77th row.
+        let Err(e) = markdown_document(&wide_table(100, 100).repeat(25), source()) else {
+            panic!("the tables were read");
+        };
+        let m = e.to_string();
+        assert!(
+            m.contains("delimiter row is line 2474 reaches 77 rows × 100 columns"),
+            "{m}"
+        );
+        assert!(m.contains("250000 table cells"), "{m}");
+    }
+
+    #[test]
+    fn a_table_well_under_the_cell_cap_reads() {
+        let md = format!(
+            "| a | b | c | d | e |\n|---|---|---|---|---|\n{}",
+            "| 1 | 2 | 3 | 4 | 5 |\n".repeat(1000)
+        );
+        let d = doc(&md);
+        assert_eq!(d.blocks.len(), 5 * 1001);
+        assert_eq!(d.containers.len(), 1 + 1001 + 5 * 1001);
+    }
+
+    #[test]
+    fn delimiter_rows_in_a_code_block_are_counted_and_a_normal_file_still_reads() {
+        let code = "| a | b |\n|---|---|\n|---|---|\n|---|---|";
+        let d = doc(&format!("Text.\n\n```\n{code}\n```\n\nMore.\n"));
+        assert_eq!(
+            kinds_and_texts(&d),
+            [
+                (para(), "Text."),
+                (BlockKind::Code { language: None }, code),
+                (para(), "More.")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_delimiter_row_gives_at_least_the_columns_pulldown_cmark_gives_it() {
+        for (line, columns) in [
+            ("|---|---|", Some(2)),
+            ("---|---", Some(2)),
+            ("| :-- | --: |", Some(2)),
+            ("|-", Some(1)),
+            ("-:-|", Some(1)),
+            ("|---|   ", Some(1)),
+            ("> >   | - | - |", Some(2)),
+            // pulldown-cmark refuses tabs; counting them errs toward refusing.
+            ("|\t-\t|", Some(1)),
+            ("---", None),
+            ("| a |", None),
+            ("| |", None),
+            ("|", None),
+            ("", None),
+        ] {
+            assert_eq!(delimiter_columns(line), columns, "{line:?}");
+        }
     }
 
     #[test]

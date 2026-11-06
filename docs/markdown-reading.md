@@ -13,7 +13,9 @@ flowchart TD
     detect -->|"anything else"| unsupported["Error: Unsupported"]
     size -->|no| big["Error: Unreadable,<br/>with the size and the cap"]
     size -->|yes| prepare["Strip a byte-order mark,<br/>write every line ending as LF"]
-    prepare --> front{"Starts with front matter?"}
+    prepare --> cells{"Tables hold at most<br/>250,000 cells?"}
+    cells -->|no| many["Error: Unreadable,<br/>with the table's line and the cap"]
+    cells -->|yes| front{"Starts with front matter?"}
     front -->|yes| warn["UnreadablePart warning,<br/>parse the text after it"]
     front -->|no| parse["pulldown-cmark with tables,<br/>strikethrough and footnotes"]
     warn --> parse
@@ -33,13 +35,21 @@ flowchart TD
 
 ## Reading the file
 
-`read_markdown` takes the file's size before it reads anything, and it refuses a file over `MAX_MARKDOWN_BYTES`, 64 MiB, with `Unreadable`: "the file holds 67108865 bytes, more than the 64 MiB a Markdown file may hold; split it into smaller files". The cap keeps one file from filling memory without refusing a real book, since 64 MiB of text is about ten million words. The reader then reads at most one byte past the cap and checks the count again, so a file that grew after its size was taken is refused as well, never cut short.
+`read_markdown` takes the file's size before it reads anything, and it refuses a file over `MAX_MARKDOWN_BYTES`, 64 MiB, with `Unreadable`: "the file holds 67108865 bytes, more than the 64 MiB a Markdown file may hold; split it into smaller files". The cap bounds the memory the text itself takes without refusing a real book, since 64 MiB of text is about ten million words. [Table cells](#table-cells) covers the memory that parsing adds. The reader then reads at most one byte past the cap and checks the count again, so a file that grew after its size was taken is refused as well, never cut short.
 
 The bytes must be UTF-8 here too. They passed detection, so this fails only for a file that changed in between, with "the file is not UTF-8 text; save it as UTF-8". A byte-order mark at the start is removed, and `markdown_document` reads the text that remains.
 
 ### Line endings
 
 CommonMark ends a line at a line feed, at a carriage return, or at a carriage return followed by a line feed, so the three must give the same document. pulldown-cmark takes a CRLF as one ending, but it does not end a fence's opening line at a lone carriage return: in a file with the old Mac endings, `` ``` `` and the code under it read as one paragraph. `with_line_feeds` therefore writes every line ending as a line feed before parsing. Each ending stays one character, so every line keeps its number. The test `crlf_and_bom_give_the_same_document_as_lf` reads a file with CRLF endings and a byte-order mark and gets the document of its LF form, and `crlf_and_lone_cr_count_lines_as_lf_does_in_code_too` does the same for CR endings around a code block.
+
+### Table cells
+
+GFM fills a table row that is shorter than the header with empty cells, up to the header's width. pulldown-cmark builds the whole document before it gives the first event, and it caps these added cells at 2^18 per table but not per file. Forty tables 512 columns wide, each followed by 512 one-character lines, take 120 KB, and they gave pulldown-cmark 10.5 million cells and 500 MB of memory before the reader saw an event. A file well within the size cap can therefore take more memory than the machine has, so the size cap does not bound what parsing costs.
+
+`check_table_cells` therefore counts the cells the tables could hold before the parser runs, and it refuses a file whose count passes `MAX_TABLE_CELLS`, 250,000. A table starts at a line that can be a delimiter row under a non-blank line, and `delimiter_columns` gives its columns as pulldown-cmark counts them, after block-quote markers and indentation. Each table then counts its columns once for the header and once for every non-blank line up to the next blank line, which ends a GFM table. The count can only come out high: it takes a delimiter-like line in a code block for a table, and it counts on past a table that a heading ends.
+
+The refusal is the size cap's error, `Unreadable`, and its reason names the delimiter row, the size the table had reached and the cap: "the table whose delimiter row is line 2 reaches 489 rows × 512 columns, which takes the file past the 250000 table cells a Markdown file may hold; split the table or the file". A real table stays far below the cap, since 1,000 rows of 5 columns are 5,005 cells.
 
 ### Front matter
 
@@ -171,7 +181,7 @@ HTML blocks and front matter may hold text that the model cannot store, so each 
 - Encodings. Only UTF-8 is read, so a text file in another encoding is `Unsupported`.
 - Extensions. Task lists, math, superscript, subscript, definition lists and heading attributes read as plain CommonMark, and their markers stay in the text.
 - Size. A file over 64 MiB is refused.
-- Memory on short table rows. pulldown-cmark builds the whole document before it gives the first event, and it fills each short row with empty cells up to the header's width, at most 2^18 cells per table. A file of many wide tables with short rows therefore costs memory far beyond its size: 120 KB of tables 512 columns wide gave 10.5 million cells and 500 MB in pulldown-cmark alone, before the reader writes a block for any of them. The 64 MiB cap does not bound this.
+- Table cells. A file whose tables could hold more than 250,000 cells is refused, because the size cap does not bound the memory pulldown-cmark spends on the cells it adds to short rows: 120 KB of wide tables took 500 MB. The count errs toward refusing, so a file with hundreds of delimiter-like lines in a row, such as in a code block, can be refused although it holds no such table.
 
 ## References
 

@@ -33,8 +33,8 @@ pub enum Error {
         path: PathBuf,
     },
     /// The file could not be opened or parsed, such as a PDF that needs a
-    /// password, an EPUB with no readable text or a Markdown file over its
-    /// size cap.
+    /// password, an EPUB with no readable text or a Markdown file over one of
+    /// its caps.
     #[error("{path}: could not be read: {reason}")]
     Unreadable {
         /// The path as it was resolved.

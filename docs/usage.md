@@ -155,7 +155,7 @@ Every command that opens a book can fail in these ways:
 | `<path>: file not found` | Nothing exists at the path. |
 | `<path>: not a regular file` | The path is a directory or another kind of file. |
 | `<path>: unsupported format; expected a PDF, an EPUB or a UTF-8 text file` | The content is none of the three, such as a text file in Latin-1 or UTF-16. |
-| `<path>: could not be read: <reason>` | The file cannot be opened or parsed. A PDF that needs a password gives the reason `password required`, and an EPUB or Markdown file without text gives `no readable text`. A Markdown file over 64 MiB gives its size and the cap. |
+| `<path>: could not be read: <reason>` | The file cannot be opened or parsed. A PDF that needs a password gives the reason `password required`, and an EPUB or Markdown file without text gives `no readable text`. A Markdown file over 64 MiB gives its size and the cap, and one whose tables could hold more than 250,000 cells gives the line of the table and the cap. |
 | `<path>: no text layer; OCR is not supported` | The PDF has no text, as a scan without OCR has none. |
 | `index error: cache directory <dir> is not private (<reason>); set EBOOK_HERO_INDEXES to a private directory` | See [Where files are kept](#where-files-are-kept). |
 | `index error: <file>: not a readable cache file (<reason>); run "ebook-hero cache clear" and try again` | A `.json.lz4` file in the index is not an LZ4 frame or fails its checksum. Opening a book builds the index again by itself and logs this message as a warning, so it ends a command only when a file that build has just written fails the same way. |
@@ -1017,7 +1017,7 @@ Every error is an `ebook_hero::Error`, whose `Display` is the message the comman
 |---|---|
 | `NotFound { path }`, `NotAFile { path }` | `path` names no regular file. |
 | `Unsupported { path }` | The file is neither a PDF, an EPUB nor UTF-8 text. |
-| `Unreadable { path, reason }` | The file cannot be opened or parsed, or it is a Markdown file over 64 MiB. |
+| `Unreadable { path, reason }` | The file cannot be opened or parsed, or it is a Markdown file over 64 MiB or with tables that could hold more than 250,000 cells. |
 | `NoTextLayer { path }` | The PDF has no text. |
 | `InvalidArgument(message)` | `path` starts with `~` and no home directory is known. |
 | `Index(message)` | The cache root is not private, or the index cannot be written. |

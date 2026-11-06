@@ -61,7 +61,7 @@ type Hashed = (u64, SystemTime, String);
 /// - [`Error::Unsupported`] when the file is neither a PDF, an EPUB nor UTF-8
 ///   text;
 /// - [`Error::Unreadable`] when the file cannot be read, such as a PDF that
-///   needs a password or a Markdown file over its size cap, or [`Error::NoTextLayer`] when a PDF holds no text;
+///   needs a password or a Markdown file over one of its caps, or [`Error::NoTextLayer`] when a PDF holds no text;
 /// - [`Error::InvalidArgument`] when `path` starts with `~` and no home
 ///   directory is known;
 /// - [`Error::Index`] when the cache root is not private or the index cannot

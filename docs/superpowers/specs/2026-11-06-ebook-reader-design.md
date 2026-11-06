@@ -129,8 +129,9 @@ Strikethrough,
 Code,
 /// `href` as written, and where the reader found that it leads.
 Link { href: String, to: LinkTarget },
-/// Marks the space in `text` that stands for a line break.
-Break,
+/// Marks the space in `text` that stands for line breaks. `lines` counts
+/// them, so 2 leaves a blank line, as between two stanzas of a poem.
+Break { lines: u32 },
 /// A footnote reference, as a point: `start` equals `end`. `marker` is what
 /// the reference shows, such as `1`, and `block` is the note's first block.
 NoteRef { marker: String, block: Option<u32> },
@@ -194,7 +195,7 @@ A file over `MAX_MARKDOWN_BYTES`, 64 MiB, fails with its size and the cap. Like 
 
 A block's text must equal `normalize` of itself, because search and verify rely on it, and its spans must point into that normalised text. The reader therefore collects a block's raw pieces with their span marks, normalises once while recording where each raw offset lands, and moves the spans through that record. A code block is kept verbatim and is not normalised.
 
-Soft breaks become spaces. A hard break becomes a space marked by a `Break` span. A footnote reference becomes an empty `NoteRef` span whose marker is its label. A footnote definition becomes a `Note { label }` container where it stands in the file, and its blocks keep their kinds.
+Soft breaks become spaces. A hard break becomes a space marked by a `Break` span, and a run of hard breaks becomes one `Break` whose `lines` counts them, because normalising leaves one space for the whole run. A footnote reference becomes an empty `NoteRef` span whose marker is its label. A footnote definition becomes a `Note { label }` container where it stands in the file, and its blocks keep their kinds.
 
 ### Heading ids
 
@@ -223,7 +224,7 @@ A `#id` or footnote reference with no target leads `Nowhere` and adds a `BrokenL
 - fenced code, with a fence longer than the longest backtick run in the code
 - GFM pipe tables, as described below
 - `---` for a rule
-- `\` and a newline for a `Break`
+- `\` and a newline for each line of a `Break`
 - `*`, `**`, `~~`, code spans with enough backticks, and `[text](href)` links
 - `[^label]` references and `[^label]:` definitions, where the label is the target `Note` container's label, or the marker when the note has none
 
@@ -251,7 +252,7 @@ The tests check one property. For a `Document` D read from Markdown, `read(write
 | `table`; `tr` (a header row in `thead` or holding only `th`); `th`, `td`, whose `colspan` and `rowspan` are weak structure and dropped | `Table`, `Row`, `Cell` |
 | `pre` | `Code` |
 | `hr` | `Rule` |
-| `br` | `Break` |
+| `br`, and a run of them | one `Break` counting them |
 | `em`, `i`; `strong`, `b`; `code`; `del`, `s` | `Emphasis`; `Strong`; `Code`; `Strikethrough` |
 | `a href` | `Link`, resolved across the book's files |
 | `a epub:type="noteref"` | an empty `NoteRef` whose marker is the element's text, which stays out of `text` as now |

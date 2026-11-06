@@ -18,6 +18,7 @@ This is the first of three parts on the branch. The second is a library view, op
 - The usage guide is read and drawn like any other book, so nothing in the window renders it alone.
 - ebook-hero reads Markdown, and the `Document` stores enough structure to reconstruct a document's structure.
 - The conversion is lossless with respect to the text and its structure. Images, figures and constructs the model does not support are outside that promise.
+- Weak structure may be lost: how a structure looks may change, as long as a table stays a table with its cells as they are.
 
 ## Lossless, defined
 
@@ -25,10 +26,11 @@ The `Document` stores the text as data and the structure as metadata over it: `t
 
 Lossless then means two things. Every character the source format treats as text, and every structure it defines that the model names, reaches the `Document`. Writing a `Document` as Markdown and reading it back gives the same `Document`.
 
-Two kinds of difference are outside the promise, because they carry no information:
+Three kinds of difference are outside the promise. The first two carry no information, and the user rules the third out:
 
 - How the Markdown was typed: `*` or `_` for emphasis, `-` or `+` for a list item, where a paragraph's lines wrap. Two files that differ only in these are the same document. Keeping them would need a concrete syntax tree of the file, and a reader has no use for one.
 - What `normalize` changes: NFC composition and ligatures, which Unicode defines as equivalent text, dropped soft hyphens, which only hint where to hyphenate, and collapsed whitespace runs, which both formats render as one space outside code blocks and `pre`. Code blocks keep their whitespace for that reason.
+- Weak structure, which says how a structure is drawn and not what it is: a column's alignment, the spacing between a list's items, a cell that spans several rows or columns. The model does not store it. Strong structure is what a block is and what it sits in: a heading and its level, a table with its rows and cells, a list with its items, a quote, a note, a code block.
 
 ## Goals
 
@@ -70,22 +72,18 @@ pub struct Container {
 
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContainerKind {
-    /// `start` is the first number of an ordered list. A tight list has no
-    /// blank line between its items, so its paragraphs are drawn without space.
-    List { ordered: bool, start: Option<u64>, tight: bool },
+    /// `start` is the first number of an ordered list, kept because readers
+    /// cite an item by its number.
+    List { ordered: bool, start: Option<u64> },
     Item,
     Quote,
-    Table { align: Vec<Align> },
+    Table,
     Row { header: bool },
-    /// `columns` and `rows` count what the cell spans, 1 when it spans one.
-    Cell { columns: u32, rows: u32 },
+    Cell,
     /// A footnote or endnote. `label` is the note's id in an EPUB or its
     /// label in Markdown, and `None` in a PDF.
     Note { label: Option<String> },
 }
-
-#[serde(rename_all = "snake_case")]
-pub enum Align { None, Left, Center, Right }
 ```
 
 Ids count from 0 in the order the containers open, so two adjacent lists differ by id. A paragraph in an item of a list inside a quote has `within` like `[quote 0, list 1, item 3]`, and a cell's paragraph has `within` like `[table 4, row 5, cell 6]`. A table is therefore built like a list, and its cells hold ordinary blocks.
@@ -205,13 +203,13 @@ A `#id` or footnote reference with no target leads `Nowhere` and adds a `BrokenL
 - list markers nested by indentation, with ordered numbers counted from `start`
 - `> ` for each quote level
 - fenced code, with a fence longer than the longest backtick run in the code
-- GFM tables with their alignment row
+- GFM pipe tables, as described below
 - `---` for a rule
 - `\` and a newline for a `Break`
 - `*`, `**`, `~~`, code spans with enough backticks, and `[text](href)` links
 - `[^label]` references and `[^label]:` definitions, where the label is the target `Note` container's label, or the marker when the note has none
 
-A GFM table writes each row on one line, so its cells hold only inline text and cannot span rows or columns. An EPUB table can do both, so the writer writes a table that GFM cannot hold as an HTML table, with `rowspan` and `colspan` kept and each cell's blocks written as escaped text separated by `<br>`. Markdown renderers show it as a table. The Markdown reader leaves HTML out, but no document it reads holds such a table, so the round trip below is unaffected.
+Every table is written as a GFM pipe table, the one table syntax that CommonMark tools share. A pipe table writes each row on one line, so a cell whose content is several blocks, as an EPUB cell can be, is written on one line with its blocks separated by a space. The cell keeps its text and stays a cell, and only how it looks changes. GFM requires a header line, so a table without a header row is written with an empty one. A list gets a blank line between its items only when an item holds more than one block, because Markdown needs one there.
 
 The writer escapes text so that reading the output gives the text back, and it escapes a character only where it could start syntax, so that prose stays readable. Tests decide the exact set. The PDF page comments `<!-- page N -->` stay. The reader drops comments, so they are gone on reading back, which suits a Markdown document because it has no pages.
 
@@ -232,7 +230,7 @@ The tests check one property. For a `Document` D read from Markdown, `read(write
 |---|---|
 | `ul`, `ol` (with `start`), `li` | `List`, `Item` |
 | `blockquote` | `Quote` |
-| `table`; `tr` (a header row in `thead` or holding only `th`); `th`, `td` with `colspan` and `rowspan` | `Table`, `Row`, `Cell` |
+| `table`; `tr` (a header row in `thead` or holding only `th`); `th`, `td`, whose `colspan` and `rowspan` are weak structure and dropped | `Table`, `Row`, `Cell` |
 | `pre` | `Code` |
 | `hr` | `Rule` |
 | `br` | `Break` |
@@ -253,7 +251,7 @@ Images stay out, as now. A link is resolved by the rule that a missing target in
 ## The window
 
 - **book.js** sets `MIN_SCHEMA_VERSION` to 3. `viewOf` passes `within`, `spans` and the outline to the page.
-- **viewer.js** becomes a factory, `createViewer(element)`, so that the Book and Help tabs each hold their own instance of one view. It draws the blocks in one pass with a stack of open container elements. For each block it compares the block's `within` with the stack, closes the containers that differ, opens the new ones (`ol` with `start`, `ul`, `li`, `blockquote`, `table`, `tr`, and `th` or `td` with their spans), and draws the block with its spans as nested inline elements. Text goes in only through `textContent`, so a book cannot add markup to the window. Span offsets count code points, so the view converts them to UTF-16 indexes once per block.
+- **viewer.js** becomes a factory, `createViewer(element)`, so that the Book and Help tabs each hold their own instance of one view. It draws the blocks in one pass with a stack of open container elements. For each block it compares the block's `within` with the stack, closes the containers that differ, opens the new ones (`ol` with `start`, `ul`, `li`, `blockquote`, `table`, `tr`, `th` in a header row and `td` elsewhere), and draws the block with its spans as nested inline elements. Text goes in only through `textContent`, so a book cannot add markup to the window. Span offsets count code points, so the view converts them to UTF-16 indexes once per block.
 - **Links.** The view acts on `to`. `Block` scrolls to the block, as a passage link does, and a `NoteRef` with a block does the same. `File` opens the file in the same view, resolved against the open document's directory. An `Address` with http or https opens in the browser through `openLink`. Any other address, and `Nowhere`, is drawn as text.
 - **Contents.** Both instances build their contents list from the `Document`'s outline, by one rule for every document.
 - **Help tab.** The tab opens `docs/usage.md` through `library.open`, as the Book tab opens a book. Beside it the tab keeps the binary's `help <tool>` text, which is command output and not a document. `markdown.js` and `markdown.test.js` are deleted, `helpview.js` keeps only the command help, and `readGuide` and the GitHub base for relative links go.
@@ -286,7 +284,9 @@ Each step leaves `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings
 - The container path on flat blocks, over a tree.
 - Span offsets count code points.
 - Rows and cells are containers, and an empty container holds an empty `Paragraph`.
-- The writer writes a table that GFM cannot hold as an HTML table.
+- Column alignment, list spacing and merged-cell spans count as weak structure and are not stored.
+- An ordered list's start number counts as strong structure, since readers cite items by number.
+- Emphasis, strong, strikethrough, inline code, links and line breaks count as strong structure.
 - Notes are containers in all three readers, so the PDF reader changes too.
 - A note marker is an empty `NoteRef` span and stays out of `text`.
 - A link's target is resolved by the reader into `LinkTarget`. A missing target inside the book warns, and a target outside what the model holds does not.

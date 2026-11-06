@@ -19,8 +19,8 @@ pub enum ReadAt {
     /// The passage with this id.
     Passage(u32),
     /// The passages whose pages include this physical page of a PDF,
-    /// counted from 1. An EPUB has no pages, so reading one by page is an
-    /// error.
+    /// counted from 1. An EPUB or a Markdown file has no pages, so reading
+    /// one by page is an error.
     Page(u32),
     /// The passages of the outline entry with this id, up to the next entry
     /// at the same level or above.

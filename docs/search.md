@@ -137,12 +137,12 @@ Cached indexes are loaded without being checked, so the root must be private. `e
 |---|---|
 | `schema_version` | `SCHEMA_VERSION` of the `Document` (`src/document/`) |
 | `tool_version` | the crate version, `CARGO_PKG_VERSION` |
-| `pdf_reader`, `epub_reader` | `PDF_READER_VERSION`, `EPUB_READER_VERSION` |
+| `pdf_reader`, `epub_reader`, `markdown_reader` | `PDF_READER_VERSION`, `EPUB_READER_VERSION`, `MARKDOWN_READER_VERSION`; a manifest without `markdown_reader` reads it as 0 |
 | `passages` | `PASSAGES_VERSION` |
 | `analyzers` | `ANALYZERS_VERSION` |
 | `embedding` | the stage 2 stamp: model name and dimension, or none |
 
-Stage 1 is reused only when every field except `embedding` equals `expected_stage1()`. Any difference rebuilds it, a new release of ebook-hero included, and so does a new PDF reader version for an EPUB, since both reader versions are compared for every book. AGENTS.md requires a version bump for each change to a reader, to passage packing or to an analyzer, and this comparison is what makes old indexes rebuild. A rebuild first deletes the whole `<sha>/` directory (`remove_stale`), embeddings included, so the next semantic search embeds the book again.
+Stage 1 is reused only when every field except `embedding` equals `expected_stage1()`. Any difference rebuilds it, a new release of ebook-hero included, and so does a new PDF reader version for an EPUB, since all three reader versions are compared for every book. AGENTS.md requires a version bump for each change to a reader, to passage packing or to an analyzer, and this comparison is what makes old indexes rebuild. A rebuild first deletes the whole `<sha>/` directory (`remove_stale`), embeddings included, so the next semantic search embeds the book again.
 
 Stage 2 loads `vectors.f32` only when the manifest is stamped with `{model: "BAAI/bge-small-en-v1.5", dim: 384}` and the file holds exactly one row per passage. The file stores the rows back to back as little-endian `f32`, so its size must be `passages × 384 × 4` bytes. A book of 1,000 passages has a vector file of 1,536,000 bytes.
 
@@ -377,7 +377,7 @@ From `src/settings.rs` unless another file is named.
 | `TOKEN_MAX_BYTES` (`src/analysis.rs`) | 40 | length from which a token is dropped |
 | `WRITER_BUDGET_BYTES` (`src/index/lexical.rs`) | 50,000,000 | memory of the tantivy writer |
 
-`PDF_READER_VERSION`, `EPUB_READER_VERSION`, `PASSAGES_VERSION`, `ANALYZERS_VERSION` and `SCHEMA_VERSION` (`src/document/`) go into the manifest and change with the code they version.
+`PDF_READER_VERSION`, `EPUB_READER_VERSION`, `MARKDOWN_READER_VERSION`, `PASSAGES_VERSION`, `ANALYZERS_VERSION` and `SCHEMA_VERSION` (`src/document/`) go into the manifest and change with the code they version.
 
 ## References
 

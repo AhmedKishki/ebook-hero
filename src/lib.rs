@@ -1,6 +1,6 @@
-//! Searches and reads one PDF or EPUB per call: lexical, semantic and hybrid
-//! search, every occurrence of a phrase, passages by id, page or outline
-//! entry, quote verification and a concept graph. The `ebook-hero` binary
+//! Searches and reads one PDF, EPUB or Markdown file per call: lexical,
+//! semantic and hybrid search, every occurrence of a phrase, passages by id,
+//! page or outline entry, quote verification and a concept graph. The `ebook-hero` binary
 //! offers these as a command line and as an MCP server, and both call this
 //! library.
 //!

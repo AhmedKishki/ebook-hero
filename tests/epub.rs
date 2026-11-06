@@ -354,7 +354,8 @@ fn detects_formats() {
     let mut padded = vec![b' '; 1000];
     padded.extend_from_slice(b"%PDF-1.4");
     assert_eq!(detect(&write("noext", &padded)).unwrap(), Format::Pdf);
-    let mut late = vec![b' '; 1024];
+    // A binary preamble, since text would be Markdown.
+    let mut late = vec![0xFF; 1024];
     late.extend_from_slice(b"%PDF-1.4");
     assert!(matches!(
         detect(&write("late.pdf", &late)),
@@ -368,10 +369,20 @@ fn detects_formats() {
     two_chapter_book(EpubVersion::V2).write(&epub2);
     assert_eq!(detect(&epub2).unwrap(), Format::Epub);
 
-    let text = write("note.txt", b"hello");
-    assert!(matches!(detect(&text), Err(Error::Unsupported { .. })));
-    let empty = write("empty.epub", b"");
-    assert!(matches!(detect(&empty), Err(Error::Unsupported { .. })));
+    // UTF-8 text is Markdown whatever its name, an empty file included.
+    assert_eq!(
+        detect(&write("note.txt", b"hello")).unwrap(),
+        Format::Markdown
+    );
+    assert_eq!(detect(&write("empty.epub", b"")).unwrap(), Format::Markdown);
+    let mut late_text = vec![b' '; 1024];
+    late_text.extend_from_slice(b"%PDF-1.4");
+    assert_eq!(
+        detect(&write("late.txt", &late_text)).unwrap(),
+        Format::Markdown
+    );
+    let binary = write("note.bin", b"\xff\xfe binary");
+    assert!(matches!(detect(&binary), Err(Error::Unsupported { .. })));
     let zip_only = dir.path().join("other.zip");
     write_zip(&zip_only, &[("mimetype", b"text/plain"), ("a.txt", b"x")]);
     assert!(matches!(detect(&zip_only), Err(Error::Unsupported { .. })));
@@ -401,11 +412,11 @@ fn detects_formats() {
 #[test]
 fn extract_reports_the_error_of_a_file_that_is_not_a_book() {
     let dir = TempDir::new().unwrap();
-    let text = dir.path().join("note.txt");
-    fs::write(&text, b"hello").unwrap();
+    let binary = dir.path().join("note.bin");
+    fs::write(&binary, b"\xff\xfe binary").unwrap();
 
     assert!(matches!(
-        extract(&text, "abc"),
+        extract(&binary, "abc"),
         Err(Error::Unsupported { .. })
     ));
     assert!(matches!(

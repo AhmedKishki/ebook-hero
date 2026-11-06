@@ -18,6 +18,7 @@ use tempfile::TempDir;
 const SAMPLE_PDF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.pdf");
 const ALICE_EPUB: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/alice.epub");
 const IMAGE_ONLY_PDF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/imageonly.pdf");
+const USAGE_GUIDE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/usage.md");
 
 /// The directories every command runs with: `EBOOK_HERO_INDEXES`, the index
 /// cache, and the models directory. Both are private and empty, and no test
@@ -786,6 +787,75 @@ fn library_errors_for_bad_arguments_exit_1() {
         .code(1);
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
     assert!(stderr.starts_with("error: "), "{stderr}");
+}
+
+#[test]
+fn every_tool_takes_a_markdown_file() {
+    let env = Env::new();
+
+    let info = env.stdout(&["info", USAGE_GUIDE]);
+    assert!(info.contains("\nFormat: Markdown\n"), "{info}");
+    let outline = env.stdout(&["outline", USAGE_GUIDE]);
+    assert!(
+        outline.starts_with("[0] Using ebook-hero — passage 0, Using ebook-hero ¶1"),
+        "{outline}"
+    );
+    let hits = env.stdout(&["search", USAGE_GUIDE, "verify a quote", "--mode", "lexical"]);
+    assert!(hits.starts_with("1. passage "), "{hits}");
+    assert!(hits.lines().next().unwrap().contains(", lines "), "{hits}");
+    let found = json(&env.stdout(&["find", USAGE_GUIDE, "MCP server", "--json"]));
+    assert!(found["total_occurrences"].as_u64().unwrap() > 0, "{found}");
+    assert_eq!(found["occurrences"][0]["locator"]["format"], "markdown");
+    let passage = env.stdout(&["read", USAGE_GUIDE, "0"]);
+    assert!(passage.contains("<!-- passage 0 · "), "{passage}");
+    let verdict = env.stdout(&[
+        "verify",
+        USAGE_GUIDE,
+        "The first call indexes that book, and later calls reuse the index.",
+    ]);
+    assert!(verdict.starts_with("exact: passage 0 · "), "{verdict}");
+    let graph = env.stdout(&["graph", USAGE_GUIDE]);
+    assert!(
+        graph.lines().next().unwrap().contains(" concepts in "),
+        "{graph}"
+    );
+    let document = json(&env.stdout(&["extract", USAGE_GUIDE, "--format", "json"]));
+    assert_eq!(document["source"]["format"], "markdown");
+}
+
+#[test]
+fn reading_a_markdown_file_by_page_names_passage_and_outline() {
+    let env = Env::new();
+
+    let assert = env.run(&["read", USAGE_GUIDE, "--page", "1"]).code(1);
+
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error: page addressing applies to PDFs"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("passage") && stderr.contains("outline"),
+        "{stderr}"
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn a_file_that_is_not_utf8_text_names_the_three_formats() {
+    let env = Env::new();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("cafe.txt");
+    fs::write(&path, b"caf\xE9\n").unwrap();
+
+    let assert = env.run(&["info", path.to_str().unwrap()]).code(1);
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("unsupported format; expected a PDF, an EPUB or a UTF-8 text file"),
+        "{stderr}"
+    );
 }
 
 #[test]

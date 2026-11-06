@@ -74,6 +74,9 @@ pub const PDF_READER_VERSION: u32 = 4;
 /// The version of the EPUB reader. A change to the reader bumps it, so that
 /// cached indexes are built again.
 pub const EPUB_READER_VERSION: u32 = 3;
+/// The version of the Markdown reader. A change to the reader bumps it, so
+/// that cached indexes are built again.
+pub const MARKDOWN_READER_VERSION: u32 = 1;
 /// The version of passage packing. A change to how blocks become passages, or
 /// to how a passage is stored, bumps it, so that cached indexes are built again.
 pub const PASSAGES_VERSION: u32 = 3;

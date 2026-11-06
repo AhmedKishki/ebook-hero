@@ -25,15 +25,16 @@ pub enum Error {
         /// The path as it was resolved.
         path: PathBuf,
     },
-    /// The file is neither a PDF nor an EPUB, judged from its content and not
-    /// its name.
-    #[error("{path}: unsupported format; expected a PDF or an EPUB")]
+    /// The file is neither a PDF, an EPUB nor UTF-8 text, judged from its
+    /// content and not its name.
+    #[error("{path}: unsupported format; expected a PDF, an EPUB or a UTF-8 text file")]
     Unsupported {
         /// The path as it was resolved.
         path: PathBuf,
     },
     /// The file could not be opened or parsed, such as a PDF that needs a
-    /// password or an EPUB with no readable text.
+    /// password, an EPUB with no readable text or a Markdown file over its
+    /// size cap.
     #[error("{path}: could not be read: {reason}")]
     Unreadable {
         /// The path as it was resolved.
@@ -117,7 +118,7 @@ mod tests {
         );
         assert_eq!(
             Error::Unsupported { path: path.clone() }.to_string(),
-            "books/a.pdf: unsupported format; expected a PDF or an EPUB"
+            "books/a.pdf: unsupported format; expected a PDF, an EPUB or a UTF-8 text file"
         );
         assert_eq!(
             Error::Unreadable {

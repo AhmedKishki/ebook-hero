@@ -8,7 +8,8 @@
 flowchart TD
     file["Book file"] --> detect{"detect_format<br/>src/extract/mod.rs"}
     detect -->|"%PDF- in the first 1024 bytes"| pdf["PDF reader"]
-    detect -->|"neither marker"| unsupported["Error: Unsupported"]
+    detect -->|"UTF-8 text"| markdown["Markdown reader"]
+    detect -->|"anything else"| unsupported["Error: Unsupported"]
     detect -->|"ZIP with META-INF/container.xml<br/>or mimetype application/epub+zip"| open["rbook opens the package:<br/>metadata, manifest, spine, table of contents"]
     open --> item["Next spine entry"]
     item --> manifest{"In the manifest?"}
@@ -39,7 +40,8 @@ flowchart TD
 1. A missing path is `NotFound`, and a path that is not a regular file is `NotAFile`.
 2. A file with `%PDF-` anywhere in its first 1024 bytes (`PDF_MARKER_WINDOW`) is a PDF. This test runs first, so a file that passes it never reaches the EPUB test.
 3. Otherwise a ZIP archive is an EPUB when it holds `META-INF/container.xml`, or when its `mimetype` entry, read up to 64 bytes and trimmed of whitespace, equals `application/epub+zip`.
-4. Anything else is `Unsupported`, with the message "unsupported format; expected a PDF or an EPUB".
+4. Otherwise a file whose bytes are UTF-8 is a Markdown file, which `docs/markdown-reading.md` describes.
+5. Anything else is `Unsupported`, with the message "unsupported format; expected a PDF, an EPUB or a UTF-8 text file".
 
 The test does not check that `mimetype` is the archive's first entry and stored uncompressed, as the EPUB container format requires. An archive that breaks those rules still passes, and opening the package decides whether it can be read. `extract` then builds the `Source` from the SHA-256 its caller passes, the file name and the format, and calls `read_epub`.
 
@@ -189,7 +191,7 @@ The outline does not depend on the heading blocks. An entry's level is its depth
 
 ## Reader version
 
-`EPUB_READER_VERSION` in `src/settings.rs` is 3. AGENTS.md requires a bump with every change to the reader. `Manifest` in `src/index/cache.rs` records it with the schema, tool, PDF reader, passage and analyzer versions. `is_current_stage1` reuses a cached index only when all of them match the running build. A bump therefore rebuilds every cached index the next time its book is opened, PDF books included, because the comparison covers the whole manifest.
+`EPUB_READER_VERSION` in `src/settings.rs` is 3. AGENTS.md requires a bump with every change to the reader. `Manifest` in `src/index/cache.rs` records it with the schema, tool, PDF reader, Markdown reader, passage and analyzer versions. `is_current_stage1` reuses a cached index only when all of them match the running build. A bump therefore rebuilds every cached index the next time its book is opened, PDF and Markdown books included, because the comparison covers the whole manifest.
 
 ## Design principles
 

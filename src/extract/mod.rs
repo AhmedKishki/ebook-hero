@@ -1,13 +1,15 @@
-//! The readers, which turn a PDF or an EPUB into a [`Document`].
+//! The readers, which turn a PDF, an EPUB or a Markdown file into a
+//! [`Document`].
 //! [`extract`] picks the reader from the file's content.
 
 pub mod epub;
+pub mod markdown;
 pub mod pdf;
 pub mod pdf_layout;
 pub mod xhtml;
 
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::path::Path;
 
 use zip::ZipArchive;
@@ -20,12 +22,19 @@ const PDF_MARKER_WINDOW: u64 = 1024;
 const PDF_MARKER: &[u8] = b"%PDF-";
 const EPUB_MIMETYPE: &str = "application/epub+zip";
 const EPUB_CONTAINER: &str = "META-INF/container.xml";
+/// How many bytes the UTF-8 check reads at a time.
+const UTF8_CHUNK: u64 = 64 * 1024;
 
 /// Tells the format of a file from its content, never from its name.
 ///
 /// A file with `%PDF-` in its first 1024 bytes is a PDF. A ZIP archive whose
 /// `mimetype` entry reads `application/epub+zip`, or which holds
-/// `META-INF/container.xml`, is an EPUB. Anything else is unsupported.
+/// `META-INF/container.xml`, is an EPUB. A file that is neither is Markdown
+/// when its bytes are UTF-8, after an optional byte-order mark, because every
+/// UTF-8 text is a CommonMark document; a plain text file is therefore
+/// Markdown. Only the first [`MAX_MARKDOWN_BYTES`](markdown::MAX_MARKDOWN_BYTES)
+/// are checked, so that a longer text file reaches the reader and fails there
+/// with its size. Anything else is unsupported.
 pub fn detect_format(path: &Path) -> Result<Format> {
     let metadata = fs::metadata(path).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => Error::NotFound {
@@ -47,15 +56,20 @@ pub fn detect_format(path: &Path) -> Result<Format> {
     if head.windows(PDF_MARKER.len()).any(|w| w == PDF_MARKER) {
         return Ok(Format::Pdf);
     }
-    if is_epub_archive(file) {
+    if is_epub_archive(&file) {
         return Ok(Format::Epub);
+    }
+    file.rewind().map_err(|e| unreadable(path, &e))?;
+    // The byte-order mark is UTF-8 itself, so it needs no case of its own.
+    if is_utf8(&file, markdown::MAX_MARKDOWN_BYTES).map_err(|e| unreadable(path, &e))? {
+        return Ok(Format::Markdown);
     }
     Err(Error::Unsupported {
         path: path.to_path_buf(),
     })
 }
 
-fn is_epub_archive(file: File) -> bool {
+fn is_epub_archive(file: &File) -> bool {
     let Ok(mut archive) = ZipArchive::new(file) else {
         return false;
     };
@@ -71,6 +85,28 @@ fn is_epub_archive(file: File) -> bool {
     read.is_ok() && mimetype.trim() == EPUB_MIMETYPE
 }
 
+/// Whether the first `limit` bytes of `reader` are UTF-8. A character that the
+/// limit cuts counts as UTF-8, since the bytes after the limit are not read.
+fn is_utf8(reader: impl Read, limit: u64) -> io::Result<bool> {
+    let mut reader = reader.take(limit);
+    // What the last read added, after the bytes of a character that the read
+    // before it cut.
+    let mut chunk = Vec::new();
+    loop {
+        let carried = chunk.len();
+        if (&mut reader).take(UTF8_CHUNK).read_to_end(&mut chunk)? == 0 {
+            return Ok(carried == 0 || reader.limit() == 0);
+        }
+        match std::str::from_utf8(&chunk) {
+            Ok(_) => chunk.clear(),
+            Err(error) if error.error_len().is_none() => {
+                chunk.drain(..error.valid_up_to());
+            }
+            Err(_) => return Ok(false),
+        }
+    }
+}
+
 fn unreadable(path: &Path, error: &io::Error) -> Error {
     Error::Unreadable {
         path: path.to_path_buf(),
@@ -78,7 +114,8 @@ fn unreadable(path: &Path, error: &io::Error) -> Error {
     }
 }
 
-/// Reads a book into the [`Document`] model, whichever of the two formats it is.
+/// Reads a book into the [`Document`] model, whichever of the three formats it
+/// is.
 pub fn extract(path: &Path, sha256: &str) -> Result<Document> {
     let format = detect_format(path)?;
     let source = Source {
@@ -92,10 +129,7 @@ pub fn extract(path: &Path, sha256: &str) -> Result<Document> {
     match source.format {
         Format::Epub => epub::read_epub(path, source),
         Format::Pdf => pdf::read_pdf(path, source),
-        // `detect_format` does not return Markdown until its reader exists.
-        Format::Markdown => Err(Error::Unsupported {
-            path: path.to_path_buf(),
-        }),
+        Format::Markdown => markdown::read_markdown(path, source),
     }
 }
 
@@ -167,6 +201,25 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn utf8_is_checked_across_reads_and_up_to_the_limit() {
+        let utf8 = |bytes: &[u8], limit| is_utf8(bytes, limit).unwrap();
+        // Two-byte characters after one byte, so every read cuts a character.
+        let cut = format!("a{}", "é".repeat(UTF8_CHUNK as usize));
+        assert!(utf8(cut.as_bytes(), u64::MAX));
+        assert!(utf8(b"", u64::MAX));
+        assert!(!utf8(b"caf\xE9", u64::MAX));
+        // A character cut by the end of the file is not UTF-8.
+        assert!(!utf8(b"caf\xC3", u64::MAX));
+        let mut late = vec![b'a'; 2 * UTF8_CHUNK as usize];
+        late.push(0xFF);
+        assert!(!utf8(&late, u64::MAX));
+        // A character cut by the limit is, and nothing after the limit is read.
+        assert!(utf8(b"a\xC3\xA9\xFF", 2));
+        assert!(utf8(b"a\xC3\xA9\xFF", 3));
+        assert!(!utf8(b"a\xC3\xA9\xFF", 4));
     }
 
     #[test]

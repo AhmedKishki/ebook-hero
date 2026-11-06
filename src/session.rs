@@ -58,9 +58,10 @@ type Hashed = (u64, SystemTime, String);
 /// Every method that opens a book can fail with:
 ///
 /// - [`Error::NotFound`] or [`Error::NotAFile`] when `path` names no file;
-/// - [`Error::Unsupported`] when the file is neither a PDF nor an EPUB;
+/// - [`Error::Unsupported`] when the file is neither a PDF, an EPUB nor UTF-8
+///   text;
 /// - [`Error::Unreadable`] when the file cannot be read, such as a PDF that
-///   needs a password, or [`Error::NoTextLayer`] when a PDF holds no text;
+///   needs a password or a Markdown file over its size cap, or [`Error::NoTextLayer`] when a PDF holds no text;
 /// - [`Error::InvalidArgument`] when `path` starts with `~` and no home
 ///   directory is known;
 /// - [`Error::Index`] when the cache root is not private or the index cannot
@@ -358,8 +359,8 @@ impl Session {
     /// - [`Error::InvalidArgument`] when `before` or `after` is above
     ///   [`READ_NEIGHBOURS_MAX`](crate::settings::READ_NEIGHBOURS_MAX); when
     ///   the passage, page or outline entry does not exist or has no text;
-    ///   when a page is asked of an EPUB; or when `cursor` lies outside the
-    ///   range being read;
+    ///   when a page is asked of an EPUB or a Markdown file; or when `cursor`
+    ///   lies outside the range being read;
     /// - the errors of [opening a book](Session#errors).
     ///
     /// # Examples

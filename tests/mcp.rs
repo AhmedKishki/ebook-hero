@@ -32,7 +32,7 @@ const PATIENCE: Duration = Duration::from_secs(60);
 /// The same for tests that load the models and embed a book.
 const PATIENCE_WITH_MODELS: Duration = Duration::from_secs(600);
 
-const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
+const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF, EPUB or Markdown file per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
 
 /// A client that keeps the progress notifications it receives.
 #[derive(Clone, Default)]

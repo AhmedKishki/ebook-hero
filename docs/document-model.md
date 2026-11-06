@@ -1,8 +1,8 @@
 # The Document model
 
-The two readers in `src/extract/` turn a PDF or an EPUB into a `Document`, the type defined in `src/document/mod.rs`. Passage packing, the indexes, search, reading, quote verification and the concept graph all start from that value and never change it. Code after the readers therefore handles one shape of book, whatever format the file had. Only the locators keep each format's own way of saying where a piece of text sits.
+The three readers in `src/extract/` turn a PDF, an EPUB or a Markdown file into a `Document`, the type defined in `src/document/mod.rs`. Passage packing, the indexes, search, reading, quote verification and the concept graph all start from that value and never change it. Code after the readers therefore handles one shape of book, whatever format the file had. Only the locators keep each format's own way of saying where a piece of text sits.
 
-`docs/pdf-reading.md` and `docs/epub-reading.md` describe how each reader fills the model.
+`docs/pdf-reading.md`, `docs/epub-reading.md` and `docs/markdown-reading.md` describe how each reader fills the model.
 
 ## Where the model sits
 
@@ -10,8 +10,10 @@ The two readers in `src/extract/` turn a PDF or an EPUB into a `Document`, the t
 flowchart LR
     pdf["PDF file"] --> pdfr["src/extract/pdf.rs"]
     epub["EPUB file"] --> epubr["src/extract/epub.rs"]
+    md["Markdown file"] --> mdr["src/extract/markdown.rs"]
     pdfr --> doc(["Document"])
     epubr --> doc
+    mdr --> doc
     doc --> cache["document.json.lz4 in the index cache"]
     doc --> extract["ebook-hero extract: JSON or Markdown"]
     doc --> direct["book_info, outline, read"]
@@ -165,17 +167,17 @@ A `Document` holds the text as two lists of blocks: `blocks` for the reading tex
 |---|---|
 | `sha256` | The SHA-256 of the file's bytes as 64 hex digits, from `sha256_file` in `src/index/cache.rs`. It names the book's cache directory. |
 | `file_name` | The last component of the path, converted to UTF-8 with invalid bytes replaced. |
-| `format` | `"pdf"`, `"epub"` or `"markdown"`, decided from the file's content by `detect_format` in `src/extract/mod.rs`, which does not return `"markdown"` yet. |
+| `format` | `"pdf"`, `"epub"` or `"markdown"`, decided from the file's content by `detect_format` in `src/extract/mod.rs`. A file that is neither a PDF nor an EPUB is Markdown when its bytes are UTF-8. |
 
 ### Metadata
 
-| Field | PDF | EPUB |
-|---|---|---|
-| `title` | The Info dictionary's `Title`, normalized; null when missing or empty | The package's main title, normalized; null when empty |
-| `authors` | The Info dictionary's `Author` as one entry, not split into names | Every creator in order, normalized, empty ones dropped |
-| `language` | Always null | The package's main language, trimmed |
-| `page_count` | The number of pages | Always null |
-| `spine_count` | Always null | The number of spine entries, skipped ones included |
+| Field | PDF | EPUB | Markdown |
+|---|---|---|---|
+| `title` | The Info dictionary's `Title`, normalized; null when missing or empty | The package's main title, normalized; null when empty | Always null, since CommonMark defines no title |
+| `authors` | The Info dictionary's `Author` as one entry, not split into names | Every creator in order, normalized, empty ones dropped | Always empty |
+| `language` | Always null | The package's main language, trimmed | Always null |
+| `page_count` | The number of pages | Always null | Always null |
+| `spine_count` | Always null | The number of spine entries, skipped ones included | Always null |
 
 ### Blocks
 
@@ -187,12 +189,12 @@ A block is one unit of reading text: a heading, a paragraph, a list item, a note
 
 | Variant | JSON | Written by |
 |---|---|---|
-| `Heading { level }` | `{"type": "heading", "level": 2}` | EPUB: `h1` to `h6`, with the tag's level. PDF: a bookmark's heading, with the bookmark's depth, the top level being 1. |
-| `Paragraph` | `{"type": "paragraph"}` | Both readers |
+| `Heading { level }` | `{"type": "heading", "level": 2}` | EPUB: `h1` to `h6`, with the tag's level. PDF: a bookmark's heading, with the bookmark's depth, the top level being 1. Markdown: an ATX or setext heading, with its level. |
+| `Paragraph` | `{"type": "paragraph"}` | All three readers. The Markdown reader also writes the text of a table cell or of an item in a tight list as one. |
 | `ListItem` | `{"type": "list_item"}` | EPUB only: text directly inside an `li` |
 | `Note { label }` | `{"type": "note", "label": "n1"}` | EPUB: footnotes and endnotes, labelled with the note element's id. PDF: notes found by the layout, always without a label. |
-| `Code { language }` | `{"type": "code", "language": "rust"}` | No reader yet. A code block; `language` is the one its fence names, or null. |
-| `Rule` | `{"type": "rule"}` | No reader yet. A thematic break, with empty text. |
+| `Code { language }` | `{"type": "code", "language": "rust"}` | Markdown: a fenced or indented code block. `language` is the first word of the fence's info string, or null. |
+| `Rule` | `{"type": "rule"}` | Markdown: a thematic break, with empty text. |
 
 The kind decides what happens downstream. `build_passages` packs paragraphs, list items, notes and code blocks into passages. A heading opens a section, through which it reaches the passages under it as their section path. A rule closes the passage being built as a heading does, but opens no section, because a rule separates parts of a text without naming a new one. A block without words, such as a rule or an empty table cell, goes into no passage and does not close the one being built.
 
@@ -200,7 +202,7 @@ The kind decides what happens downstream. `build_passages` packs paragraphs, lis
 
 `section` is the index in `sections` of the section the block is in. A block before the first heading has none, and [Sections](#sections) explains how the others get theirs. `within` lists the containers the block sits in, and [Containers](#containers) explains how to read it. `locator` says where the block is in the file, with the fields that [Locators](#locators) lists.
 
-`ids` holds the element ids of an EPUB block: the ids of the elements that start in the block, its own included, and of the empty elements met since the block before. The EPUB reader resolves a table-of-contents fragment to the first block whose `ids` hold it. The PDF reader writes none.
+`ids` holds the element ids of an EPUB block: the ids of the elements that start in the block, its own included, and of the empty elements met since the block before. The EPUB reader resolves a table-of-contents fragment to the first block whose `ids` hold it. The PDF and Markdown readers write none.
 
 `spans` marks ranges of `text` without changing it. A `Span` covers `start..end`, counted in Unicode code points of `text`, and its `SpanKind` says what the range is:
 
@@ -245,7 +247,7 @@ An EPUB note as JSON, the first block on printed page 45:
 
 ### Containers
 
-`containers` lists what the blocks sit in, each container once, in the order it opens, and a container's id is its index. A block's `within` holds the ids of the containers around it, outermost first. JSON leaves both lists out when they are empty.
+`containers` lists what the blocks sit in, each container once, in the order it opens, and a container's id is its index. A block's `within` holds the ids of the containers around it, outermost first. JSON leaves both lists out when they are empty. Only the Markdown reader writes containers, so the PDF and EPUB readers leave both lists empty.
 
 | Variant | JSON | Stands for |
 |---|---|---|
@@ -292,7 +294,7 @@ Containers add structure that search does not use. Passages, search, verify and 
 
 `sections` holds one `Section` per heading, in reading order. `heading` is the heading's block. `parent` is the section around it, always an earlier one, or null at the top. A block's `section` names the innermost section it is in, which for a heading is the section it opens. A block's section path follows the chain of parents up from its section and lists it outermost first, each title taken from a heading block's text. [`Places`](#places) builds these paths when a book is loaded.
 
-`assign_sections` in `src/extract/mod.rs` builds the sections for both readers once all blocks exist. It walks the blocks in order with a stack of open sections. A heading of level n closes every open section of level n or deeper and opens its own inside the one left on top, which becomes its `parent`. Blocks before the first heading are in no section. Levels the book skips open nothing, so a book whose chapters are all `h2` gets one top-level section per chapter.
+`assign_sections` in `src/extract/mod.rs` builds the sections for every reader once all blocks exist. It walks the blocks in order with a stack of open sections. A heading of level n closes every open section of level n or deeper and opens its own inside the one left on top, which becomes its `parent`. Blocks before the first heading are in no section. Levels the book skips open nothing, so a book whose chapters are all `h2` gets one top-level section per chapter.
 
 The test `skipped_levels_replace_deeper_entries` shows the rule through the paths that result:
 
@@ -305,7 +307,7 @@ The test `skipped_levels_replace_deeper_entries` shows the rule through the path
 | D | 4 | `["A", "B", "D"]` |
 | B2 | 2 | `["A", "B2"]` |
 
-The levels come from the heading blocks, not from the outline. An EPUB heading has the level of its tag, and a PDF heading the depth of its bookmark. In `tests/fixtures/sample.pdf` the bookmarks give three headings, and `sections` reads `[{"heading": 3, "parent": null}, {"heading": 7, "parent": 0}, {"heading": 16, "parent": null}]`. Block 7, `Joint entropy`, opens its section inside the one of `Entropy`, so a paragraph under it has the path `["Entropy", "Joint entropy"]`.
+The levels come from the heading blocks, not from the outline. An EPUB heading has the level of its tag, a PDF heading the depth of its bookmark, and a Markdown heading the level its `#` marks or its setext underline gives. In `tests/fixtures/sample.pdf` the bookmarks give three headings, and `sections` reads `[{"heading": 3, "parent": null}, {"heading": 7, "parent": 0}, {"heading": 16, "parent": null}]`. Block 7, `Joint entropy`, opens its section inside the one of `Entropy`, so a paragraph under it has the path `["Entropy", "Joint entropy"]`.
 
 ### Locators
 
@@ -368,7 +370,7 @@ A PDF locator as JSON:
 | `level` | The depth in the tree, the top level being 1; a depth above 255 is stored as 255 |
 | `block_id` | The block where the entry's text starts, or null when the reader could not place it |
 
-The PDF reader takes the bookmarks that lead to a page of the book. For each one it marks the matching paragraph as a `Heading` or inserts a new `Heading` block, so every PDF entry points at a heading. The EPUB reader takes the navigation document or the NCX and points each entry at the block that carries the target's element id, or at the first block of the target file. An EPUB entry can point at a paragraph, and its level need not equal the tag level of the heading it points at.
+The PDF reader takes the bookmarks that lead to a page of the book. For each one it marks the matching paragraph as a `Heading` or inserts a new `Heading` block, so every PDF entry points at a heading. The EPUB reader takes the navigation document or the NCX and points each entry at the block that carries the target's element id, or at the first block of the target file. An EPUB entry can point at a paragraph, and its level need not equal the tag level of the heading it points at. The Markdown reader makes one entry per heading with text, at the heading's level, pointing at the heading block.
 
 The `outline` tool lists these entries. Reading by outline entry starts at the entry's first passage and stops before the first passage of the next entry at the same level or nearer the top (`entry_range` in `src/read.rs`).
 
@@ -381,7 +383,7 @@ The `outline` tool lists these entries. Reading by outline entry starts at the e
 - a PDF locator with the page and the line's box, and `page_end` null;
 - ids counting from 0 inside `furniture`, independent of the ids in `blocks`, which loading sets as it does for `blocks`.
 
-The EPUB reader writes an empty list. Nothing after the readers reads `furniture`, so these lines never enter passages, search hits or the Markdown output. They appear only in `document.json.lz4` and in the output of `ebook-hero extract --format json`. `docs/furniture-detection.md` explains how the PDF reader finds them.
+The EPUB and Markdown readers write an empty list. Nothing after the readers reads `furniture`, so these lines never enter passages, search hits or the Markdown output. They appear only in `document.json.lz4` and in the output of `ebook-hero extract --format json`. `docs/furniture-detection.md` explains how the PDF reader finds them.
 
 ### Warnings
 
@@ -389,10 +391,10 @@ The EPUB reader writes an empty list. Nothing after the readers reads `furniture
 |---|---|---|---|
 | `PagesWithoutText` | `pages_without_text` | `pages` | PDF: the pages that were read and hold no text |
 | `UnreadableContent` | `unreadable_content` | `href`, `reason` | EPUB: a spine item that was skipped, named by its href, or by its `idref` when the manifest lacks it |
-| `UnreadablePart` | `unreadable_part` | `part`, `reason` | PDF: a part left out or replaced, named `page 7`, `page labels`, `outline` or `word spacing` |
+| `UnreadablePart` | `unreadable_part` | `part`, `reason` | PDF: a part left out or replaced, named `page 7`, `page labels`, `outline` or `word spacing`. Markdown: an HTML block or the front matter left out, named by its line, such as `HTML block at line 12` |
 | `BrokenLink` | `broken_link` | `href`, `block` | No reader yet: a link into the document that leads nowhere, with the target as written and the block that holds the link |
 
-A warning means the reader left part of the book out and read the rest. A book with no text at all is an error instead: `Unreadable` with "no readable text" for an EPUB, and `NoTextLayer` ("no text layer; OCR is not supported") or `Unreadable` for a PDF. The warnings reach the `book_info` result (`BookInfo.warnings` in `src/read.rs`) and the output of `ebook-hero info`, which words a broken link as `the link to #setup in block 12 leads nowhere in this document`.
+A warning means the reader left part of the book out and read the rest. A book with no text at all is an error instead: `Unreadable` with "no readable text" for an EPUB or a Markdown file, and `NoTextLayer` ("no text layer; OCR is not supported") or `Unreadable` for a PDF. The warnings reach the `book_info` result (`BookInfo.warnings` in `src/read.rs`) and the output of `ebook-hero info`, which words a broken link as `the link to #setup in block 12 leads nowhere in this document`.
 
 ## Each fact once
 
@@ -449,11 +451,11 @@ Serde writes each field under its name, except where a value is derived or empty
 
 ### Readers write it, nothing rewrites it
 
-AGENTS.md sets the boundary: readers turn a file into a `Document`, and everything after them reads it and never changes it. The code keeps to it: `build_passages` takes `&Document` with its `Places`, `read_passages` takes `&Document`, and the cache stores the `Document` as the reader wrote it. `Places` is derived from the document and never written back into it. A change in what downstream code sees must therefore come from a reader, and AGENTS.md requires every reader change to bump `PDF_READER_VERSION` or `EPUB_READER_VERSION` in `src/settings.rs`, which rebuilds the cached indexes.
+AGENTS.md sets the boundary: readers turn a file into a `Document`, and everything after them reads it and never changes it. The code keeps to it: `build_passages` takes `&Document` with its `Places`, `read_passages` takes `&Document`, and the cache stores the `Document` as the reader wrote it. `Places` is derived from the document and never written back into it. A change in what downstream code sees must therefore come from a reader, and AGENTS.md requires every reader change to bump `PDF_READER_VERSION`, `EPUB_READER_VERSION` or `MARKDOWN_READER_VERSION` in `src/settings.rs`, which rebuilds the cached indexes.
 
 ### Flat blocks
 
-`blocks` is one list in reading order. Structure travels as data on each block (`kind`) and as numbers that point into lists: a block's `section` into `sections`, its `within` into `containers`, and `Section.heading`, `OutlineEntry.block_id` and `BlockRange.block_id` into `blocks`. Lists, quotes and tables therefore nest through paths and not through a tree, for the reasons that [Containers](#containers) gives. A consumer walks one sequence: `build_passages` packs consecutive blocks, and `gui/book.js` draws the book as "its text in order". The two formats reach this shape from opposite ends. The EPUB reader flattens a tree of elements, and the PDF reader builds paragraphs up from positioned lines.
+`blocks` is one list in reading order. Structure travels as data on each block (`kind`) and as numbers that point into lists: a block's `section` into `sections`, its `within` into `containers`, and `Section.heading`, `OutlineEntry.block_id` and `BlockRange.block_id` into `blocks`. Lists, quotes and tables therefore nest through paths and not through a tree, for the reasons that [Containers](#containers) gives. A consumer walks one sequence: `build_passages` packs consecutive blocks, and `gui/book.js` draws the book as "its text in order". The formats reach this shape in different ways. The EPUB reader flattens a tree of elements, the Markdown reader writes each block as pulldown-cmark's events close it, with a stack of the containers open around it, and the PDF reader builds paragraphs up from positioned lines.
 
 ### Plain text with standoff spans
 
@@ -461,7 +463,7 @@ AGENTS.md sets the boundary: readers turn a file into a `Document`, and everythi
 
 ### Locators per format
 
-A PDF places a block by physical page and box, an EPUB by content document, and a Markdown file by line. The locator holds only these, while the printed label, the paragraph number and the printed page come from the document's tables and from `Places`. An EPUB has no physical pages, a PDF has no files or element ids, and a Markdown file has neither pages nor files, so the model gives each format its own variant and no shared fields. Each consumer handles both variants explicitly. `PassageLocator` in `src/passages.rs` keeps the split. `locator_text` in `src/read.rs` prints `p. 12–13 (xii–xiii)` for a PDF, `CHAPTER I ¶3–5, print p. 45` for an EPUB and `search ¶3–5, lines 260–284` for a Markdown file. `gui/book.js` handles neither variant, because `read --json` gives each passage the ids of its blocks (`PassageRef.blocks` in `src/read.rs`, taken from the passage's `BlockRange`s) and the window marks those.
+A PDF places a block by physical page and box, an EPUB by content document, and a Markdown file by line. The locator holds only these, while the printed label, the paragraph number and the printed page come from the document's tables and from `Places`. An EPUB has no physical pages, a PDF has no files or element ids, and a Markdown file has neither pages nor files, so the model gives each format its own variant and no shared fields. Each consumer handles every variant explicitly. `PassageLocator` in `src/passages.rs` keeps the split. `locator_text` in `src/read.rs` prints `p. 12–13 (xii–xiii)` for a PDF, `CHAPTER I ¶3–5, print p. 45` for an EPUB and `search ¶3–5, lines 260–284` for a Markdown file. `gui/book.js` handles neither variant, because `read --json` gives each passage the ids of its blocks (`PassageRef.blocks` in `src/read.rs`, taken from the passage's `BlockRange`s) and the window marks those.
 
 ### Furniture kept apart
 
@@ -473,7 +475,7 @@ Running heads and page numbers left in `blocks` would enter passages and match s
 
 Two consumers check the version, so a document of another schema is never read as this one.
 
-- The cache. `Manifest` in `src/index/cache.rs` records `schema_version` with `tool_version`, `pdf_reader`, `epub_reader`, `passages` and `analyzers`. `is_current_stage1` reuses a cached index only when every one of them equals the running build's value, so a bump rebuilds each cached book the next time it is opened.
+- The cache. `Manifest` in `src/index/cache.rs` records `schema_version` with `tool_version`, `pdf_reader`, `epub_reader`, `markdown_reader`, `passages` and `analyzers`. `is_current_stage1` reuses a cached index only when every one of them equals the running build's value, so a bump rebuilds each cached book the next time it is opened.
 - The desktop window. `gui/book.js` accepts a `Document` whose `schema_version` is at least `MIN_SCHEMA_VERSION` (3) and otherwise asks for a rebuilt binary. It takes a block's id from its index, since JSON leaves the id out. Because changes are additive, a newer `Document` still carries every field the window reads. Renaming or removing one of those fields breaks the window, and AGENTS.md asks for `MIN_SCHEMA_VERSION` to be bumped with it.
 
 ### Byte offsets inside, code points outside
@@ -496,7 +498,7 @@ The `Document` holds one pair of offsets itself, `Span.start` and `Span.end`. Th
 | `Paragraph` | The text |
 | `ListItem` | `- ` and the text |
 | `Note { label }` | `> [label] text`, or `> text` without a label; each line of the text gets its own `> ` |
-| `Code { .. }`, `Rule` | The text as it is, as for a paragraph, since no reader writes them yet and the renderer ignores containers and spans |
+| `Code { .. }`, `Rule` | The text as it is, as for a paragraph: a code block's lines without a fence, and for a rule nothing between its blank lines. The renderer ignores containers and spans. |
 
 A PDF block whose `page` differs from the previous PDF block's is preceded by `<!-- page N -->`, where N is the physical page. EPUB blocks get no page comments, printed pages included. The renderer writes nothing for `furniture`, `outline`, `warnings`, `sections`, `files` or `page_labels`, nor for a block's `section`, `ids` or `spans`.
 
@@ -526,9 +528,9 @@ The title and a level-1 heading both get one `#`, so a book whose chapters are `
 
 ## Limits
 
-- Structure the readers do not write. The model has containers, code blocks, rules and inline spans, but no reader writes them. The PDF reader writes headings, paragraphs and notes. The EPUB reader also writes list items and page breaks, and it turns table cells, block quotes, code and verse into paragraphs, so `normalize` turns the line breaks of code and verse into spaces.
+- Structure the readers do not write. Only the Markdown reader writes containers, code blocks and rules, and no reader writes an inline span other than a page break. The PDF reader writes headings, paragraphs and notes. The EPUB reader also writes list items and page breaks, and it turns table cells, block quotes, code and verse into paragraphs, so `normalize` turns the line breaks of code and verse into spaces.
 - No images and no formulas. The model has no field for an image, and the `Math` span that would hold a formula has no writer.
-- No inline markup from the PDF and EPUB readers. Emphasis, links and superscript markup leave no trace in `text`. Characters such as `²` survive, since `normalize` keeps them.
+- No inline markup. Emphasis, links and superscript markup leave no trace in `text`, and the Markdown reader keeps the text inside them without the marks. Characters such as `²` survive, since `normalize` keeps them.
 - No link from a note reference to its note. The model can hold one (`NoteRef` with the note's first block), but the EPUB reader deletes `noteref` elements, an EPUB `Note` keeps only the note element's id as `label`, and a PDF note has no label.
 - One box per block. `bbox` covers the block's lines on its first page, and the part of a paragraph that runs on to `page_end` has no box.
 - Levels are `u8`. An outline deeper than 255 levels is capped, and the Markdown renderer writes at most six `#`.

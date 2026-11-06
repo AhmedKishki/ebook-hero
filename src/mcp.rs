@@ -34,7 +34,7 @@ use crate::session::Session;
 use crate::settings::{MODEL_IDLE, TASK_TTL, TOP_K_DEFAULT};
 
 /// What the server tells a client about itself when it connects.
-const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
+const INSTRUCTIONS: &str = "ebook-hero searches and reads one PDF, EPUB or Markdown file per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.";
 
 /// The progress message while the passages of a book are embedded.
 const EMBEDDING_MESSAGE: &str = "embedding passages";
@@ -45,7 +45,7 @@ const ONE_ADDRESS: &str = "give exactly one of passage_id, page, outline_id";
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct GraphArgs {
-    /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
+    /// The PDF, EPUB or Markdown file: an absolute path, a path relative to the server's working directory, or one starting with `~`.
     path: String,
     /// List every passage of each concept and link (default false: the first ten, with `passage_count` saying how many there are).
     full: Option<bool>,
@@ -54,14 +54,14 @@ struct GraphArgs {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct PathArgs {
-    /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
+    /// The PDF, EPUB or Markdown file: an absolute path, a path relative to the server's working directory, or one starting with `~`.
     path: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SearchArgs {
-    /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
+    /// The PDF, EPUB or Markdown file: an absolute path, a path relative to the server's working directory, or one starting with `~`.
     path: String,
     /// Words, "quoted phrases" or a question.
     query: String,
@@ -76,7 +76,7 @@ struct SearchArgs {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct FindArgs {
-    /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
+    /// The PDF, EPUB or Markdown file: an absolute path, a path relative to the server's working directory, or one starting with `~`.
     path: String,
     /// The phrase, matched as whole words in any case, without stemming.
     phrase: String,
@@ -87,7 +87,7 @@ struct FindArgs {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ReadArgs {
-    /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
+    /// The PDF, EPUB or Markdown file: an absolute path, a path relative to the server's working directory, or one starting with `~`.
     path: String,
     /// Read this passage.
     passage_id: Option<u32>,
@@ -106,7 +106,7 @@ struct ReadArgs {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct VerifyArgs {
-    /// The PDF or EPUB: an absolute path, a path relative to the server's working directory, or one starting with `~`.
+    /// The PDF, EPUB or Markdown file: an absolute path, a path relative to the server's working directory, or one starting with `~`.
     path: String,
     /// The text to look for.
     quote: String,

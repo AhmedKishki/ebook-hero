@@ -30,7 +30,7 @@ const SNIPPET_CONTEXT: usize = 40;
 /// Between the parts of a passage's place in the book: `passage 3 · p. 2 · Intro`.
 const SEPARATOR: &str = " · ";
 
-/// Search and read one PDF or EPUB
+/// Search and read one PDF, EPUB or Markdown file
 ///
 /// Each command takes the path of one book. The first command about a book
 /// indexes it, and later commands reuse the index. Run
@@ -51,7 +51,7 @@ struct Cli {
 enum Command {
     /// Summarize the book: title, authors, size, and how far its index is built
     Info {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
     },
     /// List the book's table of contents with the passage each entry starts at
@@ -59,7 +59,7 @@ enum Command {
     /// Each line gives the entry's id in brackets, which `read --outline`
     /// takes, its title, and the passage where its text starts.
     Outline {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
     },
     /// Find the passages that answer a query
@@ -71,7 +71,7 @@ enum Command {
   ebook-hero search book.pdf \"how do institutions change\"
   ebook-hero search book.pdf '\"social structure\" agency' --mode lexical --top-k 10")]
     Search {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
         /// Words, "quoted phrases" or a question
         query: String,
@@ -94,7 +94,7 @@ enum Command {
   ebook-hero find book.pdf \"social structure\"
   ebook-hero find book.pdf \"social structure\" --cursor 20")]
     Find {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
         /// The phrase, matched as whole words in any case, without stemming
         phrase: String,
@@ -119,7 +119,7 @@ enum Command {
   ebook-hero read book.pdf --page 12"
     )]
     Read {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
         /// Read this passage, by the id that search, find and outline print
         passage_id: Option<u32>,
@@ -151,7 +151,7 @@ enum Command {
   ebook-hero verify book.pdf \"the words to check\"
   ebook-hero verify book.pdf \"the words to check\" --passage-id 42")]
     Verify {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
         /// The quote, as you would cite it
         quote: String,
@@ -169,7 +169,7 @@ enum Command {
   ebook-hero graph book.epub
   ebook-hero graph book.epub --json --full > graph.json")]
     Graph {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
         /// With --json, list every passage of each concept and link, not only the first ten
         #[arg(long)]
@@ -182,7 +182,7 @@ enum Command {
   ebook-hero extract book.pdf > book.md
   ebook-hero extract book.pdf --format json > book.json")]
     Extract {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
         /// How to print the book
         #[arg(long, value_enum, default_value_t = ExtractFormat::Markdown)]
@@ -194,7 +194,7 @@ enum Command {
     /// downloading the models if they are not cached yet, then prints what
     /// info prints.
     Index {
-        /// The PDF or EPUB
+        /// The PDF, EPUB or Markdown file
         path: String,
     },
     /// Manage the cached indexes

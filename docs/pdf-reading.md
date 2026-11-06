@@ -81,7 +81,7 @@ flowchart TD
 
 ### 1. Format detection
 
-`detect_format` decides the format from the file's content and never from its name, so a PDF saved as `book.bin` still reads as a PDF. A file with the marker `%PDF-` anywhere in its first `PDF_MARKER_WINDOW` = 1024 bytes is a PDF. A file without the marker goes on to the EPUB test, and a file that passes neither fails with `Unsupported`. `extract` hands a PDF to `read_pdf` with a `Source` that holds the file's SHA-256, its name and the format.
+`detect_format` decides the format from the file's content and never from its name, so a PDF saved as `book.bin` still reads as a PDF. A file with the marker `%PDF-` anywhere in its first `PDF_MARKER_WINDOW` = 1024 bytes is a PDF. A file without the marker goes on to the EPUB test and then to the UTF-8 test that makes it a Markdown file, and a file that passes none of them fails with `Unsupported`. `extract` hands a PDF to `read_pdf` with a `Source` that holds the file's SHA-256, its name and the format.
 
 ### 2. Opening the file
 

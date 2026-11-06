@@ -37,7 +37,7 @@ use crate::cancel::Cancel;
 use crate::document::SCHEMA_VERSION;
 use crate::settings::{
     ANALYZERS_VERSION, EMBEDDING_DIM, EMBEDDING_MODEL, EPUB_READER_VERSION, LOCK_POLL,
-    PASSAGES_VERSION, PDF_READER_VERSION,
+    MARKDOWN_READER_VERSION, PASSAGES_VERSION, PDF_READER_VERSION,
 };
 use crate::{Error, Result};
 
@@ -185,6 +185,10 @@ pub struct Manifest {
     pub pdf_reader: u32,
     /// The [`EPUB_READER_VERSION`] it was built with.
     pub epub_reader: u32,
+    /// The [`MARKDOWN_READER_VERSION`] it was built with. A manifest written
+    /// before the Markdown reader lacks it and reads as 0, so that it is stale.
+    #[serde(default)]
+    pub markdown_reader: u32,
     /// The [`PASSAGES_VERSION`] it was built with.
     pub passages: u32,
     /// The [`ANALYZERS_VERSION`] it was built with.
@@ -231,6 +235,7 @@ pub fn expected_stage1() -> Manifest {
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
         pdf_reader: PDF_READER_VERSION,
         epub_reader: EPUB_READER_VERSION,
+        markdown_reader: MARKDOWN_READER_VERSION,
         passages: PASSAGES_VERSION,
         analyzers: ANALYZERS_VERSION,
         embedding: None,
@@ -742,6 +747,10 @@ mod tests {
                 ..current.clone()
             },
             Manifest {
+                markdown_reader: current.markdown_reader + 1,
+                ..current.clone()
+            },
+            Manifest {
                 passages: current.passages + 1,
                 ..current.clone()
             },
@@ -751,6 +760,17 @@ mod tests {
             },
         ];
         assert!(stale.iter().all(|m| !m.is_current_stage1()));
+    }
+
+    #[test]
+    fn a_manifest_without_the_markdown_reader_reads_as_stale() {
+        let mut json = serde_json::to_value(expected_stage1()).unwrap();
+        json.as_object_mut().unwrap().remove("markdown_reader");
+
+        let old: Manifest = serde_json::from_value(json).unwrap();
+
+        assert_eq!(old.markdown_reader, 0);
+        assert!(!old.is_current_stage1());
     }
 
     /// Whether `error` is an index error whose message names `path`.

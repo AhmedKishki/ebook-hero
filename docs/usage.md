@@ -1,6 +1,6 @@
 # Using ebook-hero
 
-ebook-hero answers questions about one PDF or EPUB at a time: which passages answer a query, where a phrase occurs, what the text around a place says, whether a quote really is in the book, and which of the book's concepts occur together. One binary is both a command line and an MCP server over stdio for AI assistants. Both call the `ebook-hero` crate, which a Rust program can also use as a library. Each call names one book file. The first call indexes that book, and later calls reuse the index.
+ebook-hero answers questions about one PDF, EPUB or Markdown file at a time: which passages answer a query, where a phrase occurs, what the text around a place says, whether a quote really is in the book, and which of the book's concepts occur together. One binary is both a command line and an MCP server over stdio for AI assistants. Both call the `ebook-hero` crate, which a Rust program can also use as a library. Each call names one book file. The first call indexes that book, and later calls reuse the index.
 
 This document is the usage reference: it covers installing, every command, every MCP tool, the library's entry point, and recipes for common tasks. How each part works inside is explained in the other files of `docs/`, such as [search.md](search.md) and [quote-verification.md](quote-verification.md).
 
@@ -84,8 +84,9 @@ A locator says where a passage is, as a citation would:
 
 - In a PDF it gives the physical pages, counted from 1, then the printed page labels when the PDF defines them: `p. 12–13 (xii–xiii)`.
 - In an EPUB it gives the nearest heading above and the paragraphs counted from it: `CHAPTER VIII. The Queen’s Croquet-Ground ¶13–19`. When the book marks its printed pages, `, print p. 45` follows. Text before the first heading is placed by its file instead: `cover.xhtml ¶1`.
+- In a Markdown file it gives the nearest heading above, the paragraphs counted from it and the lines of the file: `Install and first run ¶1–2, lines 11–15`. Text before the first heading is placed by its lines alone: `lines 4–9`.
 
-With `--json`, and in MCP results, a locator is an object whose `format` says which kind it is. These are real locators from `tests/fixtures/sample.pdf` and `alice.epub`:
+With `--json`, and in MCP results, a locator is an object whose `format` says which kind it is. These are real locators from `tests/fixtures/sample.pdf`, `alice.epub` and this guide:
 
 ```json
 {"format": "pdf", "page_start": 2, "page_end": 2, "label_start": "1", "label_end": "1"}
@@ -106,7 +107,22 @@ With `--json`, and in MCP results, a locator is an object whose `format` says wh
 }
 ```
 
+```json
+{
+  "format": "markdown",
+  "line_start": 11,
+  "line_end": 15,
+  "under_heading": {
+    "text": "Install and first run",
+    "para_start": 1,
+    "para_end": 2
+  }
+}
+```
+
 An EPUB locator counts paragraphs twice. `para_start` and `para_end` count the blocks of the file `href`, heading included, while `under_heading` counts from the heading, which is the count the text form prints. `under_heading` is `null` for text before the book's first heading.
+
+A Markdown locator counts lines of the file from 1: `line_start` is the line where the passage's first block starts, and `line_end` the line where its last block ends. A code block starts at its opening fence, so the passage above starts at line 11, the fence before `cargo install`. `under_heading` counts paragraphs from the heading as in an EPUB, and is `null` before the first heading.
 
 Ranges in results, such as a search hit's `matches` or a verified quote's `matched`, are `[start, end]` pairs that count Unicode code points of the passage's text, with `end` exclusive. A JavaScript string counts UTF-16 units instead, which differ from code points only for characters outside the Basic Multilingual Plane, such as emoji.
 
@@ -118,7 +134,7 @@ ebook-hero [--json] <command> [arguments]
 
 These rules hold for every command:
 
-- `<path>` is the book: an absolute path, a path relative to the working directory, or one that starts with `~`. Symbolic links are followed. The format comes from the file's content, so the extension does not matter.
+- `<path>` is the book: an absolute path, a path relative to the working directory, or one that starts with `~`. Symbolic links are followed. The format comes from the file's content, so the extension does not matter. A file is a PDF when `%PDF-` stands in its first 1024 bytes and an EPUB when it is an EPUB archive. Any other file whose bytes are UTF-8 text is a Markdown file, because every such text is valid CommonMark, so a plain `.txt` file opens as Markdown.
 - `--json` may stand anywhere on the line. For `info`, `outline`, `search`, `find`, `read`, `verify` and `graph` it prints, pretty-printed, the structured result of the MCP tool `book_info`, `outline`, `search`, `find`, `read`, `verify_quote` or `concept_graph`. `index` then prints what `info` prints, and `extract` prints the extracted document as `--format json` does. `cache list` and `cache clear` print the objects that [cache](#cache) describes. `mcp` refuses it, because its standard output carries only protocol messages.
 - Standard output carries only the result. Errors, embedding progress, the `next: --cursor` line of `find` and `read`, and log lines go to standard error.
 - `ebook-hero help <command>` and `ebook-hero <command> --help` print a command's options and, for most commands, examples. `-h` prints a summary, and `--version` prints the version.
@@ -138,8 +154,8 @@ Every command that opens a book can fail in these ways:
 |---|---|
 | `<path>: file not found` | Nothing exists at the path. |
 | `<path>: not a regular file` | The path is a directory or another kind of file. |
-| `<path>: unsupported format; expected a PDF or an EPUB` | The content is neither. |
-| `<path>: could not be read: <reason>` | The file cannot be opened or parsed, such as a PDF whose reason is `password required`. |
+| `<path>: unsupported format; expected a PDF, an EPUB or a UTF-8 text file` | The content is none of the three, such as a text file in Latin-1 or UTF-16. |
+| `<path>: could not be read: <reason>` | The file cannot be opened or parsed. A PDF that needs a password gives the reason `password required`, and an EPUB or Markdown file without text gives `no readable text`. A Markdown file over 64 MiB gives its size and the cap. |
 | `<path>: no text layer; OCR is not supported` | The PDF has no text, as a scan without OCR has none. |
 | `index error: cache directory <dir> is not private (<reason>); set EBOOK_HERO_INDEXES to a private directory` | See [Where files are kept](#where-files-are-kept). |
 | `index error: <file>: not a readable cache file (<reason>); run "ebook-hero cache clear" and try again` | A `.json.lz4` file in the index is not an LZ4 frame or fails its checksum. Opening a book builds the index again by itself and logs this message as a warning, so it ends a command only when a file that build has just written fails the same way. |
@@ -155,7 +171,7 @@ ebook-hero info <path>
 
 Summarizes the book: its title, authors, language, format and size, its number of passages, and whether its passages are embedded yet. `info` takes no options besides `--json`.
 
-The text form prints one field per line. `Pages` is the page count of a PDF, and `Spine items` the number of entries in an EPUB's spine, the list of its files in reading order. Spine items include covers and front matter, and a long chapter can be split across several, so the count is not a chapter count: `alice.epub` has 14 for its 12 chapters. `Semantic index` is `ready` once the passages are embedded and `not built` before. Each part of the file that the reader had to leave out adds a line that starts with `Warning:` and names the part.
+The text form prints one field per line. `Pages` is the page count of a PDF, and `Spine items` the number of entries in an EPUB's spine, the list of its files in reading order. Spine items include covers and front matter, and a long chapter can be split across several, so the count is not a chapter count: `alice.epub` has 14 for its 12 chapters. A Markdown file prints neither line, and its title reads `(untitled)`, because CommonMark gives a file no title. `Semantic index` is `ready` once the passages are embedded and `not built` before. Each part of the file that the reader had to leave out adds a line that starts with `Warning:` and names the part.
 
 ```console
 $ ebook-hero info tests/fixtures/alice.epub
@@ -426,10 +442,10 @@ The command and the MCP tool share these messages, so they name the arguments by
 | Message | Cause |
 |---|---|
 | `passage 500 does not exist; the book has 166 passages` | The passage id is too large. |
-| `page addressing applies to PDFs; use passage_id or outline_id` | `--page` was given for an EPUB. |
+| `page addressing applies to PDFs; use passage_id or outline_id` | `--page` was given for an EPUB or a Markdown file, which have no pages. |
 | `page 99 has no text` | No passage lies on that page. |
 | `outline entry 99 does not exist; the book has 16 entries` | The outline id is too large. |
-| `this book has no outline; use passage_id or page` | `--outline` was given for a PDF without a table of contents; for an EPUB the message ends `use passage_id`. |
+| `this book has no outline; use passage_id or page` | `--outline` was given for a PDF without a table of contents; for an EPUB or a Markdown file the message ends `use passage_id`. |
 | `outline entry <id> has no text after it` | The entry points at no passage. |
 | `after is 11; it must be at most 10` | `--before` or `--after` is above 10. |
 | `cursor 5 is not inside the passages 92–105 being read; use the next_cursor of the previous call` | The cursor lies outside the range. |
@@ -710,7 +726,7 @@ A client that does not search the `PATH` needs the binary's absolute path as `co
 
 When a client connects, the server tells it how to use the tools:
 
-> ebook-hero searches and reads one PDF or EPUB per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.
+> ebook-hero searches and reads one PDF, EPUB or Markdown file per call; pass the book's path to every tool. Use `search` for questions and `find` to list every occurrence of a phrase. Expand a hit with `read`. Check a quote with `verify_quote` before using it. `concept_graph` lists the book's concepts, which of them link and the communities they form. Ranges are Unicode code points.
 
 ### Calls and results
 
@@ -758,9 +774,9 @@ It returns:
 |---|---|
 | `title` | the title, or `null` when the file gives none |
 | `authors` | the authors, in the order the file lists them |
-| `language` | the language an EPUB declares; always `null` for a PDF |
-| `format` | `"pdf"` or `"epub"` |
-| `page_count`, `spine_count` | the pages of a PDF or the spine entries of an EPUB, each `null` for the other format |
+| `language` | the language an EPUB declares; always `null` for a PDF or a Markdown file |
+| `format` | `"pdf"`, `"epub"` or `"markdown"` |
+| `page_count`, `spine_count` | the pages of a PDF or the spine entries of an EPUB, each `null` for the other formats |
 | `passage_count` | the number of passages, whose ids run from 0 to one less |
 | `lexical_ready` | always `true` |
 | `semantic_ready` | whether the passages are embedded |
@@ -1000,8 +1016,8 @@ Every error is an `ebook_hero::Error`, whose `Display` is the message the comman
 | Variant | When |
 |---|---|
 | `NotFound { path }`, `NotAFile { path }` | `path` names no regular file. |
-| `Unsupported { path }` | The file is neither a PDF nor an EPUB. |
-| `Unreadable { path, reason }` | The file cannot be opened or parsed. |
+| `Unsupported { path }` | The file is neither a PDF, an EPUB nor UTF-8 text. |
+| `Unreadable { path, reason }` | The file cannot be opened or parsed, or it is a Markdown file over 64 MiB. |
 | `NoTextLayer { path }` | The PDF has no text. |
 | `InvalidArgument(message)` | `path` starts with `~` and no home directory is known. |
 | `Index(message)` | The cache root is not private, or the index cannot be written. |
@@ -1015,7 +1031,7 @@ The methods add these:
 |---|---|
 | `search` | `InvalidArgument` for a `top_k` outside 1 to 20 or a blank query, checked before the book is opened; `ModelUnavailable { model, cache, reason }` when a model cannot be downloaded or run |
 | `find` | `InvalidArgument` for a phrase without a word |
-| `read` | `InvalidArgument` for `before` or `after` above 10, checked before the book is opened, and for a passage, page or outline entry that does not exist or has no text, a page of an EPUB, or a cursor outside the range |
+| `read` | `InvalidArgument` for `before` or `after` above 10, checked before the book is opened, and for a passage, page or outline entry that does not exist or has no text, a page of an EPUB or a Markdown file, or a cursor outside the range |
 | `verify` | `InvalidArgument` for a quote that is blank, has no letter or digit or has more than 440 words, or a `passage_id` the book does not have |
 | `graph` | `InvalidArgument` for a book of fewer than 20 passages |
 | `index` | `ModelUnavailable` |

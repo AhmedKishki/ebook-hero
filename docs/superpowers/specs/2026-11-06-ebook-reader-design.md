@@ -19,6 +19,8 @@ This is the first of three parts on the branch. The second is a library view, op
 - ebook-hero reads Markdown, and the `Document` stores enough structure to reconstruct a document's structure.
 - The conversion is lossless with respect to the text and its structure. Images, figures and constructs the model does not support are outside that promise.
 - Weak structure may be lost: how a structure looks may change, as long as a table stays a table with its cells as they are.
+- Each fact is stored once. The `Document` and the index cache hold no second copy of anything.
+- Schema 3 may break compatibility with schema 2. ebook-hero is in early development, so a good design matters more here than the additive rule in AGENTS.md.
 
 ## Lossless, defined
 
@@ -46,7 +48,7 @@ Three kinds of difference are outside the promise. The first two carry no inform
 - Images and figures. The `Document` gets no image field, and both readers leave an image and its alt text out, as the EPUB reader does now.
 - Raw HTML and front matter in Markdown. An inline tag is dropped and the text between tags is kept. An HTML block or a front matter block is left out with a warning that names its line, because it may hold text. A comment is dropped without a warning, since it is not part of the text.
 - `extract` reusing the cached document instead of extracting again. Part 2 needs it to open indexed books fast, so it is designed there.
-- `read` keeps its output: a passage's text under its `<!-- passage … -->` line.
+- `read` keeps its Markdown output: a passage's text under its `<!-- passage … -->` line.
 
 ## Anti-goals
 
@@ -56,13 +58,40 @@ Three kinds of difference are outside the promise. The first two carry no inform
 
 ## The Document, schema 3
 
-`SCHEMA_VERSION` goes from 2 to 3. Every change adds a field or a variant, and every new field has a serde default, so JSON written under schema 2 still deserialises.
+`SCHEMA_VERSION` goes from 2 to 3, and schema 3 does not read schema 2. Nothing is lost by that, since the manifest records the schema and a cached index of another schema is built again.
 
 `text` stays the plain text that passages, search, verify and graph read, and the structure sits beside it in `within` and `spans`. Those parts therefore need no change for the new structure. The one exception is a code block, whose text keeps its lines (see Block kinds).
 
+### Each fact once
+
+A fact is stored once, at the level where it holds: the document, a run of blocks, one block, or a point in a block's text. Whatever can be derived from what is stored is computed when the book is loaded, into lookup tables kept in memory, the way a database builds an index from its rows without storing the rows twice. One pass over the blocks builds them, and later lookups take constant time.
+
+Today Alice's index holds its text twice, once in the blocks of `document.json` and again in the passages of `passages.json`. Every block repeats the headings above it as strings and its chapter file's name, though Alice has 875 blocks and only 19 sections and 13 files. The changes:
+
+| fact | stored today | stored in schema 3 |
+|---|---|---|
+| the book's text | in every block, and again in every passage | in the blocks only |
+| a block's section | the heading texts above it, in every block and every passage | `section: Option<u32>`, an index into `sections` |
+| an EPUB block's file | its href string, in every block | `file: u32`, an index into `files` |
+| an EPUB block's paragraph number | in every block | derived: its position after the first block of its file |
+| an element id | the last id before the block, repeated in every block after it | `ids` on the block where the element is |
+| an EPUB printed page | the page in effect, repeated in every block | a `PageBreak` span at the break, exact even inside a paragraph |
+| a PDF page label | in every block of the page | `page_labels`, one entry per page |
+| a block's id | in every block, though it equals the block's position | derived: the position |
+| the format of a locator | a tag in every block | derived: `source.format` |
+| a passage's text, section and locator | in every passage | derived from its pieces |
+
+`sections` holds one entry per heading, `Section { heading: u32, parent: Option<u32> }`, where `heading` is the heading's block and `parent` the section around it. A block's section path is the chain of parents, and each title is its heading block's text. Sections cannot be containers: a heading inside a table cell opens a section that runs on past the table, which no nesting of containers can hold.
+
+`passages.json` keeps, for each passage, its pieces as block, offset in the block and length. Loading assembles each passage's text from the blocks once, because search, find and verify scan passage texts many times, and that copy lives only in memory.
+
+Simulated on Alice's cached index, `document.json` goes from 392 KB to 258 KB and `passages.json` from 272 KB to 51 KB, so the two files shrink from 664 KB to 309 KB, 53% less.
+
+Output does not change shape. Search hits, read results and the MCP tools still give each passage's section path and locator in full, derived as they are written, so a hit stands alone for whoever reads it.
+
 ### Containers
 
-The `Document` gains `containers: Vec<Container>`, each container stored once, its id being its index. A block gets `within: Vec<u32>`, the ids of the containers it sits in, outermost first, in the way `section` lists the headings above it. JSON leaves either list out when it is empty. Storing each container once keeps a block's path to a few numbers: a table of 1,000 cells would otherwise repeat its table and row in every cell.
+The `Document` gains `containers: Vec<Container>`, each container stored once, its id being its index. A block gets `within: Vec<u32>`, the ids of the containers it sits in, outermost first. JSON leaves either list out when it is empty. Storing each container once keeps a block's path to a few numbers: a table of 1,000 cells would otherwise repeat its table and row in every cell.
 
 ```rust
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -112,11 +141,13 @@ Three models of nesting were weighed. A tree, as in Pandoc's AST or mdast, holds
 
 ### Block kinds
 
-`BlockKind` gains two variants, and two stop being written:
+`BlockKind` gains two variants and loses two:
 
 - `Code { language: Option<String> }` is a code block. Its `text` keeps its lines and indentation as written, without the final newline, since collapsing the whitespace would change the code. Verify still finds quotes in it, because `find_exact` in `src/verify.rs` collapses the whitespace of the text it searches.
 - `Rule` is a thematic break with empty text.
-- `ListItem` and `Note` are no longer written, because the `Item` and `Note` containers now say what they said. A paragraph in a list item is a `Paragraph` inside an `Item`, and a note's blocks keep their own kinds inside a `Note`, so a note can hold a list or a code block. The variants stay so that schema-2 JSON still reads, as the additive rule in AGENTS.md requires.
+- `ListItem` and `Note` go, because the `Item` and `Note` containers now say what they said. A paragraph in a list item is a `Paragraph` inside an `Item`, and a note's blocks keep their own kinds inside a `Note`, so a note can hold a list or a code block.
+
+The reserved field `orig` goes too. No reader writes it, and `normalize` keeps text equivalent, so the original characters carry nothing the text lacks.
 
 ### Spans
 
@@ -135,6 +166,8 @@ Break { lines: u32 },
 /// A footnote reference, as a point: `start` equals `end`. `marker` is what
 /// the reference shows, such as `1`, and `block` is the note's first block.
 NoteRef { marker: String, block: Option<u32> },
+/// A printed page break, as a point: the printed page `label` starts here.
+PageBreak { label: String },
 ```
 
 ```rust
@@ -155,17 +188,23 @@ The reader decides what a link is, so the window acts on `to` and never on the b
 
 - `start` and `end` count Unicode code points of `text`. `extract --format json` prints the `Document` as it is and the window reads it, and AGENTS.md fixes code points for output. Library code that needs bytes converts through one helper.
 - Spans are well nested, so two spans either do not overlap or one contains the other, and they are sorted by `start`, longer first. The view and the writer rely on this order, so each reader's tests check it.
-- Only a `NoteRef` may be empty. A note marker is apparatus, so it stays out of `text`, and a quote that runs across it still verifies, as it does in an EPUB today.
+- Only a `NoteRef` or a `PageBreak` may be empty, since each marks a point. A note marker is apparatus and a page break is a position, so neither adds characters to `text`, and a quote that runs across either still verifies.
 
 ### Locators
 
-`Format` gains `Markdown`, and `Locator` gains:
+A block's locator keeps only what differs from block to block:
 
 ```rust
-Markdown { line: u32, line_end: Option<u32>, anchor: Option<String> }
+pub enum Locator {
+    Pdf { page: u32, page_end: Option<u32>, bbox: Option<[f32; 4]> },
+    Epub { file: u32 },
+    Markdown { line: u32, line_end: Option<u32> },
+}
 ```
 
-`line` is the line where the block starts in the file, counted from 1, and `line_end` is the line where it ends when that is a later line. `anchor` is the id of the last heading at or before the block, so a heading carries its own id, in the role that `anchor` plays in the EPUB locator.
+`Format` gains `Markdown`. A Markdown block's `line` is the line where it starts in the file, counted from 1, and `line_end` the line where it ends when that is a later line. The `Document` gains `files: Vec<String>`, the EPUB's content files in spine order, and `page_labels: Vec<Option<String>>`, the printed label of each physical page of a PDF, empty when the PDF defines none.
+
+A block gains `ids: Vec<String>`, the ids of the elements that start in it and of the empty elements since the block before. A Markdown heading's id goes there too. JSON leaves `ids` out when it is empty. Links resolve through `ids`, and the anchor in effect at a block, which the EPUB locator stores today, is derived when it is needed.
 
 `PassageLocator` gains `Markdown { line_start, line_end, under_heading: Option<HeadingPlace> }`. `locator_text` prints it like the EPUB form, with the heading and its paragraph range followed by the lines, such as `search ¶3–5, lines 260–284`.
 
@@ -199,13 +238,13 @@ Soft breaks become spaces. A hard break becomes a space marked by a `Break` span
 
 ### Heading ids
 
-Heading ids follow GitHub's rule, ported verbatim from `slugger` in `gui/markdown.js`. The id is the heading's text in lower case without characters other than letters, marks, numbers, connector punctuation, spaces and `-`, with each space turned into `-`. A repeated id gets `-1`, `-2` and so on. `docs/usage.md`'s links were written for GitHub, so under this rule they resolve as they do there.
+Heading ids follow GitHub's rule, ported verbatim from `slugger` in `gui/markdown.js`. The id is the heading's text in lower case without characters other than letters, marks, numbers, connector punctuation, spaces and `-`, with each space turned into `-`. A repeated id gets `-1`, `-2` and so on. `docs/usage.md`'s links were written for GitHub, so under this rule they resolve as they do there. The id goes into the heading block's `ids`.
 
 ### Links
 
 Once every block is read, the reader resolves targets:
 
-- `#id` leads to `Block`, the heading whose id it is.
+- `#id` leads to `Block`, the block whose `ids` hold it.
 - A footnote reference leads to the first block of the `Note` container with its label.
 - A relative path leads to `File`, and an address with a scheme to `Address`.
 
@@ -236,8 +275,8 @@ The tests check one property. For a `Document` D read from Markdown, `read(write
 
 ## The rest of the library
 
-- **Passages.** A `Code` block packs like a paragraph, and so does each cell's paragraph. A block without words, such as a `Rule` or an empty cell, goes into no passage. A `Rule` closes the passage being built, as a heading does, but starts no section, because a rule separates parts of a text. `same_part` treats a Markdown file as one part. `PASSAGES_VERSION` goes up because a rule now closes a passage.
-- **read.** `locator_text` prints the Markdown locator. `read page` on a Markdown file fails in the same way as on an EPUB that marks no printed pages, and its message names `passage` and `outline` instead.
+- **Passages.** A `Code` block packs like a paragraph, and so does each cell's paragraph. A block without words, such as a `Rule` or an empty cell, goes into no passage. A `Rule` closes the passage being built, as a heading does, but starts no section, because a rule separates parts of a text. Packing compares section ids and, in an EPUB, file ids, and treats a Markdown file as one part. A passage is stored as its pieces (see Each fact once). `PASSAGES_VERSION` goes up because a rule now closes a passage and the stored form changes.
+- **read.** `locator_text` prints the Markdown locator. `read page` on a Markdown file fails in the same way as on an EPUB that marks no printed pages, and its message names `passage` and `outline` instead. Each passage of `read --json` gains `blocks`, the ids of the blocks it covers, so the window marks a passage's blocks exactly in every format.
 - **Search, verify and graph.** These read `text`, so they do not change.
 - **CLI and MCP.** Descriptions that say "PDF or EPUB" say "PDF, EPUB or Markdown", and `info` prints the Markdown format.
 
@@ -256,11 +295,13 @@ The tests check one property. For a `Document` D read from Markdown, `read(write
 | `em`, `i`; `strong`, `b`; `code`; `del`, `s` | `Emphasis`; `Strong`; `Code`; `Strikethrough` |
 | `a href` | `Link`, resolved across the book's files |
 | `a epub:type="noteref"` | an empty `NoteRef` whose marker is the element's text, which stays out of `text` as now |
+| an element with `epub:type="pagebreak"` | an empty `PageBreak` whose label is the page's title |
+| an element's `id` | an entry of the block's `ids` |
 | a footnote or endnote element | `Note` container, whose paragraphs stay separate blocks instead of joining into one |
 
 Images stay out, as now. A link is resolved by the rule that a missing target in scope warns and a target outside it does not:
 
-- `file.xhtml#id`, with `file.xhtml` in the spine, leads to the first block of that file whose locator has `anchor` equal to `id`. Without `#id` it leads to the file's first block.
+- `file.xhtml#id`, with `file.xhtml` in the spine, leads to the block of that file whose `ids` hold `id`. Without `#id` it leads to the file's first block.
 - A spine file with no block for `id` leads `Nowhere` and adds a `BrokenLink` warning, since the book links to its own text and misses.
 - A file outside the spine, such as the cover, an image or the navigation document, leads `Nowhere` without a warning, because the model holds none of them.
 - An address with a scheme leads to `Address`. The EPUB reader never writes `File`, since every relative link points into the archive.
@@ -269,7 +310,7 @@ Images stay out, as now. A link is resolved by the rule that a missing target in
 
 ## The window
 
-- **book.js** sets `MIN_SCHEMA_VERSION` to 3. `viewOf` passes `containers`, each block's `within` and `spans`, and the outline to the page.
+- **book.js** sets `MIN_SCHEMA_VERSION` to 3. `viewOf` passes `containers`, each block's `within` and `spans`, and the outline to the page. A passage's blocks come from the `blocks` of `read --json`, so `passageBlocks` and its matching of PDF text go, and the window reads no block locator.
 - **viewer.js** becomes a factory, `createViewer(element)`, so that the Book and Help tabs each hold their own instance of one view. It draws the blocks in one pass with a stack of open container elements. For each block it compares the block's `within` with the stack, closes the containers that differ, opens the new ones (`ol` with `start`, `ul`, `li`, `blockquote`, `table`, `tr`, `th` in a header row and `td` elsewhere), and draws the block with its spans as nested inline elements. Text goes in only through `textContent`, so a book cannot add markup to the window. Span offsets count code points, so the view converts them to UTF-16 indexes once per block.
 - **Links.** The view acts on `to`. `Block` scrolls to the block, as a passage link does, and a `NoteRef` with a block does the same. `File` opens the file in the same view, resolved against the open document's directory. An `Address` with http or https opens in the browser through `openLink`. Any other address, and `Nowhere`, is drawn as text.
 - **Contents.** Both instances build their contents list from the `Document`'s outline, by one rule for every document.
@@ -278,11 +319,11 @@ Images stay out, as now. A link is resolved by the rule that a missing target in
 
 ## Docs, rules and versions
 
-- `docs/document-model.md` describes schema 3: containers, the new kinds and spans, the code-point unit of span offsets, the Markdown locator and why the container path was chosen over a tree.
+- `docs/document-model.md` describes schema 3: each fact stored once and what is derived at load, containers, sections, the new kinds and spans, the code-point unit of span offsets, the locators and why the container path was chosen over a tree.
 - `docs/markdown-reading.md` is new and explains the reader's algorithm.
 - `docs/epub-reading.md` describes the structure the EPUB reader now keeps.
 - `docs/usage.md` says that Markdown files are read and how they are detected, gives the new `Unsupported` message and the Markdown locator form, and describes what `extract` writes.
-- AGENTS.md's scope says "one PDF, EPUB or Markdown file per call". Its lines on `gui/markdown.js` and `gui/help.js` go, and its line on the fields `gui/book.js` reads gains `containers`, `within`, `spans` and `outline`.
+- AGENTS.md's scope says "one PDF, EPUB or Markdown file per call". Its lines on `gui/markdown.js` and `gui/help.js` go, and its line on the fields `gui/book.js` reads names `containers`, `blocks[].{kind, text, within, spans}`, `outline` and the `blocks` of a passage in `read --json`. The additive rule stays as written; this change is the exception the user granted, and the changelog marks it as breaking.
 - `docs/pdf-reading.md` says that a note is a `Note` container.
 - Versions: `SCHEMA_VERSION` 3, `MARKDOWN_READER_VERSION` 1, and `PDF_READER_VERSION`, `EPUB_READER_VERSION` and `PASSAGES_VERSION` up by one. `Cargo.toml` goes to 0.6.0 with a `CHANGELOG.md` entry, and `gui/package.json` goes to 0.3.0.
 - Commits. Each step of the order of work is a commit on the branch, and the last one bumps the versions and adds the changelog entry. Before the pull request the commits are squashed into one release commit, so that main receives one change with its version bump, as AGENTS.md requires and as the 0.5.0 branch landed.
@@ -291,7 +332,7 @@ Images stay out, as now. A link is resolved by the rule that a missing target in
 
 Each step leaves `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` and `cd gui && npm test` passing.
 
-1. The schema 3 types, with every `match` updated, and `docs/document-model.md`.
+1. The schema 3 types, with every `match` updated: sections, files, page labels, `ids` and `PageBreak` stored once, the lookup tables built at load, passages stored as pieces, and `docs/document-model.md`.
 2. The Markdown reader, detection, locators, passages and `read`.
 3. The writer and the round-trip tests.
 4. The window: the view, the Help tab, and the removal of `markdown.js`.
@@ -301,6 +342,11 @@ Each step leaves `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings
 ## Calls made without the user
 
 - The container path on flat blocks, over a tree.
+- Sections are a table of headings with parents, not containers.
+- Derived facts are computed at load into lookup tables, and passage texts are assembled in memory only.
+- `orig` goes, and so do the `ListItem` and `Note` block kinds.
+- Printed pages become `PageBreak` points, and element ids live on the block where the element is.
+- `read --json` gives each passage's block ids, and the window drops its PDF text matching.
 - Span offsets count code points.
 - Rows and cells are containers, and an empty container holds an empty `Paragraph`.
 - Column alignment, list spacing and merged-cell spans count as weak structure and are not stored.
@@ -327,4 +373,5 @@ Each step leaves `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings
 - The wording of the Markdown locator text.
 - How to test Unicode categories for heading ids: a crate, or tables of their own.
 - Whether generated round-trip cases come from a small generator in the tests or from a new dev-dependency.
+- How JSON leaves out the locator's format tag and the block id, by fields that tell the variants apart or by reading `source.format` first, whichever deserialises faster.
 - The CSS for the new elements.
